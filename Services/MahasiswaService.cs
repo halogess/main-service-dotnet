@@ -14,6 +14,6 @@ public class MahasiswaService : IMahasiswaService
 
     public async Task<IEnumerable<Mahasiswa>> GetMahasiswasAsync()
     {
-        return await _sttsDbContext.Mahasiswa.ToListAsync();
+        return await _sttsDbContext.Mahasiswas.ToListAsync();
     }
 }

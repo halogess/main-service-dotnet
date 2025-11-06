@@ -5,7 +5,7 @@ public class SttsDbContext : DbContext
 {
     public SttsDbContext(DbContextOptions<SttsDbContext> options) : base(options) { }
     
-    public DbSet<Mahasiswa> Mahasiswa { get; set; }
+    public DbSet<Mahasiswa> Mahasiswas { get; set; }
     // public DbSet<Jurusan> Jurusan { get; set; }
     
 

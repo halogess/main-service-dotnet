@@ -23,16 +23,22 @@ namespace MyApp.Namespace
         {
             try
             {
-                // Panggil service untuk mendapatkan data
                 var mahasiswa = await _mahasiswaService.GetMahasiswasAsync();
 
-                // Kembalikan data dengan status 200 OK
-                return Ok(mahasiswa);
+                return Ok(mahasiswa.Select(m => new 
+                {
+                    mhs_nrp = m.MhsNrp,
+                    mhs_nama = m.MhsNama,
+                    mhs_email = m.MhsEmail,
+                    mhs_hp = m.MhsHp,
+                    mhs_status = m.MhsStatus,
+                    jur_kode = m.JurKode,
+                    mhs_ipk = m.MhsIpk
+                }));
             }
             catch (Exception ex)
             {
-                // Penanganan kesalahan sederhana
-                return StatusCode(500, "Terjadi kesalahan internal.");
+                return StatusCode(500, new { message = "Terjadi kesalahan internal" });
             }
         }
     }

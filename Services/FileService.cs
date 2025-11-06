@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Http;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.ExtendedProperties;
+using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace _.Services;
 
@@ -8,7 +9,7 @@ public interface IFileService
 {
     void ValidateExtension(string filename);
     Task ValidateDocumentSource(IFormFile file);
-    Task<string> SaveFile(IFormFile file, string nrp);
+    Task<string> SaveFile(IFormFile file, string nrp, int dokumenId);
     void DeleteFile(string filename);
 }
 
@@ -49,23 +50,46 @@ public class FileService : IFileService
         {
             using var wordDoc = WordprocessingDocument.Open(memoryStream, false);
             
-            var extendedProps = wordDoc.ExtendedFilePropertiesPart?.Properties;
-            if (extendedProps == null)
-            {
-                throw new InvalidOperationException("Dokumen tidak memiliki metadata yang valid");
-            }
-
-            var appName = extendedProps.Application?.Text;
-
+                var extendedProps = wordDoc.ExtendedFilePropertiesPart?.Properties;
+            var coreProps = wordDoc.PackageProperties;
+            
+            // Whitelist: Hanya terima file dari Microsoft Word
+            var appName = extendedProps?.Application?.Text;
+            
             if (string.IsNullOrEmpty(appName))
             {
-                throw new InvalidOperationException("Dokumen tidak memiliki informasi aplikasi pembuat");
+                throw new InvalidOperationException("File tidak memiliki informasi aplikasi pembuat. Pastikan file dibuat di Microsoft Word");
             }
-
+            
             var lowerAppName = appName.ToLower();
             if (!lowerAppName.Contains("microsoft") && !lowerAppName.Contains("word"))
             {
-                throw new InvalidOperationException($"Dokumen tidak dibuat dengan Microsoft Word. Aplikasi pembuat: {appName}");
+                throw new InvalidOperationException($"File harus dibuat dengan Microsoft Word. Aplikasi pembuat: {appName}");
+            }
+            
+            // Validasi tambahan: Cek revision count
+            var revision = coreProps.Revision;
+            if (!string.IsNullOrEmpty(revision) && int.TryParse(revision, out int revNum))
+            {
+                if (revNum < 2)
+                {
+                    throw new InvalidOperationException("File harus dibuat dan diedit di Microsoft Word, bukan hasil konversi dari aplikasi lain");
+                }
+            }
+            
+            // Validasi struktur: Cek apakah punya style standar MS Word
+            var mainPart = wordDoc.MainDocumentPart;
+            var stylesPart = mainPart?.StyleDefinitionsPart;
+            
+            if (stylesPart?.Styles == null)
+            {
+                throw new InvalidOperationException("File tidak memiliki style definition. Pastikan file dibuat di Microsoft Word");
+            }
+            
+            var stylesXml = stylesPart.Styles.OuterXml;
+            if (!stylesXml.Contains("styleId=\"Normal\""))
+            {
+                throw new InvalidOperationException("File tidak memiliki style standar Microsoft Word");
             }
         }
         catch (InvalidOperationException)
@@ -78,7 +102,7 @@ public class FileService : IFileService
         }
     }
 
-    public async Task<string> SaveFile(IFormFile file, string nrp)
+    public async Task<string> SaveFile(IFormFile file, string nrp, int dokumenId)
     {
         if (string.IsNullOrEmpty(nrp))
         {
@@ -88,7 +112,7 @@ public class FileService : IFileService
         var uploadDir = Path.Combine(_uploadPath, nrp);
         Directory.CreateDirectory(uploadDir);
 
-        var filename = $"{Guid.NewGuid()}_{file.FileName}";
+        var filename = $"{dokumenId}_{file.FileName}";
         var filePath = Path.Combine(uploadDir, filename);
 
         using var stream = new FileStream(filePath, FileMode.Create);

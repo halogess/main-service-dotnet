@@ -23,7 +23,28 @@ public class BukuController : ControllerBase
 
             var buku = await _bukuService.UploadBuku(nrp!, judul, files);
 
-            return Ok(new { message = "Buku berhasil diupload", data = buku });
+            return Ok(new 
+            { 
+                message = "Buku berhasil diupload", 
+                data = new 
+                {
+                    buku_id = buku.BukuId,
+                    mhs_nrp = buku.MhsNrp,
+                    buku_judul = buku.BukuJudul,
+                    buku_status = buku.BukuStatus,
+                    buku_created_at = buku.BukuCreatedAt,
+                    buku_updated_at = buku.BukuUpdatedAt,
+                    dokumens = buku.Dokumens.Select(d => new 
+                    {
+                        dokumen_id = d.DokumenId,
+                        mhs_nrp = d.MhsNrp,
+                        dokumen_filename = d.DokumenFilename,
+                        dokumen_status = d.DokumenStatus,
+                        dokumen_created_at = d.DokumenCreatedAt,
+                        dokumen_updated_at = d.DokumenUpdatedAt
+                    })
+                }
+            });
         }
         catch (InvalidOperationException ex)
         {

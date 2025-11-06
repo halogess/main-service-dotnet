@@ -39,7 +39,6 @@ builder.Services.AddScoped<IMahasiswaService, MahasiswaService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IFileService, FileService>();
 builder.Services.AddScoped<IDokumenService, DokumenService>();
-builder.Services.AddScoped<IBukuService, BukuService>();
 
 var app = builder.Build();
 

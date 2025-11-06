@@ -31,7 +31,11 @@ public class AuthController : ControllerBase
                 return Unauthorized(new { message = "Username atau password salah" });
             }
 
-            return Ok(result);
+            return Ok(new 
+            {
+                access_token = ((dynamic)result).access_token,
+                refresh_token = ((dynamic)result).refresh_token
+            });
         }
         catch (Exception ex)
         {
@@ -58,7 +62,11 @@ public class AuthController : ControllerBase
                 return Unauthorized(new { message = "Refresh token tidak valid atau sudah expired" });
             }
 
-            return Ok(result);
+            return Ok(new 
+            {
+                access_token = ((dynamic)result).access_token,
+                refresh_token = ((dynamic)result).refresh_token
+            });
         }
         catch (Exception ex)
         {

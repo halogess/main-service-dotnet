@@ -35,23 +35,33 @@ public class BukuService : IBukuService
             BukuUpdatedAt = DateTime.Now
         };
 
+        // TODO: Uncomment when buku table is ready
+        // _db.Bukus.Add(buku);
+        // await _db.SaveChangesAsync();
+
         foreach (var file in files)
         {
             _fileService.ValidateExtension(file.FileName);
             await _fileService.ValidateDocumentSource(file);
-            var filename = await _fileService.SaveFile(file, nrp);
-
-            buku.Dokumens.Add(new Dokumen
+            
+            var dokumen = new Dokumen
             {
                 MhsNrp = nrp,
-                DokumenFilename = filename,
+                DokumenFilename = "",
                 DokumenStatus = 0,
                 DokumenCreatedAt = DateTime.Now,
                 DokumenUpdatedAt = DateTime.Now
-            });
+            };
+            
+            _db.Dokumens.Add(dokumen);
+            await _db.SaveChangesAsync();
+            
+            var filename = await _fileService.SaveFile(file, nrp, dokumen.DokumenId);
+            dokumen.DokumenFilename = filename;
+            
+            buku.Dokumens.Add(dokumen);
         }
-
-        _db.Bukus.Add(buku);
+        
         await _db.SaveChangesAsync();
 
         return buku;

@@ -48,7 +48,7 @@ public class BukuService : IBukuService
             {
                 MhsNrp = nrp,
                 DokumenFilename = "",
-                DokumenStatus = 0,
+                DokumenStatus = "dalam_antrian",
                 DokumenCreatedAt = DateTime.Now,
                 DokumenUpdatedAt = DateTime.Now
             };

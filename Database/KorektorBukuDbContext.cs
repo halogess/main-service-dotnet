@@ -6,6 +6,10 @@ public class KorektorBukuDbContext : DbContext
     public KorektorBukuDbContext(DbContextOptions<KorektorBukuDbContext> options) : base(options) { }
 
     public DbSet<Dokumen> Dokumens { get; set; }
+    public DbSet<AntrianPdf> AntrianPdfs { get; set; }
+    public DbSet<AdobeCredential> AdobeCredentials { get; set; }
+    public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
+    public DbSet<Antrian> Antrians { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -16,6 +20,43 @@ public class KorektorBukuDbContext : DbContext
             
             entity.Property(e => e.DokumenUpdatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<AntrianPdf>(entity =>
+        {
+            entity.HasKey(e => e.AntrianPdfId);
+            entity.Property(e => e.AntrianPdfCreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.Property(e => e.AntrianPdfUpdatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .ValueGeneratedOnAddOrUpdate();
+        });
+
+        modelBuilder.Entity<AdobeCredential>(entity =>
+        {
+            entity.HasKey(e => e.AdobeCredentialsId);
+            entity.Property(e => e.AdobeCredentialsCreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.Property(e => e.AdobeCredentialsUpdatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .ValueGeneratedOnAddOrUpdate();
+        });
+
+        modelBuilder.Entity<AdobeApiLog>(entity =>
+        {
+            entity.HasKey(e => e.AdobeApiLogsId);
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<Antrian>(entity =>
+        {
+            entity.HasKey(e => e.AntrianId);
+            entity.Property(e => e.AntrianCreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.Property(e => e.AntrianUpdatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .ValueGeneratedOnAddOrUpdate();
         });
     }
 }

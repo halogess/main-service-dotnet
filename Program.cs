@@ -12,7 +12,7 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "https://localhost:5173")
+        policy.WithOrigins("http://localhost:5173", "https://localhost:5173", "http://localhost:8000")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -23,13 +23,15 @@ builder.Services.AddCors(options =>
 var sttsConnectionString = builder.Configuration.GetConnectionString("SttsDbConnection");
 var sttsServerVersion = new MySqlServerVersion(new Version(8, 0, 34));
 builder.Services.AddDbContext<SttsDbContext>(options =>
-    options.UseMySql(sttsConnectionString, sttsServerVersion));
+    options.UseMySql(sttsConnectionString, sttsServerVersion, 
+        mysqlOptions => mysqlOptions.EnableRetryOnFailure()));
 
 // Konfigurasi DbContext KorektorBuku
 var korektorBukuConnectionString = builder.Configuration.GetConnectionString("KorektorBukuDbConnection");
 var serverVersion = new MySqlServerVersion(new Version(8, 0, 34)); 
 builder.Services.AddDbContext<KorektorBukuDbContext>(options =>
-    options.UseMySql(korektorBukuConnectionString, serverVersion));
+    options.UseMySql(korektorBukuConnectionString, serverVersion,
+        mysqlOptions => mysqlOptions.EnableRetryOnFailure()));
 
 // Register HttpClient
 builder.Services.AddHttpClient();
@@ -39,6 +41,13 @@ builder.Services.AddScoped<IMahasiswaService, MahasiswaService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IFileService, FileService>();
 builder.Services.AddScoped<IDokumenService, DokumenService>();
+
+// Register Background Service
+builder.Services.AddHostedService<AdobeQuotaResetService>();
+builder.Services.AddScoped<IPdfConversionService, PdfConversionService>();
+
+// Register background service
+builder.Services.AddHostedService<PdfQueueBackgroundService>();
 
 var app = builder.Build();
 

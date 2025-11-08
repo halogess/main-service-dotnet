@@ -1,5 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 
 namespace _.Middleware;
 
@@ -12,15 +14,24 @@ public class AuthMiddleware
         _next = next;
     }
 
-    public async Task InvokeAsync(HttpContext context, SttsDbContext sttsDb)
+    public async Task InvokeAsync(HttpContext context, SttsDbContext sttsDb, IConfiguration configuration)
     {
         var path = context.Request.Path.Value?.ToLower();
         Console.WriteLine($"[AUTH] Middleware called for path: {path}");
         
-        // Skip auth untuk endpoint login
-        if (path == "/api/auth/login" || path == "/api/auth/refresh")
+        // Skip auth untuk endpoint login dan internal
+        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.StartsWith("/api/internal") == true)
         {
             Console.WriteLine($"[AUTH] Skipping auth for: {path}");
+            await _next(context);
+            return;
+        }
+
+        // Skip JWT validation jika ada X-API-Key (untuk AI service)
+        var apiKey = context.Request.Headers["X-API-Key"].FirstOrDefault();
+        if (!string.IsNullOrEmpty(apiKey))
+        {
+            Console.WriteLine($"[AUTH] X-API-Key detected, skipping JWT validation");
             await _next(context);
             return;
         }
@@ -36,12 +47,22 @@ public class AuthMiddleware
 
         try
         {
-            var handler = new JwtSecurityTokenHandler();
-            var jwtToken = handler.ReadJwtToken(token);
-            
-            Console.WriteLine($"[AUTH] All claims: {string.Join(", ", jwtToken.Claims.Select(c => $"{c.Type}={c.Value}"))}");
-            
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var secret = configuration["Auth:JwtSecret"]!;
+            var key = Encoding.UTF8.GetBytes(secret);
+
+            tokenHandler.ValidateToken(token, new TokenValidationParameters
+            {
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = new SymmetricSecurityKey(key),
+                ValidateIssuer = false,
+                ValidateAudience = false,
+                ClockSkew = TimeSpan.Zero
+            }, out SecurityToken validatedToken);
+
+            var jwtToken = (JwtSecurityToken)validatedToken;
             var username = jwtToken.Claims.FirstOrDefault(c => c.Type == "username")?.Value;
+            
             Console.WriteLine($"[AUTH] Username from token: {username}");
 
             if (string.IsNullOrEmpty(username))

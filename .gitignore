@@ -7,3 +7,4 @@ appsettings.Development.json
 appsettings.json
 *.log
 uploads/
+pdf/

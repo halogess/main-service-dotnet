@@ -36,7 +36,7 @@ namespace MyApp.Namespace
                     mhs_ipk = m.MhsIpk
                 }));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return StatusCode(500, new { message = "Terjadi kesalahan internal" });
             }

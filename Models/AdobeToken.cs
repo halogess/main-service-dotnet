@@ -1,0 +1,8 @@
+namespace _.Models;
+
+public class AdobeToken
+{
+    public string AccessToken { get; set; } = string.Empty;
+    public DateTime ExpiresAt { get; set; }
+    public bool IsExpired => DateTime.Now >= ExpiresAt;
+}

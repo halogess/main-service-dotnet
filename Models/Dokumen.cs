@@ -21,7 +21,19 @@ public class Dokumen
     public string DokumenFilename { get; set; } = string.Empty;
 
     [Column("dokumen_status")]
-    public byte DokumenStatus { get; set; } = 1;
+    [MaxLength(20)]
+    public string DokumenStatus { get; set; } = "dalam_antrian";
+
+    [Column("dokumen_skor")]
+    public int? DokumenSkor { get; set; }
+
+    [Column("dokumen_docx_path")]
+    [MaxLength(255)]
+    public string? DokumenDocxPath { get; set; }
+
+    [Column("dokumen_pdf_path")]
+    [MaxLength(255)]
+    public string? DokumenPdfPath { get; set; }
 
     [Column("dokumen_created_at")]
     public DateTime? DokumenCreatedAt { get; set; }

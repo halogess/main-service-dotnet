@@ -1,0 +1,68 @@
+API Documentation: GET /api/dokumen
+
+=== REQUEST DARI FRONTEND ===
+
+Endpoint: GET /api/dokumen
+
+Headers:
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+
+Query Parameters (Optional):
+?status=<status_value>&sort=<sort_order>&limit=<limit>&offset=<offset>
+
+=== PARAMETER DETAILS ===
+
+Parameter | Type   | Required | Default | Values                                                    | Description
+----------|--------|----------|---------|-----------------------------------------------------------|---------------------------
+status    | string | No       | -       | "dibatalkan", "dalam_antrian", "diproses", "lolos", "tidak_lolos" | Filter dokumen berdasarkan status
+sort      | string | No       | "desc"  | "asc", "desc"                                            | Urutan berdasarkan tanggal upload
+limit     | int    | No       | 10      | 1-100                                                     | Jumlah data per halaman
+offset    | int    | No       | 0       | >= 0                                                      | Skip data (untuk pagination)
+
+=== CONTOH REQUEST DARI FRONTEND ===
+
+1. Semua dokumen (terbaru dulu)
+GET /api/dokumen
+
+2. Filter status lolos
+GET /api/dokumen?status=lolos
+
+3. Urutkan terlama dulu
+GET /api/dokumen?sort=asc
+
+4. Kombinasi filter + sort
+GET /api/dokumen?status=dalam_antrian&sort=desc
+
+5. Pagination (halaman 1, 5 data per halaman)
+GET /api/dokumen?limit=5&offset=0
+
+6. Pagination (halaman 2, 5 data per halaman)
+GET /api/dokumen?limit=5&offset=5
+
+7. Kombinasi lengkap
+GET /api/dokumen?status=lolos&sort=asc&limit=10&offset=20
+
+=== RESPONSE FORMAT ===
+
+{
+  "data": [
+    {
+      "id": 1,
+      "filename": "dokumen1.xlsx",
+      "tanggal_upload": "2024-01-15T10:30:00",
+      "ukuran_file": 1024000,
+      "status": "lolos",
+      "jumlah_kesalahan": 0
+    }
+  ],
+  "total": 30,
+  "limit": 10,
+  "offset": 0
+}
+
+=== YANG PERLU DIKIRIM FRONTEND ===
+
+- JWT token di header Authorization
+- Query parameters opsional untuk filter/sort
+- Tidak perlu body request (GET method)

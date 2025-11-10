@@ -32,17 +32,9 @@ public class BukuController : ControllerBase
                     mhs_nrp = buku.MhsNrp,
                     buku_judul = buku.BukuJudul,
                     buku_status = buku.BukuStatus,
+                    buku_jumlah_bab = buku.BukuJumlahBab,
                     buku_created_at = buku.BukuCreatedAt,
-                    buku_updated_at = buku.BukuUpdatedAt,
-                    dokumens = buku.Dokumens.Select(d => new 
-                    {
-                        dokumen_id = d.DokumenId,
-                        mhs_nrp = d.MhsNrp,
-                        dokumen_filename = d.DokumenFilename,
-                        dokumen_status = d.DokumenStatus,
-                        dokumen_created_at = d.DokumenCreatedAt,
-                        dokumen_updated_at = d.DokumenUpdatedAt
-                    })
+                    buku_updated_at = buku.BukuUpdatedAt
                 }
             });
         }

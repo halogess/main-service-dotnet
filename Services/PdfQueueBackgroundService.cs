@@ -26,6 +26,7 @@ public class PdfQueueBackgroundService : BackgroundService
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
                 var pdfService = scope.ServiceProvider.GetRequiredService<IPdfConversionService>();
+                var wsService = scope.ServiceProvider.GetRequiredService<IWebSocketService>();
 
                 var queue = await db.AntrianPdfs
                     .Where(a => a.AntrianPdfStatus == "in_queue")
@@ -55,6 +56,7 @@ public class PdfQueueBackgroundService : BackgroundService
                                 dokumen.DokumenUpdatedAt = DateTime.Now;
                                 Console.WriteLine($"[QUEUE] Updated dokumen ID: {dokumenId}, status: diproses");
                                 _logger.LogInformation("Updated dokumen ID: {DokumenId}, status: diproses", dokumenId);
+                                await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, dokumenId, "diproses");
                             }
                         }
                     }

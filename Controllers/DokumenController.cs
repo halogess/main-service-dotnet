@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using _.Models;
 using _.Services;
 
 namespace _.Controllers;
@@ -7,186 +8,124 @@ namespace _.Controllers;
 [Route("api/[controller]")]
 public class DokumenController : ControllerBase
 {
-    private readonly IDokumenService _dokumenService;
     private readonly KorektorBukuDbContext _db;
-    private readonly IConfiguration _configuration;
+    private readonly IDokumenService _dokumenService;
+    private readonly IWebSocketService _wsService;
 
-    public DokumenController(IDokumenService dokumenService, KorektorBukuDbContext db, IConfiguration configuration)
+    public DokumenController(KorektorBukuDbContext db, IDokumenService dokumenService, IWebSocketService wsService)
     {
-        _dokumenService = dokumenService;
         _db = db;
-        _configuration = configuration;
+        _dokumenService = dokumenService;
+        _wsService = wsService;
     }
 
     [HttpPost]
     public async Task<IActionResult> UploadDokumen(IFormFile file)
     {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        
+        if (file == null || file.Length == 0)
+            return BadRequest(new { message = "File tidak boleh kosong" });
+        
+        var hasQueue = _db.Dokumens.Any(d => d.MhsNrp == nrp && d.DokumenStatus == "dalam_antrian");
+        if (hasQueue)
+            return BadRequest(new { message = "Masih ada dokumen dalam antrian" });
+        
         try
         {
-            var nrp = HttpContext.Items["Nrp"]?.ToString();
-
-            if (string.IsNullOrEmpty(nrp))
-            {
-                return Unauthorized(new { message = "NRP tidak ditemukan" });
-            }
-
-            if (file == null || file.Length == 0)
-            {
-                return BadRequest(new { message = "File tidak boleh kosong" });
-            }
-
-            var dokumen = await _dokumenService.UploadDokumen(nrp, file);
-
-            return Ok(new 
-            { 
-                message = "Dokumen berhasil diupload", 
-                dokumen_id = dokumen.DokumenId
-            });
+            var dokumen = await _dokumenService.UploadDokumen(nrp!, file);
+            return Ok(new { message = "Dokumen berhasil diupload", dokumen_id = dokumen.DokumenId });
         }
-        catch (InvalidOperationException ex)
+        catch (Exception ex)
         {
             return BadRequest(new { message = ex.Message });
         }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Terjadi kesalahan", error = ex.Message });
-        }
     }
 
-    [HttpPatch("{id}/status")]
-    public async Task<IActionResult> UpdateStatus(int id, [FromBody] UpdateStatusRequest request)
+    [HttpPatch("{id}/cancel")]
+    public async Task<IActionResult> CancelDokumen(int id)
     {
-        try
-        {
-            var dokumen = await _dokumenService.UpdateStatus(id, request.status);
-
-            return Ok(new 
-            { 
-                message = "Status dokumen berhasil diupdate", 
-                data = new 
-                {
-                    dokumen_id = dokumen.DokumenId,
-                    mhs_nrp = dokumen.MhsNrp,
-                    dokumen_filename = dokumen.DokumenFilename,
-                    dokumen_status = dokumen.DokumenStatus,
-                    dokumen_created_at = dokumen.DokumenCreatedAt?.ToString("yyyy-MM-ddTHH:mm:ss"),
-                    dokumen_updated_at = dokumen.DokumenUpdatedAt?.ToString("yyyy-MM-ddTHH:mm:ss")
-                }
-            });
-        }
-        catch (InvalidOperationException ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Terjadi kesalahan", error = ex.Message });
-        }
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        var dokumen = _db.Dokumens.FirstOrDefault(d => d.DokumenId == id && d.MhsNrp == nrp);
+        
+        if (dokumen == null)
+            return NotFound(new { message = "Dokumen tidak ditemukan" });
+        
+        if (dokumen.DokumenStatus != "dalam_antrian" && dokumen.DokumenStatus != "diproses")
+            return BadRequest(new { message = "Dokumen tidak dapat dibatalkan" });
+        
+        dokumen.DokumenStatus = "dibatalkan";
+        _db.SaveChanges();
+        
+        await _wsService.NotifyDokumenCancelled(nrp!, id);
+        
+        return Ok(new { message = "Dokumen berhasil dibatalkan" });
     }
 
-    [HttpGet("{id}/file")]
-    public IActionResult GetFile(int id, [FromQuery] string type)
+    [HttpGet("can-upload")]
+    public IActionResult CanUpload()
     {
-        try
-        {
-            var dokumen = _db.Dokumens.Find(id);
-            if (dokumen == null)
-            {
-                return NotFound(new { message = "Dokumen tidak ditemukan" });
-            }
-
-            // Cek autentikasi: JWT (web) atau API Key (AI service)
-            var nrp = HttpContext.Items["Nrp"]?.ToString();
-            var apiKey = Request.Headers["X-API-Key"].FirstOrDefault();
-            var validApiKey = _configuration["InternalApiKey"];
-
-            bool isAuthenticated = false;
-            
-            // Validasi JWT dari web
-            if (!string.IsNullOrEmpty(nrp) && dokumen.MhsNrp == nrp)
-            {
-                isAuthenticated = true;
-            }
-            // Validasi API Key dari AI service
-            else if (!string.IsNullOrEmpty(apiKey) && apiKey == validApiKey && !string.IsNullOrEmpty(validApiKey))
-            {
-                isAuthenticated = true;
-            }
-
-            if (!isAuthenticated)
-            {
-                return Unauthorized(new { message = "Tidak memiliki akses" });
-            }
-
-            string? filePath;
-            string contentType;
-            string fileName;
-
-            if (type == "pdf")
-            {
-                filePath = dokumen.DokumenPdfPath;
-                Console.WriteLine($"[DOWNLOAD] PDF Path from DB: {filePath}");
-                
-                // Fallback ke path lama jika kolom pdf_path masih NULL
-                if (string.IsNullOrEmpty(filePath))
-                {
-                    var pdfFilename = Path.ChangeExtension(dokumen.DokumenFilename, ".pdf");
-                    filePath = Path.Combine("pdf", dokumen.MhsNrp, pdfFilename);
-                    Console.WriteLine($"[DOWNLOAD] DokumenFilename: {dokumen.DokumenFilename}");
-                    Console.WriteLine($"[DOWNLOAD] PDF Filename: {pdfFilename}");
-                    Console.WriteLine($"[DOWNLOAD] Using fallback PDF path: {filePath}");
-                }
-                
-                contentType = "application/pdf";
-                fileName = Path.GetFileName(filePath);
-            }
-            else
-            {
-                filePath = dokumen.DokumenDocxPath;
-                
-                // Fallback ke path lama jika kolom docx_path masih NULL
-                if (string.IsNullOrEmpty(filePath))
-                {
-                    filePath = Path.Combine("uploads", dokumen.MhsNrp, dokumen.DokumenFilename);
-                    Console.WriteLine($"[DOWNLOAD] Using fallback DOCX path: {filePath}");
-                }
-                
-                contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-                fileName = Path.GetFileName(filePath);
-            }
-
-            if (!System.IO.File.Exists(filePath))
-            {
-                Console.WriteLine($"[DOWNLOAD] File not found: {filePath}");
-                return NotFound(new { message = "File tidak ditemukan" });
-            }
-
-            Console.WriteLine($"[DOWNLOAD] Checking file: {filePath}");
-            Console.WriteLine($"[DOWNLOAD] File exists: {System.IO.File.Exists(filePath)}");
-            
-            var fileInfo = new FileInfo(filePath);
-            Console.WriteLine($"[DOWNLOAD] File size: {fileInfo.Length} bytes, Type: {type}");
-
-            if (type == "pdf" && fileInfo.Length < 100)
-            {
-                Console.WriteLine($"[DOWNLOAD] PDF file too small, possibly corrupt");
-                return StatusCode(500, new { message = "PDF corrupt atau belum selesai di-generate" });
-            }
-
-            var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-            Response.Headers.Add("Content-Disposition", $"attachment; filename=\"{fileName}\"");
-            return File(fileStream, contentType);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[DOWNLOAD] Exception: {ex.Message}");
-            Console.WriteLine($"[DOWNLOAD] StackTrace: {ex.StackTrace}");
-            return StatusCode(500, new { message = "Terjadi kesalahan", error = ex.Message });
-        }
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        var hasQueue = _db.Dokumens.Any(d => d.MhsNrp == nrp && d.DokumenStatus == "dalam_antrian");
+        
+        return Ok(new {
+            can_upload = !hasQueue
+        });
     }
-}
 
-public class UpdateStatusRequest
-{
-    public string status { get; set; } = string.Empty;
+    [HttpGet("stats")]
+    public IActionResult GetStats()
+    {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        var dokumens = _db.Dokumens.Where(d => d.MhsNrp == nrp).ToList();
+        var grouped = dokumens.GroupBy(d => d.DokumenStatus).ToDictionary(g => g.Key ?? "unknown", g => g.Count());
+        
+        return Ok(new {
+            total = dokumens.Count,
+            dibatalkan = grouped.GetValueOrDefault("dibatalkan", 0),
+            dalam_antrian = grouped.GetValueOrDefault("dalam_antrian", 0),
+            diproses = grouped.GetValueOrDefault("diproses", 0),
+            lolos = grouped.GetValueOrDefault("lolos", 0),
+            tidak_lolos = grouped.GetValueOrDefault("tidak_lolos", 0)
+        });
+    }
+
+    [HttpGet]
+    public IActionResult GetDokumen([FromQuery] string? status = null, [FromQuery] string sort = "desc", [FromQuery] int limit = 10, [FromQuery] int offset = 0)
+    {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        var query = _db.Dokumens.Where(d => d.MhsNrp == nrp);
+        
+        if (!string.IsNullOrEmpty(status))
+        {
+            var statuses = status.Split(',').Select(s => s.Trim()).ToList();
+            query = query.Where(d => statuses.Contains(d.DokumenStatus));
+        }
+        
+        query = sort.ToLower() == "asc" 
+            ? query.OrderBy(d => d.DokumenCreatedAt)
+            : query.OrderByDescending(d => d.DokumenCreatedAt);
+        
+        var totalCount = query.Count();
+        
+        var dokumenList = query
+            .Skip(offset)
+            .Take(limit)
+            .Select(d => new {
+                id = d.DokumenId,
+                filename = d.DokumenFilename,
+                tanggal_upload = d.DokumenCreatedAt,
+                ukuran_file = d.DokumenFilesizeBytes ?? 0L,
+                status = d.DokumenStatus,
+                jumlah_kesalahan = d.DokumenJumlahKesalahan ?? 0
+            })
+            .ToList();
+
+        return Ok(new {
+            data = dokumenList,
+            total = totalCount,
+            limit = limit,
+            offset = offset
+        });
+    }
 }

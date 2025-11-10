@@ -30,14 +30,14 @@ public class BukuService : IBukuService
         {
             MhsNrp = nrp,
             BukuJudul = judul,
-            BukuStatus = 0,
+            BukuStatus = "dalam_antrian",
+            BukuJumlahBab = files.Count,
             BukuCreatedAt = DateTime.Now,
             BukuUpdatedAt = DateTime.Now
         };
 
-        // TODO: Uncomment when buku table is ready
-        // _db.Bukus.Add(buku);
-        // await _db.SaveChangesAsync();
+        _db.Bukus.Add(buku);
+        await _db.SaveChangesAsync();
 
         foreach (var file in files)
         {
@@ -48,6 +48,7 @@ public class BukuService : IBukuService
             {
                 MhsNrp = nrp,
                 DokumenFilename = "",
+                DokumenFilesizeBytes = file.Length,
                 DokumenStatus = "dalam_antrian",
                 DokumenCreatedAt = DateTime.Now,
                 DokumenUpdatedAt = DateTime.Now
@@ -58,8 +59,6 @@ public class BukuService : IBukuService
             
             var filename = await _fileService.SaveFile(file, nrp, dokumen.DokumenId);
             dokumen.DokumenFilename = filename;
-            
-            buku.Dokumens.Add(dokumen);
         }
         
         await _db.SaveChangesAsync();

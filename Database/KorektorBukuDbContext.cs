@@ -5,6 +5,7 @@ public class KorektorBukuDbContext : DbContext
 {
     public KorektorBukuDbContext(DbContextOptions<KorektorBukuDbContext> options) : base(options) { }
 
+    public DbSet<Buku> Bukus { get; set; }
     public DbSet<Dokumen> Dokumens { get; set; }
     public DbSet<AntrianPdf> AntrianPdfs { get; set; }
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
@@ -13,6 +14,15 @@ public class KorektorBukuDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.Entity<Buku>(entity =>
+        {
+            entity.Property(e => e.BukuCreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            
+            entity.Property(e => e.BukuUpdatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
         modelBuilder.Entity<Dokumen>(entity =>
         {
             entity.Property(e => e.DokumenCreatedAt)

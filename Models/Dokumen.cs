@@ -10,29 +10,28 @@ public class Dokumen
     [Column("dokumen_id")]
     public int DokumenId { get; set; }
 
-    [Required]
     [Column("mhs_nrp")]
-    [MaxLength(9)]
     public string MhsNrp { get; set; } = string.Empty;
 
-    [Required]
     [Column("dokumen_filename")]
-    [MaxLength(255)]
     public string DokumenFilename { get; set; } = string.Empty;
 
+    [Column("dokumen_filesize_bytes")]
+    public long? DokumenFilesizeBytes { get; set; }
+
     [Column("dokumen_status")]
-    [MaxLength(20)]
     public string DokumenStatus { get; set; } = "dalam_antrian";
 
     [Column("dokumen_skor")]
     public int? DokumenSkor { get; set; }
 
+    [Column("dokumen_jumlah_kesalahan")]
+    public int? DokumenJumlahKesalahan { get; set; }
+
     [Column("dokumen_docx_path")]
-    [MaxLength(255)]
     public string? DokumenDocxPath { get; set; }
 
     [Column("dokumen_pdf_path")]
-    [MaxLength(255)]
     public string? DokumenPdfPath { get; set; }
 
     [Column("dokumen_created_at")]

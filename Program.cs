@@ -41,6 +41,7 @@ builder.Services.AddScoped<IMahasiswaService, MahasiswaService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IFileService, FileService>();
 builder.Services.AddScoped<IDokumenService, DokumenService>();
+builder.Services.AddSingleton<IWebSocketService, WebSocketService>();
 
 // Register Background Service
 builder.Services.AddHostedService<AdobeQuotaResetService>();
@@ -59,6 +60,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("AllowFrontend");
+
+app.UseWebSockets();
 
 app.UseHttpsRedirection();
 

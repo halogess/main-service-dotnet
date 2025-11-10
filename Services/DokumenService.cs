@@ -14,12 +14,14 @@ public class DokumenService : IDokumenService
     private readonly IFileService _fileService;
     private readonly KorektorBukuDbContext _db;
     private readonly ILogger<DokumenService> _logger;
+    private readonly IWebSocketService _wsService;
 
-    public DokumenService(IFileService fileService, KorektorBukuDbContext db, ILogger<DokumenService> logger)
+    public DokumenService(IFileService fileService, KorektorBukuDbContext db, ILogger<DokumenService> logger, IWebSocketService wsService)
     {
         _fileService = fileService;
         _db = db;
         _logger = logger;
+        _wsService = wsService;
     }
 
     public async Task<Dokumen> UploadDokumen(string nrp, IFormFile file)
@@ -34,6 +36,7 @@ public class DokumenService : IDokumenService
         {
             MhsNrp = nrp,
             DokumenFilename = "",
+            DokumenFilesizeBytes = file.Length,
             DokumenStatus = "dalam_antrian",
             DokumenCreatedAt = DateTime.Now,
             DokumenUpdatedAt = DateTime.Now
@@ -109,6 +112,7 @@ public class DokumenService : IDokumenService
         dokumen.DokumenUpdatedAt = DateTime.Now;
         
         await _db.SaveChangesAsync();
+        await _wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, dokumenId, status);
 
         return dokumen;
     }

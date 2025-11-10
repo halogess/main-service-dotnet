@@ -15,7 +15,7 @@ public interface IFileService
 
 public class FileService : IFileService
 {
-    private readonly string[] _allowedExtensions = { ".pdf", ".doc", ".docx" };
+    private readonly string[] _allowedExtensions = { ".docx" };
     private readonly string _uploadPath = "uploads";
 
     public void ValidateExtension(string filename)

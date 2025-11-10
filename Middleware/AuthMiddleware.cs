@@ -19,8 +19,8 @@ public class AuthMiddleware
         var path = context.Request.Path.Value?.ToLower();
         Console.WriteLine($"[AUTH] Middleware called for path: {path}");
         
-        // Skip auth untuk endpoint login dan internal
-        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.StartsWith("/api/internal") == true)
+        // Skip auth untuk endpoint login, internal, dan websocket
+        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.StartsWith("/api/internal") == true || path == "/ws")
         {
             Console.WriteLine($"[AUTH] Skipping auth for: {path}");
             await _next(context);
@@ -37,18 +37,33 @@ public class AuthMiddleware
         }
 
         var token = context.Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
+        
+        // Fallback untuk WebSocket: ambil token dari query string
+        if (string.IsNullOrEmpty(token))
+        {
+            token = context.Request.Query["token"].ToString();
+        }
 
         if (string.IsNullOrEmpty(token))
         {
             context.Response.StatusCode = 401;
-            await context.Response.WriteAsJsonAsync(new { message = "Token tidak ditemukan" });
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"message\":\"Token tidak ditemukan\"}");
             return;
         }
 
         try
         {
             var tokenHandler = new JwtSecurityTokenHandler();
-            var secret = configuration["Auth:JwtSecret"]!;
+            var secret = configuration["Auth:JwtSecret"];
+            if (string.IsNullOrEmpty(secret))
+            {
+                context.Response.StatusCode = 500;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync("{\"message\":\"JWT Secret tidak dikonfigurasi\"}");
+                return;
+            }
+            Console.WriteLine($"[AUTH] Secret length: {secret.Length}, Token length: {token.Length}");
             var key = Encoding.UTF8.GetBytes(secret);
 
             tokenHandler.ValidateToken(token, new TokenValidationParameters
@@ -57,7 +72,8 @@ public class AuthMiddleware
                 IssuerSigningKey = new SymmetricSecurityKey(key),
                 ValidateIssuer = false,
                 ValidateAudience = false,
-                ClockSkew = TimeSpan.Zero
+                ValidateLifetime = true,
+                ClockSkew = TimeSpan.FromMinutes(5)
             }, out SecurityToken validatedToken);
 
             var jwtToken = (JwtSecurityToken)validatedToken;
@@ -68,7 +84,8 @@ public class AuthMiddleware
             if (string.IsNullOrEmpty(username))
             {
                 context.Response.StatusCode = 401;
-                await context.Response.WriteAsJsonAsync(new { message = "Username tidak ditemukan dalam token" });
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync("{\"message\":\"Username tidak ditemukan dalam token\"}");
                 return;
             }
 
@@ -80,7 +97,8 @@ public class AuthMiddleware
             if (mahasiswa == null)
             {
                 context.Response.StatusCode = 401;
-                await context.Response.WriteAsJsonAsync(new { message = "Mahasiswa tidak ditemukan" });
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync("{\"message\":\"Mahasiswa tidak ditemukan\"}");
                 return;
             }
 
@@ -95,7 +113,8 @@ public class AuthMiddleware
         {
             Console.WriteLine($"[AUTH] Error: {ex.Message}");
             context.Response.StatusCode = 401;
-            await context.Response.WriteAsJsonAsync(new { message = "Token tidak valid" });
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync("{\"message\":\"Token tidak valid\"}");
         }
     }
 }

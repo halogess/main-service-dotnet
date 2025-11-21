@@ -1,13 +1,21 @@
+# Build output
 bin/
 obj/
+
+# IDE
+.vs/
+.vscode/
 *.user
 *.suo
-.vs/
+*.swp
+
+# Logs
+*.log
+
+# Storage (user data)
+storage/
+
+# Environment & Secrets
+.env
 appsettings.Development.json
 appsettings.json
-*.log
-docx/
-pdf/
-
-# Environment variables (platform-specific)
-.env

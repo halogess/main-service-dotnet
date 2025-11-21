@@ -19,8 +19,8 @@ public class AuthMiddleware
         var path = context.Request.Path.Value?.ToLower();
         Console.WriteLine($"[AUTH] Middleware called for path: {path}");
         
-        // Skip auth untuk endpoint login, internal, dan websocket
-        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.StartsWith("/api/internal") == true || path == "/ws")
+        // Skip auth untuk endpoint login, internal, websocket, dan health check
+        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.StartsWith("/api/internal") == true || path == "/ws" || path == "/" || path == "/health")
         {
             Console.WriteLine($"[AUTH] Skipping auth for: {path}");
             await _next(context);

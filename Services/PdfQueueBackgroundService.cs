@@ -52,7 +52,7 @@ public class PdfQueueBackgroundService : BackgroundService
                     _logger.LogInformation("Processing antrian ID: {AntrianId}, File: {FilePath}", queue.AntrianId, filePath);
 
                     queue.AntrianConvertStatus = "processing";
-                    queue.AntrianUpdatedAt = DateTime.Now;
+                    queue.AntrianUpdatedAt = DateTime.UtcNow;
 
                     // Update status dokumen/buku ke "diproses"
                     if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
@@ -61,7 +61,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         if (dokumen != null)
                         {
                             dokumen.DokumenStatus = "diproses";
-                            dokumen.DokumenUpdatedAt = DateTime.Now;
+                            dokumen.DokumenUpdatedAt = DateTime.UtcNow;
                             Console.WriteLine($"[QUEUE] Updated dokumen ID: {queue.DokumenId}, status: diproses");
                             _logger.LogInformation("Updated dokumen ID: {DokumenId}, status: diproses", queue.DokumenId);
                             await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "diproses");
@@ -73,7 +73,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         if (buku != null && buku.BukuStatus == "dalam_antrian")
                         {
                             buku.BukuStatus = "diproses";
-                            buku.BukuUpdatedAt = DateTime.Now;
+                            buku.BukuUpdatedAt = DateTime.UtcNow;
                             Console.WriteLine($"[QUEUE] Updated buku ID: {queue.BukuId}, status: diproses");
                             _logger.LogInformation("Updated buku ID: {BukuId}, status: diproses", queue.BukuId);
                             await wsService.NotifyBukuStatusChanged(buku.MhsNrp, (int)queue.BukuId.Value, "diproses");
@@ -84,9 +84,11 @@ public class PdfQueueBackgroundService : BackgroundService
 
                     try
                     {
-                        if (!File.Exists(filePath))
+                        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+                        var fullFilePath = Path.Combine(storagePath, filePath);
+                        if (!File.Exists(fullFilePath))
                         {
-                            throw new FileNotFoundException($"File tidak ditemukan: {filePath}");
+                            throw new FileNotFoundException($"File tidak ditemukan: {fullFilePath}");
                         }
 
                         var credential = await db.AdobeCredentials
@@ -103,22 +105,20 @@ public class PdfQueueBackgroundService : BackgroundService
                         _logger.LogInformation("Using credential ID: {CredentialId}", credential.AdobeCredentialsId);
                         _logger.LogInformation("[TRACE] About to call PDF service with antrian_id: {AntrianId} (type: {Type})", queue.AntrianId, queue.AntrianId.GetType().Name);
 
-                        var pdfBytes = await pdfService.ConvertDocxToPdfWithCredential(filePath, credential.AdobeClientId, credential.AdobeClientSecret, credential.AdobeCredentialsId, queue.AntrianId);
+                        var pdfBytes = await pdfService.ConvertDocxToPdfWithCredential(fullFilePath, credential.AdobeClientId, credential.AdobeClientSecret, credential.AdobeCredentialsId, queue.AntrianId);
 
                         credential.AdobeCredentialsQuotaUsed++;
-                        credential.AdobeCredentialsUpdatedAt = DateTime.Now;
+                        credential.AdobeCredentialsUpdatedAt = DateTime.UtcNow;
 
-                        var pathParts = filePath.Split(Path.DirectorySeparatorChar);
-                        var nrp = pathParts[^2];
-                        var filename = Path.ChangeExtension(pathParts[^1], ".pdf");
-                        var pdfDir = Path.Combine("pdf", nrp);
-                        Directory.CreateDirectory(pdfDir);
-                        var pdfPath = Path.Combine(pdfDir, filename);
-                        await File.WriteAllBytesAsync(pdfPath, pdfBytes, stoppingToken);
+                        var fileService = scope.ServiceProvider.GetRequiredService<IFileService>();
+                        var pdfPath = fileService.GetPdfPath(filePath);
+                        var fullPdfPath = Path.Combine(storagePath, pdfPath);
+                        Directory.CreateDirectory(Path.GetDirectoryName(fullPdfPath)!);
+                        await File.WriteAllBytesAsync(fullPdfPath, pdfBytes, stoppingToken);
 
                         queue.AntrianConvertStatus = "completed";
                         queue.AntrianVisualStatus = "in_queue";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = DateTime.UtcNow;
                         queue.AntrianErrorMessage = null;
                         Console.WriteLine($"[QUEUE] Completed antrian ID: {queue.AntrianId}, PDF: {pdfPath}, Visual status: in_queue");
                         _logger.LogInformation("Completed antrian ID: {AntrianId}, PDF: {PdfPath}, Visual status: in_queue", queue.AntrianId, pdfPath);
@@ -129,7 +129,7 @@ public class PdfQueueBackgroundService : BackgroundService
                             if (dokumen != null)
                             {
                                 dokumen.DokumenPdfPath = pdfPath;
-                                dokumen.DokumenUpdatedAt = DateTime.Now;
+                                dokumen.DokumenUpdatedAt = DateTime.UtcNow;
                                 Console.WriteLine($"[QUEUE] Updated dokumen ID: {queue.DokumenId}, pdf_path: {pdfPath}");
                                 _logger.LogInformation("Updated dokumen ID: {DokumenId}, pdf_path: {PdfPath}", queue.DokumenId, pdfPath);
                             }
@@ -157,7 +157,7 @@ public class PdfQueueBackgroundService : BackgroundService
                                     if (buku != null)
                                     {
                                         buku.BukuStatus = "selesai_convert";
-                                        buku.BukuUpdatedAt = DateTime.Now;
+                                        buku.BukuUpdatedAt = DateTime.UtcNow;
                                         Console.WriteLine($"[QUEUE] All babs completed for buku ID: {queue.BukuId}, status: selesai_convert");
                                         _logger.LogInformation("All babs completed for buku ID: {BukuId}", queue.BukuId);
                                     }
@@ -168,33 +168,29 @@ public class PdfQueueBackgroundService : BackgroundService
                     catch (FileNotFoundException ex)
                     {
                         queue.AntrianConvertStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = DateTime.UtcNow;
                         queue.AntrianErrorMessage = $"File tidak ditemukan: {ex.Message}";
-                        Console.WriteLine($"[QUEUE] Failed antrian ID: {queue.AntrianId}, Reason: {queue.AntrianErrorMessage}");
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (HttpRequestException ex)
                     {
                         queue.AntrianConvertStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = DateTime.UtcNow;
                         queue.AntrianErrorMessage = $"Adobe API error: {ex.Message}";
-                        Console.WriteLine($"[QUEUE] Failed antrian ID: {queue.AntrianId}, Reason: {queue.AntrianErrorMessage}");
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (InvalidOperationException ex)
                     {
                         queue.AntrianConvertStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = DateTime.UtcNow;
                         queue.AntrianErrorMessage = $"Konversi gagal: {ex.Message}";
-                        Console.WriteLine($"[QUEUE] Failed antrian ID: {queue.AntrianId}, Reason: {queue.AntrianErrorMessage}");
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (Exception ex)
                     {
                         queue.AntrianConvertStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = DateTime.UtcNow;
                         queue.AntrianErrorMessage = ex.Message.Length > 255 ? ex.Message.Substring(0, 252) + "..." : ex.Message;
-                        Console.WriteLine($"[QUEUE] Failed antrian ID: {queue.AntrianId}, Reason: {queue.AntrianErrorMessage}");
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
 

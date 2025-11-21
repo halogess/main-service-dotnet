@@ -34,8 +34,8 @@ public class BukuService : IBukuService
             BukuJudul = judul,
             BukuStatus = "dalam_antrian",
             BukuJumlahBab = files.Count,
-            BukuCreatedAt = DateTime.Now,
-            BukuUpdatedAt = DateTime.Now
+            BukuCreatedAt = DateTime.UtcNow,
+            BukuUpdatedAt = DateTime.UtcNow
         };
 
         _db.Bukus.Add(buku);
@@ -82,8 +82,8 @@ public class BukuService : IBukuService
                     BabId = bab.BabId,
                     AntrianWorker = "convert_pdf",
                     AntrianConvertStatus = "in_queue",
-                    AntrianCreatedAt = DateTime.Now,
-                    AntrianUpdatedAt = DateTime.Now
+                    AntrianCreatedAt = DateTime.UtcNow,
+                    AntrianUpdatedAt = DateTime.UtcNow
                 };
                 _db.Antrians.Add(antrian);
 

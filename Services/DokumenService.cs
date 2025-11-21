@@ -45,7 +45,7 @@ public class DokumenService : IDokumenService
         await _db.SaveChangesAsync();
         
         var filePath = await _fileService.SaveFile(file, nrp, dokumen.DokumenId, "dokumen");
-        dokumen.DokumenFilename = filePath;
+        dokumen.DokumenDocxPath = filePath;
         
         var antrian = new Antrian
         {

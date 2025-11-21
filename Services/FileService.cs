@@ -18,7 +18,12 @@ public interface IFileService
 public class FileService : IFileService
 {
     private readonly string[] _allowedExtensions = { ".docx" };
-    private readonly string _storageBasePath = "storage";
+    private readonly string _storageBasePath;
+
+    public FileService()
+    {
+        _storageBasePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+    }
 
     public void ValidateExtension(string filename)
     {

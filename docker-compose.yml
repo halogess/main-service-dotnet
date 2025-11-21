@@ -5,10 +5,28 @@ services:
     container_name: main-service-dotnet
     build: .
     ports:
-      - "5063:5062"
+      - "5062:5062"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_URLS=http://+:5062
+      - STORAGE_PATH=/app/storage
+      - ConnectionStrings__SttsDbConnection=${ConnectionStrings__SttsDbConnection}
+      - ConnectionStrings__KorektorBukuDbConnection=${ConnectionStrings__KorektorBukuDbConnection}
+      - Auth__JwtSecret=${Auth__JwtSecret}
+      - Auth__AccessTokenExpiryMinutes=${Auth__AccessTokenExpiryMinutes}
+      - Auth__RefreshTokenExpiryDays=${Auth__RefreshTokenExpiryDays}
+      - Auth__AdminUsername=${Auth__AdminUsername}
+      - Auth__ExternalApiUrl=${Auth__ExternalApiUrl}
+      - Auth__ExternalApiToken=${Auth__ExternalApiToken}
+      - Auth__AppName=${Auth__AppName}
+      - Adobe__ClientId=${Adobe__ClientId}
+      - Adobe__ClientSecret=${Adobe__ClientSecret}
+      - Adobe__TokenUrl=${Adobe__TokenUrl}
+      - Adobe__ApiBaseUrl=${Adobe__ApiBaseUrl}
+      - InternalApiKey=${InternalApiKey}
+      - Logging__LogLevel__Default=${Logging__LogLevel__Default}
+      - Logging__LogLevel__Microsoft__AspNetCore=${Logging__LogLevel__MicrosoftAspNetCore}
+      - AllowedHosts=${AllowedHosts}
     volumes:
       - ${VOLUME_BASE_PATH}:/app/storage
     networks:

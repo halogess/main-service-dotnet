@@ -67,7 +67,7 @@ app.UseWebSockets();
 
 app.UseHttpsRedirection();
 
-app.UseMiddleware<_.Middleware.AuthMiddleware>();
+app.UseMiddleware<ValidasiTugasAkhir.MainService.Middleware.AuthMiddleware>();
 
 app.UseAuthorization();
 

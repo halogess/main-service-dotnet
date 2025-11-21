@@ -6,7 +6,7 @@ public class SttsDbContext : DbContext
     public SttsDbContext(DbContextOptions<SttsDbContext> options) : base(options) { }
     
     public DbSet<Mahasiswa> Mahasiswas { get; set; }
-    // public DbSet<Jurusan> Jurusan { get; set; }
+    public DbSet<Jurusan> Jurusans { get; set; }
     
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -46,7 +46,13 @@ public class SttsDbContext : DbContext
             
         });
 
-        // Anda bisa menambahkan konfigurasi untuk entitas lain di sini
-        // modelBuilder.Entity<Jurusan>(...);
+        modelBuilder.Entity<Jurusan>(entity =>
+        {
+            entity.ToTable("aka_jurusan");
+            entity.HasKey(e => e.JurKode);
+            entity.Property(e => e.JurKode).HasColumnName("jur_kode").HasMaxLength(2);
+            entity.Property(e => e.JurNama).HasColumnName("jur_nama").HasMaxLength(50);
+            entity.Property(e => e.JurStatus).HasColumnName("jur_status");
+        });
     }
 }

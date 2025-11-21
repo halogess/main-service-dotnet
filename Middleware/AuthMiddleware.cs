@@ -3,7 +3,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 
-namespace _.Middleware;
+namespace ValidasiTugasAkhir.MainService.Middleware;
 
 public class AuthMiddleware
 {
@@ -64,6 +64,14 @@ public class AuthMiddleware
                 return;
             }
             Console.WriteLine($"[AUTH] Secret length: {secret.Length}, Token length: {token.Length}");
+            Console.WriteLine($"[AUTH] Secret (first 10 chars): {secret.Substring(0, Math.Min(10, secret.Length))}...");
+            
+            // Decode token tanpa validasi untuk debug
+            var jwtHandler = new JwtSecurityTokenHandler();
+            var decodedToken = jwtHandler.ReadJwtToken(token);
+            Console.WriteLine($"[AUTH] Token claims: {string.Join(", ", decodedToken.Claims.Select(c => $"{c.Type}={c.Value}"))}");
+            Console.WriteLine($"[AUTH] Token expires: {decodedToken.ValidTo}");
+            
             var key = Encoding.UTF8.GetBytes(secret);
 
             tokenHandler.ValidateToken(token, new TokenValidationParameters

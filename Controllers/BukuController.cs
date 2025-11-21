@@ -9,11 +9,13 @@ namespace ValidasiTugasAkhir.MainService.Controllers;
 public class BukuController : ControllerBase
 {
     private readonly KorektorBukuDbContext _db;
+    private readonly SttsDbContext _sttsDb;
     private readonly IBukuService _bukuService;
 
-    public BukuController(KorektorBukuDbContext db, IBukuService bukuService)
+    public BukuController(KorektorBukuDbContext db, SttsDbContext sttsDb, IBukuService bukuService)
     {
         _db = db;
+        _sttsDb = sttsDb;
         _bukuService = bukuService;
     }
 
@@ -113,7 +115,7 @@ public class BukuController : ControllerBase
     }
 
     [HttpGet]
-    public IActionResult GetBuku([FromQuery] string? status = null, [FromQuery] string sort = "desc", [FromQuery] int limit = 10, [FromQuery] int offset = 0, [FromQuery] string? nrp = null)
+    public IActionResult GetBuku([FromQuery] string? status = null, [FromQuery] string sort = "desc", [FromQuery] int limit = 10, [FromQuery] int offset = 0, [FromQuery] string? nrp = null, [FromQuery] string? jurusan = null, [FromQuery] string? search = null, [FromQuery] DateTime? startDate = null, [FromQuery] DateTime? endDate = null)
     {
         var currentNrp = HttpContext.Items["Nrp"]?.ToString();
         var role = HttpContext.Items["Role"]?.ToString();
@@ -121,55 +123,80 @@ public class BukuController : ControllerBase
         // Jika admin, join dengan tabel mahasiswa untuk mendapatkan nama dan jurusan
         if (role == "admin")
         {
-            var adminQuery = from b in _db.Bukus
-                           join m in _db.Mahasiswas on b.MhsNrp equals m.MhsNrp into mGroup
-                           from m in mGroup.DefaultIfEmpty()
-                           select new { Buku = b, Mahasiswa = m };
+            var bukuList = _db.Bukus.AsQueryable();
             
-            // Filter berdasarkan NRP jika ada
             if (!string.IsNullOrEmpty(nrp))
             {
-                adminQuery = adminQuery.Where(x => x.Buku.MhsNrp == nrp);
+                bukuList = bukuList.Where(b => b.MhsNrp == nrp);
             }
             
-            // Filter berdasarkan status
+            if (!string.IsNullOrEmpty(search))
+            {
+                var nrpsBySearch = _sttsDb.Mahasiswas.Where(m => m.MhsNrp!.Contains(search) || m.MhsNama!.Contains(search)).Select(m => m.MhsNrp).ToList();
+                bukuList = bukuList.Where(b => nrpsBySearch.Contains(b.MhsNrp));
+            }
+            
+            if (!string.IsNullOrEmpty(jurusan))
+            {
+                var nrpsByJurusan = _sttsDb.Mahasiswas.Where(m => m.JurKode == jurusan).Select(m => m.MhsNrp).ToList();
+                bukuList = bukuList.Where(b => nrpsByJurusan.Contains(b.MhsNrp));
+            }
+            
+            if (startDate.HasValue)
+            {
+                bukuList = bukuList.Where(b => b.BukuCreatedAt >= startDate.Value);
+            }
+            
+            if (endDate.HasValue)
+            {
+                var endOfDay = endDate.Value.Date.AddDays(1).AddTicks(-1);
+                bukuList = bukuList.Where(b => b.BukuCreatedAt <= endOfDay);
+            }
+            
             if (!string.IsNullOrEmpty(status))
             {
                 var statuses = status.Split(',').Select(s => s.Trim()).ToList();
-                adminQuery = adminQuery.Where(x => statuses.Contains(x.Buku.BukuStatus));
+                bukuList = bukuList.Where(b => statuses.Contains(b.BukuStatus));
             }
             
-            // Sorting
-            adminQuery = sort.ToLower() == "asc" 
-                ? adminQuery.OrderBy(x => x.Buku.BukuCreatedAt)
-                : adminQuery.OrderByDescending(x => x.Buku.BukuCreatedAt);
+            bukuList = sort.ToLower() == "asc" 
+                ? bukuList.OrderBy(b => b.BukuCreatedAt)
+                : bukuList.OrderByDescending(b => b.BukuCreatedAt);
             
-            var totalCount = adminQuery.Count();
+            var totalCount = bukuList.Count();
+            var bukus = bukuList.Skip(offset).Take(limit).ToList();
+            var nrps = bukus.Select(b => b.MhsNrp).Distinct().ToList();
+            var mahasiswas = _sttsDb.Mahasiswas.Where(m => nrps.Contains(m.MhsNrp)).ToDictionary(m => m.MhsNrp);
+            var jurKodes = mahasiswas.Values.Where(m => m.JurKode != null).Select(m => m.JurKode!).Distinct().ToList();
+            var jurusans = _sttsDb.Jurusans.Where(j => jurKodes.Contains(j.JurKode)).ToDictionary(j => j.JurKode);
             
-            var bukuList = adminQuery
-                .Skip(offset)
-                .Take(limit)
-                .Select(x => new {
-                    id = x.Buku.BukuId,
-                    judul = x.Buku.BukuJudul,
-                    nrp = x.Buku.MhsNrp,
-                    nama = x.Mahasiswa != null ? x.Mahasiswa.MhsNama : "Unknown",
-                    jurusan = x.Mahasiswa != null ? x.Mahasiswa.JurKode : "Unknown",
-                    tanggal_upload = x.Buku.BukuCreatedAt,
-                    jumlah_bab = x.Buku.BukuJumlahBab,
-                    status = x.Buku.BukuStatus,
-                    skor = x.Buku.BukuSkor ?? 0,
-                    jumlah_kesalahan = x.Buku.BukuJumlahKesalahan ?? 0
-                })
-                .ToList();
+            var result = bukus.Select(b => {
+                var mhs = mahasiswas.ContainsKey(b.MhsNrp) ? mahasiswas[b.MhsNrp] : null;
+                var jurKode = mhs?.JurKode;
+                var jurNama = jurKode != null && jurusans.ContainsKey(jurKode) ? jurusans[jurKode].JurNama : "Unknown";
+                
+                return new {
+                    id = b.BukuId,
+                    judul = b.BukuJudul,
+                    nrp = b.MhsNrp,
+                    nama = mhs?.MhsNama ?? "Unknown",
+                    jurusan = jurNama,
+                    tanggal_upload = b.BukuCreatedAt,
+                    jumlah_bab = b.BukuJumlahBab,
+                    status = b.BukuStatus,
+                    skor = b.BukuSkor ?? 0,
+                    jumlah_kesalahan = b.BukuJumlahKesalahan ?? 0
+                };
+            }).ToList();
 
             return Ok(new {
-                data = bukuList,
+                data = result,
                 total = totalCount,
                 limit = limit,
                 offset = offset
             });
         }
+
         
         // Untuk mahasiswa, tetap menggunakan query lama
         var query = _db.Bukus.Where(b => b.MhsNrp == currentNrp);

@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace _.Models;
+namespace ValidasiTugasAkhir.MainService.Models;
 
 [Table("adobe_api_logs")]
 public class AdobeApiLog
@@ -12,6 +12,13 @@ public class AdobeApiLog
 
     [Column("adobe_credentials_id")]
     public int? AdobeCredentialsId { get; set; }
+
+    [Column("antrian_id")]
+    public uint? AntrianId { get; set; }
+
+    [Column("activity")]
+    [MaxLength(100)]
+    public string Activity { get; set; } = string.Empty;
 
     [Column("endpoint")]
     [MaxLength(255)]

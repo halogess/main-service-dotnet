@@ -1,7 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace _.Models;
+namespace ValidasiTugasAkhir.MainService.Models;
 
 [Table("adobe_credentials")]
 public class AdobeCredential

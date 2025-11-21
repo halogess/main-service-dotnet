@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
-using _.Models;
-using _.Services;
+using ValidasiTugasAkhir.MainService.Models;
+using ValidasiTugasAkhir.MainService.Services;
 
-namespace _.Controllers;
+namespace ValidasiTugasAkhir.MainService.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]

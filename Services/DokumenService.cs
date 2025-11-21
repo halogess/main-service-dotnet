@@ -1,7 +1,7 @@
-using _.Models;
+using ValidasiTugasAkhir.MainService.Models;
 using Microsoft.AspNetCore.Http;
 
-namespace _.Services;
+namespace ValidasiTugasAkhir.MainService.Services;
 
 public interface IDokumenService
 {
@@ -38,8 +38,8 @@ public class DokumenService : IDokumenService
             DokumenFilename = "",
             DokumenFilesizeBytes = file.Length,
             DokumenStatus = "dalam_antrian",
-            DokumenCreatedAt = DateTime.Now,
-            DokumenUpdatedAt = DateTime.Now
+            DokumenCreatedAt = DateTime.UtcNow,
+            DokumenUpdatedAt = DateTime.UtcNow
         };
 
         _db.Dokumens.Add(dokumen);
@@ -62,30 +62,20 @@ public class DokumenService : IDokumenService
             var uploadDir = Path.Combine("uploads", nrp);
             var filePath = Path.Combine(uploadDir, filename);
             
-            var antrianPdf = new AntrianPdf
-            {
-                AntrianPdfTipe = "dokumen",
-                FilePath = filePath,
-                AntrianPdfStatus = "in_queue",
-                AntrianPdfCreatedAt = DateTime.Now,
-                AntrianPdfUpdatedAt = DateTime.Now
-            };
-            _db.AntrianPdfs.Add(antrianPdf);
-            
             var antrian = new Antrian
             {
                 AntrianTipe = "dokumen",
-                DokumenId = dokumen.DokumenId,
-                AntrianWorker = "visual",
-                AntrianStatus = "not_start",
-                AntrianCreatedAt = DateTime.Now,
-                AntrianUpdatedAt = DateTime.Now
+                DokumenId = (uint)dokumen.DokumenId,
+                AntrianWorker = "convert_pdf",
+                AntrianConvertStatus = "in_queue",
+                AntrianCreatedAt = DateTime.UtcNow,
+                AntrianUpdatedAt = DateTime.UtcNow
             };
             _db.Antrians.Add(antrian);
             
             await _db.SaveChangesAsync();
-            Console.WriteLine($"[UPLOAD] Antrian PDF dibuat: ID={antrianPdf.AntrianPdfId}, Antrian visual ID={antrian.AntrianId}");
-            _logger.LogInformation("Antrian PDF dibuat: ID={AntrianPdfId}, Antrian visual ID={AntrianId}", antrianPdf.AntrianPdfId, antrian.AntrianId);
+            Console.WriteLine($"[UPLOAD] Antrian convert_pdf dibuat: ID={antrian.AntrianId}");
+            _logger.LogInformation("Antrian convert_pdf dibuat: ID={AntrianId}", antrian.AntrianId);
         }
 
         Console.WriteLine($"[UPLOAD] Upload dokumen selesai: ID={dokumen.DokumenId}");
@@ -109,7 +99,7 @@ public class DokumenService : IDokumenService
         }
 
         dokumen.DokumenStatus = status;
-        dokumen.DokumenUpdatedAt = DateTime.Now;
+        dokumen.DokumenUpdatedAt = DateTime.UtcNow;
         
         await _db.SaveChangesAsync();
         await _wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, dokumenId, status);

@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using _.Services;
+using ValidasiTugasAkhir.MainService.Services;
 
-namespace _.Controllers;
+namespace ValidasiTugasAkhir.MainService.Controllers;
 
 [ApiController]
 public class WebSocketController : ControllerBase

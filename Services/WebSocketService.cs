@@ -3,7 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 
-namespace _.Services;
+namespace ValidasiTugasAkhir.MainService.Services;
 
 public interface IWebSocketService
 {
@@ -11,6 +11,7 @@ public interface IWebSocketService
     Task NotifyDokumenStatusChanged(string nrp, int dokumenId, string status);
     Task NotifyDokumenCancelled(string nrp, int dokumenId);
     Task NotifyQueuePositionChanged(string nrp, int position);
+    Task NotifyBukuStatusChanged(string nrp, int bukuId, string status);
 }
 
 public class WebSocketService : IWebSocketService
@@ -68,6 +69,17 @@ public class WebSocketService : IWebSocketService
         {
             type = "queue_position_changed",
             position = position,
+            timestamp = DateTime.Now
+        });
+    }
+
+    public async Task NotifyBukuStatusChanged(string nrp, int bukuId, string status)
+    {
+        await SendMessage(nrp, new
+        {
+            type = "buku_status_changed",
+            buku_id = bukuId,
+            status = status,
             timestamp = DateTime.Now
         });
     }

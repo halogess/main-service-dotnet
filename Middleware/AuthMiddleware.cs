@@ -78,8 +78,9 @@ public class AuthMiddleware
 
             var jwtToken = (JwtSecurityToken)validatedToken;
             var username = jwtToken.Claims.FirstOrDefault(c => c.Type == "username")?.Value;
+            var role = jwtToken.Claims.FirstOrDefault(c => c.Type == "role")?.Value;
             
-            Console.WriteLine($"[AUTH] Username from token: {username}");
+            Console.WriteLine($"[AUTH] Username from token: {username}, Role: {role}");
 
             if (string.IsNullOrEmpty(username))
             {
@@ -89,23 +90,35 @@ public class AuthMiddleware
                 return;
             }
 
-            var mahasiswa = await sttsDb.Mahasiswas
-                .FirstOrDefaultAsync(m => m.MhsNrp == username);
-            
-            Console.WriteLine($"[AUTH] Mahasiswa found: {mahasiswa != null}, NRP: {mahasiswa?.MhsNrp}");
-
-            if (mahasiswa == null)
+            // Jika admin, skip validasi mahasiswa
+            if (role == "admin")
             {
-                context.Response.StatusCode = 401;
-                context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync("{\"message\":\"Mahasiswa tidak ditemukan\"}");
-                return;
+                context.Items["Username"] = username;
+                context.Items["Nrp"] = username;
+                context.Items["Role"] = role;
+                Console.WriteLine($"[AUTH] Admin access granted: {username}");
             }
+            else
+            {
+                var mahasiswa = await sttsDb.Mahasiswas
+                    .FirstOrDefaultAsync(m => m.MhsNrp == username);
+                
+                Console.WriteLine($"[AUTH] Mahasiswa found: {mahasiswa != null}, NRP: {mahasiswa?.MhsNrp}");
 
-            context.Items["Username"] = username;
-            context.Items["Nrp"] = mahasiswa.MhsNrp;
+                if (mahasiswa == null)
+                {
+                    context.Response.StatusCode = 401;
+                    context.Response.ContentType = "application/json";
+                    await context.Response.WriteAsync("{\"message\":\"Mahasiswa tidak ditemukan\"}");
+                    return;
+                }
+
+                context.Items["Username"] = username;
+                context.Items["Nrp"] = mahasiswa.MhsNrp;
+                context.Items["Role"] = role ?? "mahasiswa";
+            }
             
-            Console.WriteLine($"[AUTH] Saved to context - Username: {context.Items["Username"]}, Nrp: {context.Items["Nrp"]}");
+            Console.WriteLine($"[AUTH] Saved to context - Username: {context.Items["Username"]}, Nrp: {context.Items["Nrp"]}, Role: {context.Items["Role"]}");
 
             await _next(context);
         }

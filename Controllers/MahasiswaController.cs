@@ -1,9 +1,9 @@
-using _.Models;
+using ValidasiTugasAkhir.MainService.Models;
 using _.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
-namespace MyApp.Namespace
+namespace ValidasiTugasAkhir.MainService.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]

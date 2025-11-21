@@ -1,4 +1,4 @@
-using _.Models;
+using ValidasiTugasAkhir.MainService.Models;
 using Microsoft.EntityFrameworkCore;
 
 public class KorektorBukuDbContext : DbContext
@@ -6,8 +6,9 @@ public class KorektorBukuDbContext : DbContext
     public KorektorBukuDbContext(DbContextOptions<KorektorBukuDbContext> options) : base(options) { }
 
     public DbSet<Buku> Bukus { get; set; }
+    public DbSet<Bab> Babs { get; set; }
     public DbSet<Dokumen> Dokumens { get; set; }
-    public DbSet<AntrianPdf> AntrianPdfs { get; set; }
+
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
     public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
     public DbSet<Antrian> Antrians { get; set; }
@@ -23,6 +24,11 @@ public class KorektorBukuDbContext : DbContext
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<Bab>(entity =>
+        {
+            entity.HasKey(e => e.BabId);
+        });
+
         modelBuilder.Entity<Dokumen>(entity =>
         {
             entity.Property(e => e.DokumenCreatedAt)
@@ -32,15 +38,7 @@ public class KorektorBukuDbContext : DbContext
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
-        modelBuilder.Entity<AntrianPdf>(entity =>
-        {
-            entity.HasKey(e => e.AntrianPdfId);
-            entity.Property(e => e.AntrianPdfCreatedAt)
-                .HasDefaultValueSql("CURRENT_TIMESTAMP");
-            entity.Property(e => e.AntrianPdfUpdatedAt)
-                .HasDefaultValueSql("CURRENT_TIMESTAMP")
-                .ValueGeneratedOnAddOrUpdate();
-        });
+
 
         modelBuilder.Entity<AdobeCredential>(entity =>
         {

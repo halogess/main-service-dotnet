@@ -1,32 +1,38 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace _.Models;
+namespace ValidasiTugasAkhir.MainService.Models;
 
 [Table("antrian")]
 public class Antrian
 {
     [Key]
     [Column("antrian_id")]
-    public int AntrianId { get; set; }
+    public uint AntrianId { get; set; }
 
     [Column("antrian_tipe")]
-    [MaxLength(8)]
-    public string AntrianTipe { get; set; } = string.Empty;
+    public string AntrianTipe { get; set; } = string.Empty; // 'dokumen' or 'buku'
 
     [Column("buku_id")]
-    public int? BukuId { get; set; }
+    public uint? BukuId { get; set; }
+
+    [Column("bab_id")]
+    public uint? BabId { get; set; }
 
     [Column("dokumen_id")]
-    public int? DokumenId { get; set; }
+    public uint? DokumenId { get; set; }
 
     [Column("antrian_worker")]
-    [MaxLength(8)]
-    public string AntrianWorker { get; set; } = string.Empty;
+    public string AntrianWorker { get; set; } = string.Empty; // 'convert_pdf', 'struktur', 'visual'
 
-    [Column("antrian_status")]
-    [MaxLength(10)]
-    public string AntrianStatus { get; set; } = "not_start";
+    [Column("antrian_convert_status")]
+    public string? AntrianConvertStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
+
+    [Column("antrian_visual_status")]
+    public string? AntrianVisualStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
+
+    [Column("antrian_struktur_status")]
+    public string? AntrianStrukturStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
 
     [Column("antrian_error_message")]
     [MaxLength(255)]

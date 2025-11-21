@@ -1,4 +1,4 @@
-﻿namespace _.Models;
+﻿namespace ValidasiTugasAkhir.MainService.Models;
 
 public class Mahasiswa
 {

@@ -1,4 +1,4 @@
-using _.Models;
+using ValidasiTugasAkhir.MainService.Models;
 using Microsoft.EntityFrameworkCore;
 
 public class SttsDbContext : DbContext

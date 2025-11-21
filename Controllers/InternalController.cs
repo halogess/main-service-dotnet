@@ -1,8 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
-using _.Models;
+using ValidasiTugasAkhir.MainService.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace _.Controllers;
+namespace ValidasiTugasAkhir.MainService.Controllers;
 
 [ApiController]
 [Route("api/internal")]
@@ -32,10 +32,17 @@ public class InternalController : ControllerBase
             return Unauthorized(new { message = "Invalid API Key" });
         }
 
-        var antrian = await _db.Antrians
-            .Where(a => a.AntrianWorker == worker && a.AntrianStatus == status)
-            .OrderBy(a => a.AntrianId)
-            .FirstOrDefaultAsync();
+        var query = _db.Antrians.Where(a => a.AntrianWorker == worker);
+        
+        query = worker switch
+        {
+            "convert_pdf" => query.Where(a => a.AntrianConvertStatus == status),
+            "visual" => query.Where(a => a.AntrianVisualStatus == status),
+            "struktur" => query.Where(a => a.AntrianStrukturStatus == status),
+            _ => query.Where(a => false) // Invalid worker
+        };
+
+        var antrian = await query.OrderBy(a => a.AntrianId).FirstOrDefaultAsync();
 
         if (antrian == null)
         {
@@ -59,7 +66,20 @@ public class InternalController : ControllerBase
             return NotFound(new { message = "Antrian tidak ditemukan" });
         }
 
-        antrian.AntrianStatus = request.status;
+        // Update status berdasarkan worker
+        switch (antrian.AntrianWorker)
+        {
+            case "convert_pdf":
+                antrian.AntrianConvertStatus = request.status;
+                break;
+            case "visual":
+                antrian.AntrianVisualStatus = request.status;
+                break;
+            case "struktur":
+                antrian.AntrianStrukturStatus = request.status;
+                break;
+        }
+        
         antrian.AntrianErrorMessage = request.error_message;
         antrian.AntrianUpdatedAt = DateTime.Now;
 

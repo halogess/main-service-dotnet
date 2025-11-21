@@ -3,7 +3,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.ExtendedProperties;
 using DocumentFormat.OpenXml.Wordprocessing;
 
-namespace _.Services;
+namespace ValidasiTugasAkhir.MainService.Services;
 
 public interface IFileService
 {

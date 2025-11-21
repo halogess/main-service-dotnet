@@ -213,20 +213,21 @@ public class BukuController : ControllerBase
         
         var mahasiswaTotal = query.Count();
         
-        var mahasiswaBukuList = query
-            .Skip(offset)
-            .Take(limit)
-            .Select(b => new {
-                id = b.BukuId,
-                judul = b.BukuJudul,
-                nrp = b.MhsNrp,
-                tanggal_upload = b.BukuCreatedAt,
-                jumlah_bab = b.BukuJumlahBab,
-                status = b.BukuStatus,
-                skor = b.BukuSkor ?? 0,
-                jumlah_kesalahan = b.BukuJumlahKesalahan ?? 0
-            })
-            .ToList();
+        var bukuIds = query.Skip(offset).Take(limit).Select(b => b.BukuId).ToList();
+        var mahasiswaBukus = _db.Bukus.Where(b => bukuIds.Contains(b.BukuId)).ToList();
+        var babs = _db.Babs.Where(b => bukuIds.Contains((int)b.BukuId)).OrderBy(b => b.BabOrder).ToList();
+        
+        var mahasiswaBukuList = mahasiswaBukus.Select(b => new {
+            id = b.BukuId,
+            judul = b.BukuJudul,
+            nrp = b.MhsNrp,
+            tanggal_upload = b.BukuCreatedAt,
+            jumlah_bab = b.BukuJumlahBab,
+            status = b.BukuStatus,
+            skor = b.BukuSkor ?? 0,
+            jumlah_kesalahan = b.BukuJumlahKesalahan ?? 0,
+            bab = babs.Where(bab => bab.BukuId == b.BukuId).Select(bab => bab.BabFilename).ToList()
+        }).ToList();
 
         return Ok(new {
             data = mahasiswaBukuList,

@@ -49,6 +49,8 @@ public class BukuService : IBukuService
             try
             {
                 Console.WriteLine($"[UPLOAD] Processing file {babOrder}: {file.FileName}");
+                _logger.LogInformation("Processing file {BabOrder}: {FileName}", babOrder, file.FileName);
+
                 _fileService.ValidateExtension(file.FileName);
                 await _fileService.ValidateDocumentSource(file);
 
@@ -63,12 +65,14 @@ public class BukuService : IBukuService
                 await _db.SaveChangesAsync();
                 Console.WriteLine($"[UPLOAD] Bab created: ID={bab.BabId}, Order={bab.BabOrder}");
 
-                var filename = await _fileService.SaveFile(file, nrp, (int)bab.BabId);
-                bab.BabFilename = filename;
-                bab.BabDocxPath = Path.Combine("uploads", nrp, filename);
+                // Save file dengan entity-based path: storage/buku/{nrp}/{buku_id}/docx/
+                var docxPath = await _fileService.SaveFile(file, nrp, buku.BukuId, "buku");
+                
+                bab.BabDocxPath = docxPath;  // Full path sudah dari FileService
+                bab.BabFilename = Path.GetFileName(docxPath);
                 await _db.SaveChangesAsync();
 
-                Console.WriteLine($"[UPLOAD] Bab tersimpan: ID={bab.BabId}, Order={bab.BabOrder}, File={filename}");
+                Console.WriteLine($"[UPLOAD] Bab tersimpan: ID={bab.BabId}, Order={bab.BabOrder}, File={bab.BabFilename}");
                 _logger.LogInformation("Bab tersimpan: ID={BabId}, Order={BabOrder}", bab.BabId, bab.BabOrder);
 
                 var antrian = new Antrian

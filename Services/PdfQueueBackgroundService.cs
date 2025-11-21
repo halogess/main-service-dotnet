@@ -203,11 +203,25 @@ public class PdfQueueBackgroundService : BackgroundService
 
                 await Task.Delay(5000, stoppingToken);
             }
+            catch (OperationCanceledException)
+            {
+                // Normal during hot reload or shutdown
+                _logger.LogInformation("PDF Queue service stopping (cancelled)");
+            }
             catch (Exception ex)
             {
                 Console.WriteLine($"[QUEUE] Error: {ex.Message}");
                 _logger.LogError(ex, "Error in PDF Queue Background Service");
-                await Task.Delay(10000, stoppingToken);
+                
+                // Don't crash service, wait and retry
+                try
+                {
+                    await Task.Delay(10000, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Shutdown during error recovery
+                }
             }
         }
 

@@ -1,5 +1,0 @@
-create controller : 
-dotnet new apicontroller -n <controller name> -o Controllers
-
-example : 
-dotnet new apicontroller -n MahasiswaController -o Controllers

@@ -26,7 +26,6 @@ public class DokumenService : IDokumenService
 
     public async Task<Dokumen> UploadDokumen(string nrp, IFormFile file)
     {
-        Console.WriteLine($"[UPLOAD] Upload dokumen dimulai: NRP={nrp}, File={file.FileName}");
         _logger.LogInformation("Upload dokumen dimulai: NRP={Nrp}, File={FileName}", nrp, file.FileName);
         
         _fileService.ValidateExtension(file.FileName);
@@ -35,50 +34,31 @@ public class DokumenService : IDokumenService
         var dokumen = new Dokumen
         {
             MhsNrp = nrp,
-            DokumenFilename = "",
+            DokumenFilename = file.FileName,
             DokumenFilesizeBytes = file.Length,
             DokumenStatus = "dalam_antrian",
             DokumenCreatedAt = DateTime.UtcNow,
             DokumenUpdatedAt = DateTime.UtcNow
         };
-
+        
         _db.Dokumens.Add(dokumen);
         await _db.SaveChangesAsync();
-        Console.WriteLine($"[UPLOAD] Dokumen tersimpan di database: ID={dokumen.DokumenId}");
-        _logger.LogInformation("Dokumen tersimpan di database: ID={DokumenId}", dokumen.DokumenId);
         
-        var filename = await _fileService.SaveFile(file, nrp, dokumen.DokumenId);
-        dokumen.DokumenFilename = filename;
-        dokumen.DokumenDocxPath = Path.Combine("uploads", nrp, filename);
-        await _db.SaveChangesAsync();
-        Console.WriteLine($"[UPLOAD] File tersimpan: {filename}");
-        _logger.LogInformation("File tersimpan: {FileName}", filename);
-
-        var extension = Path.GetExtension(file.FileName).ToLower();
-        if (extension == ".docx")
+        var filePath = await _fileService.SaveFile(file, nrp, dokumen.DokumenId, "dokumen");
+        dokumen.DokumenFilename = filePath;
+        
+        var antrian = new Antrian
         {
-            Console.WriteLine("[UPLOAD] Menambahkan ke antrian PDF");
-            _logger.LogInformation("Menambahkan ke antrian PDF");
-            var uploadDir = Path.Combine("uploads", nrp);
-            var filePath = Path.Combine(uploadDir, filename);
-            
-            var antrian = new Antrian
-            {
-                AntrianTipe = "dokumen",
-                DokumenId = (uint)dokumen.DokumenId,
-                AntrianWorker = "convert_pdf",
-                AntrianConvertStatus = "in_queue",
-                AntrianCreatedAt = DateTime.UtcNow,
-                AntrianUpdatedAt = DateTime.UtcNow
-            };
-            _db.Antrians.Add(antrian);
-            
-            await _db.SaveChangesAsync();
-            Console.WriteLine($"[UPLOAD] Antrian convert_pdf dibuat: ID={antrian.AntrianId}");
-            _logger.LogInformation("Antrian convert_pdf dibuat: ID={AntrianId}", antrian.AntrianId);
-        }
-
-        Console.WriteLine($"[UPLOAD] Upload dokumen selesai: ID={dokumen.DokumenId}");
+            AntrianTipe = "dokumen",
+            DokumenId = (uint)dokumen.DokumenId,
+            AntrianWorker = "convert_pdf",
+            AntrianConvertStatus = "in_queue",
+            AntrianCreatedAt = DateTime.UtcNow,
+            AntrianUpdatedAt = DateTime.UtcNow
+        };
+        _db.Antrians.Add(antrian);
+        await _db.SaveChangesAsync();
+        
         _logger.LogInformation("Upload dokumen selesai: ID={DokumenId}", dokumen.DokumenId);
         return dokumen;
     }

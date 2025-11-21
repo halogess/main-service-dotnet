@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  main-service:
+    container_name: main-service-dotnet
+    build: .
+    ports:
+      - "5063:5062"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - ASPNETCORE_URLS=http://+:5062
+    volumes:
+      - ${VOLUME_BASE_PATH}:/app/storage
+    networks:
+      - validasi-ta-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # AI Service (uncomment when ready)
+  # ai-service:
+  #   container_name: ai-service
+  #   image: ai-service:latest
+  #   volumes:
+  #     - ${VOLUME_BASE_PATH}:/app/storage
+  #   networks:
+  #     - validasi-ta-network
+
+networks:
+  validasi-ta-network:
+    driver: bridge
+
+
+

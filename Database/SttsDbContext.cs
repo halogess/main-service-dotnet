@@ -52,6 +52,7 @@ public class SttsDbContext : DbContext
             entity.HasKey(e => e.JurKode);
             entity.Property(e => e.JurKode).HasColumnName("jur_kode").HasMaxLength(2);
             entity.Property(e => e.JurNama).HasColumnName("jur_nama").HasMaxLength(50);
+            entity.Property(e => e.JurSingkat).HasColumnName("jur_singkat").HasMaxLength(20);
             entity.Property(e => e.JurStatus).HasColumnName("jur_status");
         });
     }

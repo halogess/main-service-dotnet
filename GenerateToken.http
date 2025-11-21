@@ -1,8 +1,0 @@
-### Login sebagai admin untuk generate token baru
-POST https://localhost:7123/api/auth/login
-Content-Type: application/json
-
-{
-  "username": "admin",
-  "password": "your_admin_password"
-}

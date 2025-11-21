@@ -19,6 +19,8 @@ public class AuthController : ControllerBase
     {
         try
         {
+            Console.WriteLine("[HOT RELOAD TEST] Login endpoint hit - Hot reload is working! 🔥");
+            
             if (string.IsNullOrEmpty(request.username) || string.IsNullOrEmpty(request.password))
             {
                 return BadRequest(new { message = "Username dan password harus diisi" });

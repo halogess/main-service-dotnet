@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Http;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.ExtendedProperties;
 using DocumentFormat.OpenXml.Wordprocessing;
+using System.Security;
 
 namespace ValidasiTugasAkhir.MainService.Services;
 
@@ -9,14 +10,15 @@ public interface IFileService
 {
     void ValidateExtension(string filename);
     Task ValidateDocumentSource(IFormFile file);
-    Task<string> SaveFile(IFormFile file, string nrp, int dokumenId);
+    Task<string> SaveFile(IFormFile file, string nrp, int entityId, string entityType);
+    string GetPdfPath(string docxPath);
     void DeleteFile(string filename);
 }
 
 public class FileService : IFileService
 {
     private readonly string[] _allowedExtensions = { ".docx" };
-    private readonly string _uploadPath = "uploads";
+    private readonly string _storageBasePath = "storage";
 
     public void ValidateExtension(string filename)
     {
@@ -50,38 +52,28 @@ public class FileService : IFileService
         {
             using var wordDoc = WordprocessingDocument.Open(memoryStream, false);
             
-                var extendedProps = wordDoc.ExtendedFilePropertiesPart?.Properties;
-            var coreProps = wordDoc.PackageProperties;
-            
-            // Whitelist: Hanya terima file dari Microsoft Word
-            var appName = extendedProps?.Application?.Text;
-            
-            if (string.IsNullOrEmpty(appName))
+            var extendedProps = wordDoc.ExtendedFilePropertiesPart;
+            if (extendedProps == null)
             {
-                throw new InvalidOperationException("File tidak memiliki informasi aplikasi pembuat. Pastikan file dibuat di Microsoft Word");
+                throw new InvalidOperationException("File tidak memiliki extended properties. Kemungkinan bukan file Word asli");
             }
+
+            var props = extendedProps.Properties;
+            var application = props?.Application?.Text;
             
-            var lowerAppName = appName.ToLower();
-            if (!lowerAppName.Contains("microsoft") && !lowerAppName.Contains("word"))
+            if (string.IsNullOrEmpty(application) || !application.Contains("Microsoft"))
             {
-                throw new InvalidOperationException($"File harus dibuat dengan Microsoft Word. Aplikasi pembuat: {appName}");
+                throw new InvalidOperationException("File tidak dibuat dengan Microsoft Word. Pastikan file asli dibuat di Word, bukan hasil konversi dari PDF");
             }
-            
-            // Validasi tambahan: Cek revision count
-            var revision = coreProps.Revision;
-            if (!string.IsNullOrEmpty(revision) && int.TryParse(revision, out int revNum))
+
+            var docProps = wordDoc.MainDocumentPart?.Document;
+            if (docProps == null)
             {
-                if (revNum < 2)
-                {
-                    throw new InvalidOperationException("File harus dibuat dan diedit di Microsoft Word, bukan hasil konversi dari aplikasi lain");
-                }
+                throw new InvalidOperationException("File tidak memiliki main document part");
             }
-            
-            // Validasi struktur: Cek apakah punya style standar MS Word
-            var mainPart = wordDoc.MainDocumentPart;
-            var stylesPart = mainPart?.StyleDefinitionsPart;
-            
-            if (stylesPart?.Styles == null)
+
+            var stylesPart = wordDoc.MainDocumentPart?.StyleDefinitionsPart;
+            if (stylesPart == null)
             {
                 throw new InvalidOperationException("File tidak memiliki style definition. Pastikan file dibuat di Microsoft Word");
             }
@@ -102,23 +94,34 @@ public class FileService : IFileService
         }
     }
 
-    public async Task<string> SaveFile(IFormFile file, string nrp, int dokumenId)
+    public async Task<string> SaveFile(IFormFile file, string nrp, int entityId, string entityType)
     {
         if (string.IsNullOrEmpty(nrp))
-        {
             throw new InvalidOperationException("NRP tidak boleh kosong");
-        }
+        if (string.IsNullOrEmpty(entityType))
+            throw new InvalidOperationException("Entity type tidak boleh kosong");
 
-        var uploadDir = Path.Combine(_uploadPath, nrp);
-        Directory.CreateDirectory(uploadDir);
+        var entityPath = Path.Combine(_storageBasePath, entityType, nrp, entityId.ToString(), "docx");
+        Directory.CreateDirectory(entityPath);
 
-        var filename = $"{dokumenId}_{file.FileName}";
-        var filePath = Path.Combine(uploadDir, filename);
+        var safeFilename = Path.GetFileName(file.FileName);
+        var filePath = Path.Combine(entityPath, safeFilename);
+
+        var fullEntityPath = Path.GetFullPath(entityPath);
+        var fullFilePath = Path.GetFullPath(filePath);
+        
+        if (!fullFilePath.StartsWith(fullEntityPath))
+            throw new SecurityException("Path traversal detected!");
 
         using var stream = new FileStream(filePath, FileMode.Create);
         await file.CopyToAsync(stream);
 
-        return filename;
+        return Path.Combine(entityType, nrp, entityId.ToString(), "docx", safeFilename);
+    }
+
+    public string GetPdfPath(string docxPath)
+    {
+        return docxPath.Replace("/docx/", "/pdf/").Replace("\\docx\\", "\\pdf\\").Replace(".docx", ".pdf");
     }
 
     public void DeleteFile(string filename)

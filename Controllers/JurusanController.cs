@@ -27,7 +27,8 @@ public class JurusanController : ControllerBase
             .Where(j => j.JurStatus == 1)
             .Select(j => new {
                 kode = j.JurKode,
-                nama = j.JurNama
+                nama = j.JurNama,
+                singkatan = j.JurSingkat
             })
             .ToList();
 

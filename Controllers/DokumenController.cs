@@ -27,8 +27,7 @@ public class DokumenController : ControllerBase
         if (file == null || file.Length == 0)
             return BadRequest(new { message = "File tidak boleh kosong" });
         
-        var hasQueue = _db.Dokumens.Any(d => d.MhsNrp == nrp && d.DokumenStatus == "dalam_antrian");
-        if (hasQueue)
+        if (_db.Dokumens.Any(d => d.MhsNrp == nrp && d.DokumenStatus == "dalam_antrian"))
             return BadRequest(new { message = "Masih ada dokumen dalam antrian" });
         
         try
@@ -56,8 +55,7 @@ public class DokumenController : ControllerBase
         
         dokumen.DokumenStatus = "dibatalkan";
         dokumen.DokumenUpdatedAt = DateTime.Now;
-        _db.SaveChanges();
-        
+        await _db.SaveChangesAsync();
         await _wsService.NotifyDokumenCancelled(nrp!, id);
         
         return Ok(new { message = "Dokumen berhasil dibatalkan" });
@@ -67,11 +65,7 @@ public class DokumenController : ControllerBase
     public IActionResult CanUpload()
     {
         var nrp = HttpContext.Items["Nrp"]?.ToString();
-        var hasQueue = _db.Dokumens.Any(d => d.MhsNrp == nrp && d.DokumenStatus == "dalam_antrian");
-        
-        return Ok(new {
-            can_upload = !hasQueue
-        });
+        return Ok(new { can_upload = !_db.Dokumens.Any(d => d.MhsNrp == nrp && d.DokumenStatus == "dalam_antrian") });
     }
 
     [HttpGet("stats")]

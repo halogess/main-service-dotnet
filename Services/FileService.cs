@@ -39,15 +39,8 @@ public class FileService : IFileService
     {
         var extension = Path.GetExtension(file.FileName).ToLower();
         
-        if (extension == ".pdf")
-        {
+        if (extension == ".pdf" || extension != ".docx")
             return;
-        }
-
-        if (extension != ".docx")
-        {
-            throw new InvalidOperationException("Hanya file .docx yang dapat divalidasi sumbernya");
-        }
 
         using var memoryStream = new MemoryStream();
         await file.CopyToAsync(memoryStream);
@@ -57,37 +50,22 @@ public class FileService : IFileService
         {
             using var wordDoc = WordprocessingDocument.Open(memoryStream, false);
             
-            var extendedProps = wordDoc.ExtendedFilePropertiesPart;
-            if (extendedProps == null)
-            {
-                throw new InvalidOperationException("File tidak memiliki extended properties. Kemungkinan bukan file Word asli");
-            }
+            var extendedProps = wordDoc.ExtendedFilePropertiesPart
+                ?? throw new InvalidOperationException("File tidak memiliki extended properties. Kemungkinan bukan file Word asli");
 
-            var props = extendedProps.Properties;
-            var application = props?.Application?.Text;
-            
+            var application = extendedProps.Properties?.Application?.Text;
             if (string.IsNullOrEmpty(application) || !application.Contains("Microsoft"))
-            {
                 throw new InvalidOperationException("File tidak dibuat dengan Microsoft Word. Pastikan file asli dibuat di Word, bukan hasil konversi dari PDF");
-            }
 
-            var docProps = wordDoc.MainDocumentPart?.Document;
-            if (docProps == null)
-            {
+            if (wordDoc.MainDocumentPart?.Document == null)
                 throw new InvalidOperationException("File tidak memiliki main document part");
-            }
 
             var stylesPart = wordDoc.MainDocumentPart?.StyleDefinitionsPart;
             if (stylesPart == null)
-            {
                 throw new InvalidOperationException("File tidak memiliki style definition. Pastikan file dibuat di Microsoft Word");
-            }
             
-            var stylesXml = stylesPart.Styles.OuterXml;
-            if (!stylesXml.Contains("styleId=\"Normal\""))
-            {
+            if (!stylesPart.Styles.OuterXml.Contains("styleId=\"Normal\""))
                 throw new InvalidOperationException("File tidak memiliki style standar Microsoft Word");
-            }
         }
         catch (InvalidOperationException)
         {
@@ -132,8 +110,6 @@ public class FileService : IFileService
     public void DeleteFile(string filename)
     {
         if (File.Exists(filename))
-        {
             File.Delete(filename);
-        }
     }
 }

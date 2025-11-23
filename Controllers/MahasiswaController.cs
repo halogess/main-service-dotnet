@@ -49,26 +49,18 @@ namespace ValidasiTugasAkhir.MainService.Controllers
         [HttpGet("status/{status}")]
         public async Task<IActionResult> GetMahasiswaByStatus(int status)
         {
-            var role = HttpContext.Items["Role"]?.ToString();
-            if (role != "admin")
+            if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
-            // Ambil mahasiswa dengan status tertentu
             var mahasiswaByStatus = await _sttsDb.Mahasiswas
                 .Where(m => m.MhsStatus == status)
                 .ToListAsync();
             
-            Console.WriteLine($"[DEBUG] Mahasiswa with status {status}: {mahasiswaByStatus.Count}, NRPs: {string.Join(", ", mahasiswaByStatus.Select(m => $"{m.MhsNrp}={m.MhsStatus}"))}");
-            
-            // Ambil proposal mereka
             var nrps = mahasiswaByStatus.Select(m => m.MhsNrp).ToList();
             var proposals = await _sttsDb.Proposals
                 .Where(p => nrps.Contains(p.MhsNrp) && p.ProposalPerpanjangan == 0 && p.ProposalJudulBaru != null)
                 .ToListAsync();
             
-            Console.WriteLine($"[DEBUG] Proposals found: {proposals.Count}");
-            
-            // Join di client-side
             var mahasiswaList = mahasiswaByStatus
                 .Where(m => proposals.Any(p => p.MhsNrp == m.MhsNrp))
                 .Select(m => new {
@@ -81,21 +73,14 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                 })
                 .Take(50)
                 .ToList();
-            
-            Console.WriteLine($"[DEBUG] Final result: {mahasiswaList.Count}, Statuses: {string.Join(", ", mahasiswaList.Select(m => m.status).Distinct())}");
 
-            return Ok(new {
-                status = status,
-                count = mahasiswaList.Count,
-                data = mahasiswaList
-            });
+            return Ok(new { status, count = mahasiswaList.Count, data = mahasiswaList });
         }
 
         [HttpGet("nonaktif/angkatan")]
         public IActionResult GetNonaktifAngkatan()
         {
-            var role = HttpContext.Items["Role"]?.ToString();
-            if (role != "admin")
+            if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
             var nrpsWithBuku = _db.Bukus.Select(b => b.MhsNrp).Distinct().ToList();
@@ -112,63 +97,44 @@ namespace ValidasiTugasAkhir.MainService.Controllers
         [HttpGet("nonaktif/status")]
         public IActionResult GetNonaktifStatus()
         {
-            var role = HttpContext.Items["Role"]?.ToString();
-            if (role != "admin")
+            if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
             var nrpsWithBuku = _db.Bukus.Select(b => b.MhsNrp).Distinct().ToList();
-            Console.WriteLine($"[STATUS] Total NRPs with buku: {nrpsWithBuku.Count}");
-            
             var allStatus = _sttsDb.Mahasiswas
                 .Where(m => nrpsWithBuku.Contains(m.MhsNrp))
-                .Select(m => new { m.MhsNrp, m.MhsStatus, m.MhsLulusTahun })
+                .Select(m => new { m.MhsStatus, m.MhsLulusTahun })
                 .ToList();
-            
-            Console.WriteLine($"[STATUS] All mahasiswa status: {string.Join(", ", allStatus.Select(m => $"{m.MhsNrp}={m.MhsStatus}"))}");
-            
-            var nullCount = allStatus.Count(m => !m.MhsStatus.HasValue);
-            var status1Count = allStatus.Count(m => m.MhsStatus == 1);
-            var otherCount = allStatus.Count(m => m.MhsStatus.HasValue && m.MhsStatus.Value != 1);
-            
-            Console.WriteLine($"[STATUS] Null: {nullCount}, Status 1: {status1Count}, Other: {otherCount}");
             
             var distinctStatus = allStatus
                 .Where(m => m.MhsStatus != 1)
-                .Select(m => {
-                    // Jika status null tapi ada tahun lulus, anggap alumni (9)
-                    if (!m.MhsStatus.HasValue && !string.IsNullOrEmpty(m.MhsLulusTahun))
-                        return (byte)9;
-                    return m.MhsStatus ?? 0; // null tanpa lulus = tidak aktif
-                })
+                .Select(m => !m.MhsStatus.HasValue && !string.IsNullOrEmpty(m.MhsLulusTahun) ? (int)9 : (int)(m.MhsStatus ?? 0))
                 .Distinct()
-                .ToList();
-            
-            Console.WriteLine($"[STATUS] Distinct non-active status: {string.Join(", ", distinctStatus)}");
-            
-            var statusList = distinctStatus
                 .OrderBy(s => s)
                 .Select(status => new {
                     value = status,
-                    label = status switch {
-                        0 => "tidak-aktif",
-                        2 => "mengundurkan-diri",
-                        3 => "DO",
-                        4 => "cuti",
-                        6 => "transfer",
-                        7 => "tidak-perwalian",
-                        9 => "alumni",
-                        _ => "unknown"
-                    }
+                    label = GetStatusLabel(status)
                 }).ToList();
 
-            return Ok(statusList);
+            return Ok(distinctStatus);
         }
+
+        private static string GetStatusLabel(int status) => status switch
+        {
+            0 => "tidak-aktif",
+            2 => "mengundurkan-diri",
+            3 => "DO",
+            4 => "cuti",
+            6 => "transfer",
+            7 => "tidak-perwalian",
+            9 => "alumni",
+            _ => "unknown"
+        };
 
         [HttpGet("nonaktif/jurusan")]
         public IActionResult GetNonaktifJurusan()
         {
-            var role = HttpContext.Items["Role"]?.ToString();
-            if (role != "admin")
+            if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
             var nrpsWithBuku = _db.Bukus.Select(b => b.MhsNrp).Distinct().ToList();
@@ -194,8 +160,7 @@ namespace ValidasiTugasAkhir.MainService.Controllers
         [HttpDelete("nonaktif/buku")]
         public async Task<IActionResult> HapusBukuNonaktif([FromBody] HapusBukuRequest request)
         {
-            var role = HttpContext.Items["Role"]?.ToString();
-            if (role != "admin")
+            if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
             var deleted = 0;
@@ -213,14 +178,11 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                     _db.Bukus.RemoveRange(bukus);
                     await _db.SaveChangesAsync();
 
-                    // Hapus direktori per buku
                     foreach (var bukuId in mhs.buku_ids)
                     {
                         var bukuDir = Path.Combine(storagePath, "buku", mhs.nrp, bukuId.ToString());
                         if (Directory.Exists(bukuDir))
-                        {
                             Directory.Delete(bukuDir, true);
-                        }
                     }
 
                     deleted += bukus.Count;
@@ -231,29 +193,21 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                 }
             }
 
-            return Ok(new {
-                message = "Hapus buku selesai",
-                deleted = deleted,
-                errors = errors
-            });
+            return Ok(new { message = "Hapus buku selesai", deleted, errors });
         }
 
         [HttpGet("nonaktif/buku")]
         public IActionResult GetNonaktifBuku([FromQuery] int? status = null, [FromQuery] string? angkatan = null, [FromQuery] string? jurusan = null, [FromQuery] string? search = null, [FromQuery] int limit = 10, [FromQuery] int offset = 0)
         {
-            var role = HttpContext.Items["Role"]?.ToString();
-            if (role != "admin")
+            if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
-            // Ambil buku yang bukan dibatalkan
             var bukuList = _db.Bukus.Where(b => b.BukuStatus != "dibatalkan").ToList();
             var allNrps = bukuList.Select(b => b.MhsNrp).Distinct().ToList();
 
-            // Filter mahasiswa non-aktif
             var mahasiswaQuery = _sttsDb.Mahasiswas
                 .Where(m => allNrps.Contains(m.MhsNrp) && (!m.MhsStatus.HasValue || m.MhsStatus.Value != 1));
 
-            // Apply filters
             if (status.HasValue)
                 mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsStatus == status.Value);
             
@@ -269,7 +223,6 @@ namespace ValidasiTugasAkhir.MainService.Controllers
             var mahasiswaNonAktif = mahasiswaQuery.Select(m => m.MhsNrp).ToList();
             var filteredBukus = bukuList.Where(b => mahasiswaNonAktif.Contains(b.MhsNrp)).ToList();
 
-            // Group by NRP
             var groupedByNrp = filteredBukus
                 .GroupBy(b => b.MhsNrp)
                 .OrderByDescending(g => g.Max(b => b.BukuCreatedAt))
@@ -296,8 +249,8 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                 }).ToDictionary(x => x.MhsNrp);
 
             var result = groupedByNrp.Select(g => {
-                var mhs = mahasiswaJurusan.ContainsKey(g.Key) ? mahasiswaJurusan[g.Key] : null;
-                var bukuList = g.OrderByDescending(b => b.BukuCreatedAt).Select(b => new {
+                var mhs = mahasiswaJurusan.GetValueOrDefault(g.Key);
+                var bukuListData = g.OrderByDescending(b => b.BukuCreatedAt).Select(b => new {
                     id = b.BukuId,
                     judul = b.BukuJudul,
                     tanggal_upload = b.BukuCreatedAt,
@@ -307,46 +260,40 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                     jumlah_kesalahan = b.BukuJumlahKesalahan ?? 0
                 }).ToList();
 
-                var statusMhs = "tidak-aktif";
-                if (mhs != null)
-                {
-                    if (mhs.MhsStatus == 9 || (!string.IsNullOrEmpty(mhs.MhsLulusTahun)))
-                        statusMhs = "alumni";
-                    else if (mhs.MhsStatus == 0)
-                        statusMhs = "tidak-aktif";
-                    else if (mhs.MhsStatus == 2)
-                        statusMhs = "mengundurkan-diri";
-                    else if (mhs.MhsStatus == 3)
-                        statusMhs = "DO";
-                    else if (mhs.MhsStatus == 4)
-                        statusMhs = "cuti";
-                    else if (mhs.MhsStatus == 6)
-                        statusMhs = "transfer";
-                    else if (mhs.MhsStatus == 7)
-                        statusMhs = "tidak-perwalian";
-                }
-
+                var mhsData = mhs != null ? mhs : null;
                 return new {
                     nrp = g.Key,
-                    nama = mhs?.MhsNama ?? "Unknown",
-                    angkatan = mhs?.MhsAngkatan,
-                    status_mahasiswa = statusMhs,
+                    nama = mhsData?.MhsNama ?? "Unknown",
+                    angkatan = mhsData?.MhsAngkatan,
+                    status_mahasiswa = GetMahasiswaStatusLabel(mhsData?.MhsStatus, mhsData?.MhsLulusTahun),
                     jurusan = new {
-                        kode = mhs?.JurKode,
-                        nama = mhs?.JurNama ?? "Unknown",
-                        singkatan = mhs?.JurSingkat ?? "Unknown"
+                        kode = mhsData?.JurKode,
+                        nama = mhsData?.JurNama ?? "Unknown",
+                        singkatan = mhsData?.JurSingkat ?? "Unknown"
                     },
-                    total_buku = bukuList.Count,
-                    riwayat_validasi = bukuList
+                    total_buku = bukuListData.Count,
+                    riwayat_validasi = bukuListData
                 };
             }).ToList();
 
-            return Ok(new {
-                data = result,
-                total = totalCount,
-                limit = limit,
-                offset = offset
-            });
+            return Ok(new { data = result, total = totalCount, limit, offset });
+        }
+
+        private static string GetMahasiswaStatusLabel(int? status, string? lulusTahun)
+        {
+            if (status == 9 || !string.IsNullOrEmpty(lulusTahun))
+                return "alumni";
+            
+            return status switch
+            {
+                0 => "tidak-aktif",
+                2 => "mengundurkan-diri",
+                3 => "DO",
+                4 => "cuti",
+                6 => "transfer",
+                7 => "tidak-perwalian",
+                _ => "tidak-aktif"
+            };
         }
     }
 }

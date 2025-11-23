@@ -35,10 +35,6 @@ public class PdfConversionService : IPdfConversionService
 
     public async Task<byte[]> ConvertDocxToPdfWithCredential(string docxFilePath, string clientId, string clientSecret, int? adobe_credentials_id = null, uint? antrian_id = null)
     {
-        _logger.LogCritical("[TRACE-START] ConvertDocxToPdfWithCredential called with antrian_id: {AntrianId} (HasValue: {HasValue}, Type: {Type})", 
-            antrian_id, antrian_id.HasValue, antrian_id?.GetType().Name ?? "null");
-        
-        Console.WriteLine($"[PDF] Memulai konversi DOCX ke PDF: {docxFilePath}, Antrian ID: {antrian_id}");
         _logger.LogInformation("Memulai konversi DOCX ke PDF: {FilePath}, Antrian ID: {AntrianId}", docxFilePath, antrian_id);
         
         var tokenUrl = _configuration["Adobe:TokenUrl"];
@@ -52,49 +48,32 @@ public class PdfConversionService : IPdfConversionService
         var cacheKey = $"{clientId}:{clientSecret}";
         if (!_tokenCache.ContainsKey(cacheKey) || _tokenCache[cacheKey].IsExpired)
         {
-            Console.WriteLine("[PDF] Token expired atau tidak ada, mendapatkan token baru dari Adobe");
             _logger.LogInformation("Getting new access token from Adobe");
             var token = await GetAccessTokenWithExpiry(clientId, clientSecret, tokenUrl, antrian_id);
             _tokenCache[cacheKey] = token;
         }
         else
         {
-            Console.WriteLine("[PDF] Menggunakan cached token");
             _logger.LogInformation("Using cached access token");
         }
 
         var accessToken = _tokenCache[cacheKey].AccessToken;
         
-        Console.WriteLine("[PDF] Membuat presigned URL untuk upload");
-        _logger.LogInformation("Membuat presigned URL untuk upload");
         var (assetId, uploadUri) = await CreateUploadUri(accessToken, apiBaseUrl, adobe_credentials_id, antrian_id);
-        
-        Console.WriteLine($"[PDF] Upload dokumen ke Adobe: AssetID={assetId}");
         _logger.LogInformation("Upload dokumen ke Adobe: AssetID={AssetId}", assetId);
         await UploadDocument(uploadUri, docxFilePath, adobe_credentials_id, antrian_id);
         
-        Console.WriteLine("[PDF] Membuat job konversi PDF");
-        _logger.LogInformation("Membuat job konversi PDF");
         var jobId = await CreateConversionJob(accessToken, assetId, apiBaseUrl, adobe_credentials_id, antrian_id);
-        
-        Console.WriteLine($"[PDF] Menunggu job selesai: {jobId}");
         _logger.LogInformation("Menunggu job selesai: {JobId}", jobId);
         var downloadUri = await PollJobStatus(accessToken, jobId, adobe_credentials_id, antrian_id);
         
-        Console.WriteLine("[PDF] Download hasil PDF");
-        _logger.LogInformation("Download hasil PDF");
         var pdfBytes = await DownloadPdf(downloadUri, accessToken, adobe_credentials_id, antrian_id);
-        
-        Console.WriteLine($"[PDF] Konversi selesai: {pdfBytes.Length} bytes");
         _logger.LogInformation("Konversi selesai: {Size} bytes", pdfBytes.Length);
         return pdfBytes;
     }
 
     private async Task<AdobeToken> GetAccessTokenWithExpiry(string clientId, string clientSecret, string tokenUrl, uint? antrian_id = null)
     {
-        Console.WriteLine($"[API] POST {tokenUrl}");
-        Console.WriteLine($"[API] Payload: client_id={clientId}, client_secret={clientSecret}");
-        
         var startTime = DateTime.Now;
         var request = new HttpRequestMessage(HttpMethod.Post, tokenUrl);
         request.Content = new FormUrlEncodedContent(new[]
@@ -106,15 +85,11 @@ public class PdfConversionService : IPdfConversionService
         var response = await _httpClient.SendAsync(request);
         var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync();
-        Console.WriteLine($"[API] Response Status: {response.StatusCode}");
-        Console.WriteLine($"[API] Response Body: {responseBody}");
         
         await LogApiCall(null, tokenUrl, "POST", (int)response.StatusCode, responseTime, response.IsSuccessStatusCode ? null : responseBody, antrian_id);
         
         response.EnsureSuccessStatusCode();
         var result = await response.Content.ReadFromJsonAsync<TokenResponse>() ?? throw new InvalidOperationException("Failed to get access token");
-        Console.WriteLine($"[API] Access Token: {result.access_token}");
-        Console.WriteLine($"[API] Expires in: {result.expires_in} seconds");
         
         return new AdobeToken
         {
@@ -131,8 +106,6 @@ public class PdfConversionService : IPdfConversionService
 
     private async Task<(string assetId, string uploadUri)> CreateUploadUri(string accessToken, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null)
     {
-        _logger.LogCritical("[TRACE-METHOD] CreateUploadUri called with antrian_id: {AntrianId}", antrian_id);
-        
         var clientId = _configuration["Adobe:ClientId"];
         var endpoint = $"{apiBaseUrl}/assets";
         var startTime = DateTime.Now;
@@ -146,7 +119,6 @@ public class PdfConversionService : IPdfConversionService
         var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync();
         
-        _logger.LogCritical("[TRACE-CALL] About to call LogApiCall for CreateUploadUri with antrian_id: {AntrianId}", antrian_id);
         await LogApiCall(adobe_credentials_id, endpoint, "POST", (int)response.StatusCode, responseTime, response.IsSuccessStatusCode ? null : responseBody, antrian_id);
         
         response.EnsureSuccessStatusCode();
@@ -162,8 +134,6 @@ public class PdfConversionService : IPdfConversionService
 
     private async Task UploadDocument(string uploadUri, string filePath, int? adobe_credentials_id, uint? antrian_id = null)
     {
-        _logger.LogCritical("[TRACE-METHOD] UploadDocument called with antrian_id: {AntrianId}", antrian_id);
-        
         var fileBytes = await File.ReadAllBytesAsync(filePath);
         var startTime = DateTime.Now;
         
@@ -174,7 +144,6 @@ public class PdfConversionService : IPdfConversionService
         var response = await _httpClient.SendAsync(request);
         var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         
-        _logger.LogCritical("[TRACE-CALL] About to call LogApiCall for UploadDocument with antrian_id: {AntrianId}", antrian_id);
         await LogApiCall(adobe_credentials_id, "S3 Upload", "PUT", (int)response.StatusCode, responseTime, null, antrian_id);
         
         response.EnsureSuccessStatusCode();
@@ -254,41 +223,27 @@ public class PdfConversionService : IPdfConversionService
     {
         try
         {
-            _logger.LogCritical("[TRACE-LOGAPI] LogApiCall ENTRY - antrian_id: {AntrianId} (HasValue: {HasValue}), endpoint: {Endpoint}", 
-                antrian_id, antrian_id.HasValue, endpoint);
-            
             using var scope = _serviceProvider.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
-            
-            var activity = GetActivityFromEndpoint(endpoint, method);
             
             var log = new AdobeApiLog
             {
                 AdobeCredentialsId = adobe_credentials_id,
                 AntrianId = antrian_id,
-                Activity = activity,
-                Endpoint = endpoint.Length > 255 ? endpoint.Substring(0, 255) : endpoint,
+                Activity = GetActivityFromEndpoint(endpoint, method),
+                Endpoint = endpoint.Length > 255 ? endpoint[..255] : endpoint,
                 Method = method,
                 StatusCode = status_code,
                 ResponseTimeMs = response_time_ms,
                 ErrorMessage = error_message
             };
             
-            _logger.LogCritical("[TRACE-LOGAPI] Object created - AntrianId: {AntrianId} (HasValue: {HasValue})", 
-                log.AntrianId, log.AntrianId.HasValue);
-            
             db.AdobeApiLogs.Add(log);
-            var result = await db.SaveChangesAsync();
-            
-            _logger.LogCritical("[TRACE-LOGAPI] SaveChanges completed - affected rows: {Rows}", result);
-            
-            // Verify immediately
-            var savedLog = await db.AdobeApiLogs.OrderByDescending(x => x.AdobeApiLogsId).FirstOrDefaultAsync();
-            _logger.LogCritical("[TRACE-LOGAPI] VERIFICATION - Last saved AntrianId: {AntrianId}", savedLog?.AntrianId);
+            await db.SaveChangesAsync();
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "[TRACE-LOGAPI] FAILED - antrian_id was: {AntrianId}", antrian_id);
+            _logger.LogError(ex, "Failed to log API call for antrian_id: {AntrianId}", antrian_id);
         }
     }
     

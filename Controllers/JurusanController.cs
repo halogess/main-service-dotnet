@@ -16,12 +16,8 @@ public class JurusanController : ControllerBase
     [HttpGet]
     public IActionResult GetJurusan()
     {
-        var role = HttpContext.Items["Role"]?.ToString();
-        
-        if (role != "admin")
-        {
+        if (HttpContext.Items["Role"]?.ToString() != "admin")
             return Forbid();
-        }
 
         var jurusans = _sttsDb.Jurusans
             .Where(j => j.JurStatus == 1)

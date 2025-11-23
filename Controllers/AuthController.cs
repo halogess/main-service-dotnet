@@ -19,19 +19,12 @@ public class AuthController : ControllerBase
     {
         try
         {
-            Console.WriteLine("[HOT RELOAD TEST] Login endpoint hit - Hot reload is working! 🔥");
-            
             if (string.IsNullOrEmpty(request.username) || string.IsNullOrEmpty(request.password))
-            {
                 return BadRequest(new { message = "Username dan password harus diisi" });
-            }
 
             var result = await _authService.Login(request.username, request.password);
-            
             if (result == null)
-            {
                 return Unauthorized(new { message = "Username atau password salah" });
-            }
 
             return Ok(new 
             {
@@ -51,18 +44,12 @@ public class AuthController : ControllerBase
         try
         {
             var refreshToken = Request.Headers["Authorization"].ToString().Replace("Bearer ", "");
-            
             if (string.IsNullOrEmpty(refreshToken))
-            {
                 return BadRequest(new { message = "Refresh token harus disertakan di header Authorization" });
-            }
 
             var result = await _authService.RefreshToken(refreshToken);
-            
             if (result == null)
-            {
                 return Unauthorized(new { message = "Refresh token tidak valid atau sudah expired" });
-            }
 
             return Ok(new 
             {

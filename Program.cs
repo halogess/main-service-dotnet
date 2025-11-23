@@ -4,8 +4,6 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-
-
 // Add services to the container.
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
@@ -22,18 +20,14 @@ builder.Services.AddCors(options =>
     });
 });
 
-// Konfigurasi DbContext STTS 
-var sttsConnectionString = builder.Configuration.GetConnectionString("SttsDbConnection");
-var sttsServerVersion = new MySqlServerVersion(new Version(8, 0, 34));
+// Konfigurasi DbContext
+var serverVersion = new MySqlServerVersion(new Version(8, 0, 34));
 builder.Services.AddDbContext<SttsDbContext>(options =>
-    options.UseMySql(sttsConnectionString, sttsServerVersion, 
+    options.UseMySql(builder.Configuration.GetConnectionString("SttsDbConnection"), serverVersion, 
         mysqlOptions => mysqlOptions.EnableRetryOnFailure()));
 
-// Konfigurasi DbContext KorektorBuku
-var korektorBukuConnectionString = builder.Configuration.GetConnectionString("KorektorBukuDbConnection");
-var serverVersion = new MySqlServerVersion(new Version(8, 0, 34)); 
 builder.Services.AddDbContext<KorektorBukuDbContext>(options =>
-    options.UseMySql(korektorBukuConnectionString, serverVersion,
+    options.UseMySql(builder.Configuration.GetConnectionString("KorektorBukuDbConnection"), serverVersion,
         mysqlOptions => mysqlOptions.EnableRetryOnFailure()));
 
 // Register HttpClient
@@ -47,11 +41,9 @@ builder.Services.AddScoped<IDokumenService, DokumenService>();
 builder.Services.AddScoped<IBukuService, BukuService>();
 builder.Services.AddSingleton<IWebSocketService, WebSocketService>();
 
-// Register Background Service
-builder.Services.AddHostedService<AdobeQuotaResetService>();
+// Register Background Services
 builder.Services.AddScoped<IPdfConversionService, PdfConversionService>();
-
-// Register background service
+builder.Services.AddHostedService<AdobeQuotaResetService>();
 builder.Services.AddHostedService<PdfQueueBackgroundService>();
 
 var app = builder.Build();

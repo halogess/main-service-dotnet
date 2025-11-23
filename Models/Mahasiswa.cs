@@ -6,7 +6,7 @@ public class Mahasiswa
     public string? MhsNama { get; set; }
     public string? MhsEmail { get; set; }
     public string? MhsHp { get; set; }
-    public byte? MhsStatus { get; set; }   // tinyint(1)
+    public int? MhsStatus { get; set; }
     public string? JurKode { get; set; }
     public decimal? MhsIpk { get; set; }
     public string? MhsLulusTahun { get; set; }

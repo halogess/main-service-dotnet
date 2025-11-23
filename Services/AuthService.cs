@@ -88,7 +88,7 @@ public class AuthService : IAuthService
             var baseUrl = _configuration["Auth:ExternalApiUrl"];
             var token = _configuration["Auth:ExternalApiToken"];
             var appName = _configuration["Auth:AppName"];
-            var url = $"{baseUrl}/{username}/login/{password}&appname={appName}";
+            var url = $"{baseUrl}/{username}/login/{password}?appname={appName}";
             
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Add("token", token);

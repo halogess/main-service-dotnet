@@ -36,6 +36,7 @@ public class SttsDbContext : DbContext
 
                 entity.Property(e => e.MhsStatus)
                       .HasColumnName("mhs_status")
+                      .HasColumnType("int")
                       .IsRequired(false);
 
                 entity.Property(e => e.JurKode)

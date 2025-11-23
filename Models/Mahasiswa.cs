@@ -10,4 +10,5 @@ public class Mahasiswa
     public string? JurKode { get; set; }
     public decimal? MhsIpk { get; set; }
     public string? MhsLulusTahun { get; set; }
+    public int? MhsAngkatan { get; set; }
 }

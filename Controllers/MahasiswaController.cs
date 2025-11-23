@@ -46,6 +46,82 @@ namespace ValidasiTugasAkhir.MainService.Controllers
             }
         }
 
+        [HttpGet("nonactive/angkatan")]
+        public IActionResult GetNonActiveAngkatan()
+        {
+            var role = HttpContext.Items["Role"]?.ToString();
+            if (role != "admin")
+                return Forbid();
+
+            var nrpsWithBuku = _db.Bukus.Select(b => b.MhsNrp).Distinct().ToList();
+            var angkatanList = _sttsDb.Mahasiswas
+                .Where(m => nrpsWithBuku.Contains(m.MhsNrp) && m.MhsStatus != 1)
+                .Select(m => m.MhsAngkatan)
+                .Distinct()
+                .OrderBy(a => a)
+                .ToList();
+
+            return Ok(angkatanList);
+        }
+
+        [HttpGet("nonactive/status")]
+        public IActionResult GetNonActiveStatus()
+        {
+            var role = HttpContext.Items["Role"]?.ToString();
+            if (role != "admin")
+                return Forbid();
+
+            var nrpsWithBuku = _db.Bukus.Select(b => b.MhsNrp).Distinct().ToList();
+            
+            var statusList = _sttsDb.Mahasiswas
+                .Where(m => nrpsWithBuku.Contains(m.MhsNrp) && m.MhsStatus.HasValue && m.MhsStatus.Value != 1)
+                .Select(m => m.MhsStatus.Value)
+                .Distinct()
+                .AsEnumerable()
+                .Select(status => new {
+                    value = status,
+                    label = status switch {
+                        0 => "tidak-aktif",
+                        2 => "mengundurkan-diri",
+                        3 => "DO",
+                        4 => "cuti",
+                        6 => "transfer",
+                        7 => "tidak-perwalian",
+                        9 => "alumni",
+                        _ => "unknown"
+                    }
+                })
+                .ToList();
+
+            return Ok(statusList);
+        }
+
+        [HttpGet("nonactive/jurusan")]
+        public IActionResult GetNonActiveJurusan()
+        {
+            var role = HttpContext.Items["Role"]?.ToString();
+            if (role != "admin")
+                return Forbid();
+
+            var nrpsWithBuku = _db.Bukus.Select(b => b.MhsNrp).Distinct().ToList();
+            var jurKodes = _sttsDb.Mahasiswas
+                .Where(m => nrpsWithBuku.Contains(m.MhsNrp) && m.MhsStatus != 1 && m.JurKode != null)
+                .Select(m => m.JurKode)
+                .Distinct()
+                .ToList();
+
+            var jurusanList = _sttsDb.Jurusans
+                .Where(j => jurKodes.Contains(j.JurKode))
+                .Select(j => new {
+                    kode = j.JurKode,
+                    nama = j.JurNama,
+                    singkatan = j.JurSingkat
+                })
+                .ToList();
+
+            return Ok(jurusanList);
+        }
+
         [HttpGet("buku")]
         public IActionResult GetBuku([FromQuery] string? status = null, [FromQuery] string sort = "desc", [FromQuery] int limit = 10, [FromQuery] int offset = 0, [FromQuery] string? jurusan = null, [FromQuery] string? search = null)
         {
@@ -135,7 +211,7 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                 if (mhs != null)
                 {
                     if (mhs.MhsStatus == 9 || (!string.IsNullOrEmpty(mhs.MhsLulusTahun)))
-                        statusMhs = "yudisium";
+                        statusMhs = "alumni";
                     else if (mhs.MhsStatus == 0)
                         statusMhs = "tidak-aktif";
                     else if (mhs.MhsStatus == 2)

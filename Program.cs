@@ -56,6 +56,9 @@ builder.Services.AddHostedService<PdfQueueBackgroundService>();
 
 var app = builder.Build();
 
+// Ensure storage directory exists
+var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+Directory.CreateDirectory(storagePath);
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

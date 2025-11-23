@@ -49,6 +49,9 @@ public class SttsDbContext : DbContext
                 entity.Property(e => e.MhsLulusTahun)
                       .HasColumnName("mhs_lulus_tahun")
                       .HasMaxLength(4);
+
+                entity.Property(e => e.MhsAngkatan)
+                      .HasColumnName("mhs_angkatan");
             
         });
 

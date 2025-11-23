@@ -231,7 +231,7 @@ public class BukuController : ControllerBase
         // Jika admin, join dengan tabel mahasiswa untuk mendapatkan nama dan jurusan
         if (role == "admin")
         {
-            var bukuList = _db.Bukus.AsQueryable();
+            var bukuList = _db.Bukus.Where(b => b.BukuStatus != "dibatalkan").AsQueryable();
             
             if (!string.IsNullOrEmpty(nrp))
             {

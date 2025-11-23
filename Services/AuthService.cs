@@ -120,14 +120,14 @@ public class AuthService : IAuthService
             new Claim("username", username)
         };
 
-        var accessTokenExpiry = DateTime.UtcNow.AddMinutes(int.Parse(_configuration["Auth:AccessTokenExpiryMinutes"]!));
+        var accessTokenExpiry = DateTime.Now.AddMinutes(int.Parse(_configuration["Auth:AccessTokenExpiryMinutes"]!));
         var accessToken = new JwtSecurityToken(
             claims: accessTokenClaims,
             expires: accessTokenExpiry,
             signingCredentials: credentials
         );
 
-        var refreshTokenExpiry = DateTime.UtcNow.AddDays(int.Parse(_configuration["Auth:RefreshTokenExpiryDays"]!));
+        var refreshTokenExpiry = DateTime.Now.AddDays(int.Parse(_configuration["Auth:RefreshTokenExpiryDays"]!));
         var refreshToken = new JwtSecurityToken(
             claims: refreshTokenClaims,
             expires: refreshTokenExpiry,

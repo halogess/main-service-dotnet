@@ -37,8 +37,8 @@ public class DokumenService : IDokumenService
             DokumenFilename = file.FileName,
             DokumenFilesizeBytes = file.Length,
             DokumenStatus = "dalam_antrian",
-            DokumenCreatedAt = DateTime.UtcNow,
-            DokumenUpdatedAt = DateTime.UtcNow
+            DokumenCreatedAt = DateTime.Now,
+            DokumenUpdatedAt = DateTime.Now
         };
         
         _db.Dokumens.Add(dokumen);
@@ -53,8 +53,8 @@ public class DokumenService : IDokumenService
             DokumenId = (uint)dokumen.DokumenId,
             AntrianWorker = "convert_pdf",
             AntrianConvertStatus = "in_queue",
-            AntrianCreatedAt = DateTime.UtcNow,
-            AntrianUpdatedAt = DateTime.UtcNow
+            AntrianCreatedAt = DateTime.Now,
+            AntrianUpdatedAt = DateTime.Now
         };
         _db.Antrians.Add(antrian);
         await _db.SaveChangesAsync();
@@ -79,7 +79,7 @@ public class DokumenService : IDokumenService
         }
 
         dokumen.DokumenStatus = status;
-        dokumen.DokumenUpdatedAt = DateTime.UtcNow;
+        dokumen.DokumenUpdatedAt = DateTime.Now;
         
         await _db.SaveChangesAsync();
         await _wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, dokumenId, status);

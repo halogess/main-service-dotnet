@@ -95,7 +95,7 @@ public class PdfConversionService : IPdfConversionService
         Console.WriteLine($"[API] POST {tokenUrl}");
         Console.WriteLine($"[API] Payload: client_id={clientId}, client_secret={clientSecret}");
         
-        var startTime = DateTime.UtcNow;
+        var startTime = DateTime.Now;
         var request = new HttpRequestMessage(HttpMethod.Post, tokenUrl);
         request.Content = new FormUrlEncodedContent(new[]
         {
@@ -104,7 +104,7 @@ public class PdfConversionService : IPdfConversionService
         });
 
         var response = await _httpClient.SendAsync(request);
-        var responseTime = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
+        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync();
         Console.WriteLine($"[API] Response Status: {response.StatusCode}");
         Console.WriteLine($"[API] Response Body: {responseBody}");
@@ -119,7 +119,7 @@ public class PdfConversionService : IPdfConversionService
         return new AdobeToken
         {
             AccessToken = result.access_token,
-            ExpiresAt = DateTime.UtcNow.AddSeconds(result.expires_in - 300)
+            ExpiresAt = DateTime.Now.AddSeconds(result.expires_in - 300)
         };
     }
 
@@ -135,7 +135,7 @@ public class PdfConversionService : IPdfConversionService
         
         var clientId = _configuration["Adobe:ClientId"];
         var endpoint = $"{apiBaseUrl}/assets";
-        var startTime = DateTime.UtcNow;
+        var startTime = DateTime.Now;
         
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -143,7 +143,7 @@ public class PdfConversionService : IPdfConversionService
         request.Content = JsonContent.Create(new { mediaType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 
         var response = await _httpClient.SendAsync(request);
-        var responseTime = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
+        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync();
         
         _logger.LogCritical("[TRACE-CALL] About to call LogApiCall for CreateUploadUri with antrian_id: {AntrianId}", antrian_id);
@@ -165,14 +165,14 @@ public class PdfConversionService : IPdfConversionService
         _logger.LogCritical("[TRACE-METHOD] UploadDocument called with antrian_id: {AntrianId}", antrian_id);
         
         var fileBytes = await File.ReadAllBytesAsync(filePath);
-        var startTime = DateTime.UtcNow;
+        var startTime = DateTime.Now;
         
         var request = new HttpRequestMessage(HttpMethod.Put, uploadUri);
         request.Content = new ByteArrayContent(fileBytes);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
         var response = await _httpClient.SendAsync(request);
-        var responseTime = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
+        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         
         _logger.LogCritical("[TRACE-CALL] About to call LogApiCall for UploadDocument with antrian_id: {AntrianId}", antrian_id);
         await LogApiCall(adobe_credentials_id, "S3 Upload", "PUT", (int)response.StatusCode, responseTime, null, antrian_id);
@@ -184,7 +184,7 @@ public class PdfConversionService : IPdfConversionService
     {
         var clientId = _configuration["Adobe:ClientId"];
         var endpoint = $"{apiBaseUrl}/operation/createpdf";
-        var startTime = DateTime.UtcNow;
+        var startTime = DateTime.Now;
         
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -192,7 +192,7 @@ public class PdfConversionService : IPdfConversionService
         request.Content = JsonContent.Create(new { assetID = assetId });
 
         var response = await _httpClient.SendAsync(request);
-        var responseTime = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
+        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync();
         
         await LogApiCall(adobe_credentials_id, endpoint, "POST", (int)response.StatusCode, responseTime, response.IsSuccessStatusCode ? null : responseBody, antrian_id);
@@ -207,14 +207,14 @@ public class PdfConversionService : IPdfConversionService
         while (true)
         {
             var clientId = _configuration["Adobe:ClientId"];
-            var startTime = DateTime.UtcNow;
+            var startTime = DateTime.Now;
             
             var request = new HttpRequestMessage(HttpMethod.Get, jobUri);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             request.Headers.Add("x-api-key", clientId);
 
             var response = await _httpClient.SendAsync(request);
-            var responseTime = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
+            var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
             var responseBody = await response.Content.ReadAsStringAsync();
             
             await LogApiCall(adobe_credentials_id, jobUri, "GET", (int)response.StatusCode, responseTime, response.IsSuccessStatusCode ? null : responseBody, antrian_id);
@@ -237,11 +237,11 @@ public class PdfConversionService : IPdfConversionService
 
     private async Task<byte[]> DownloadPdf(string downloadUri, string accessToken, int? adobe_credentials_id, uint? antrian_id = null)
     {
-        var startTime = DateTime.UtcNow;
+        var startTime = DateTime.Now;
         var request = new HttpRequestMessage(HttpMethod.Get, downloadUri);
 
         var response = await _httpClient.SendAsync(request);
-        var responseTime = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
+        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
         
         await LogApiCall(adobe_credentials_id, "S3 Download", "GET", (int)response.StatusCode, responseTime, null, antrian_id);
         

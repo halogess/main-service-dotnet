@@ -11,12 +11,14 @@ public class BukuController : ControllerBase
     private readonly KorektorBukuDbContext _db;
     private readonly SttsDbContext _sttsDb;
     private readonly IBukuService _bukuService;
+    private readonly IWebSocketService _wsService;
 
-    public BukuController(KorektorBukuDbContext db, SttsDbContext sttsDb, IBukuService bukuService)
+    public BukuController(KorektorBukuDbContext db, SttsDbContext sttsDb, IBukuService bukuService, IWebSocketService wsService)
     {
         _db = db;
         _sttsDb = sttsDb;
         _bukuService = bukuService;
+        _wsService = wsService;
     }
 
     [HttpPost]
@@ -64,8 +66,80 @@ public class BukuController : ControllerBase
         return Ok(new { can_upload = !hasQueue });
     }
 
+    [HttpGet("judul")]
+    public IActionResult GetJudul()
+    {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        
+        var judul = _sttsDb.Proposals
+            .Where(p => p.MhsNrp == nrp && p.ProposalPerpanjangan == 0)
+            .OrderByDescending(p => p.ProposalTglDoc)
+            .Select(p => p.ProposalJudulBaru)
+            .FirstOrDefault();
+        
+        return Ok(new { judul = judul });
+    }
+
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> HapusBuku(int id)
+    {
+        var role = HttpContext.Items["Role"]?.ToString();
+        
+        if (role != "admin")
+            return Forbid();
+        
+        var buku = await _db.Bukus.FindAsync(id);
+        
+        if (buku == null)
+            return NotFound(new { message = "Buku tidak ditemukan" });
+        
+        // Cek apakah mahasiswa bukan aktif (status != 1)
+        var mahasiswa = await _sttsDb.Mahasiswas.FirstOrDefaultAsync(m => m.MhsNrp == buku.MhsNrp);
+        
+        if (mahasiswa == null)
+            return NotFound(new { message = "Mahasiswa tidak ditemukan" });
+        
+        if (mahasiswa.MhsStatus == 1)
+            return BadRequest(new { message = "Hanya buku mahasiswa yang bukan aktif yang bisa dihapus" });
+        
+        // Hapus bab-bab terkait
+        var babs = await _db.Babs.Where(b => b.BukuId == (uint)buku.BukuId).ToListAsync();
+        _db.Babs.RemoveRange(babs);
+        
+        // Hapus buku
+        _db.Bukus.Remove(buku);
+        await _db.SaveChangesAsync();
+        
+        return Ok(new { message = "Buku berhasil dihapus" });
+    }
+
+    [HttpPatch("{id}/batal")]
+    public async Task<IActionResult> BatalBuku(int id)
+    {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        
+        var buku = await _db.Bukus.FindAsync(id);
+        
+        if (buku == null)
+            return NotFound(new { message = "Buku tidak ditemukan" });
+        
+        if (buku.MhsNrp != nrp)
+            return Forbid();
+        
+        if (buku.BukuStatus != "dalam_antrian")
+            return BadRequest(new { message = "Hanya buku dalam antrian yang bisa dibatalkan" });
+        
+        buku.BukuStatus = "dibatalkan";
+        buku.BukuUpdatedAt = DateTime.Now;
+        await _db.SaveChangesAsync();
+        
+        await _wsService.NotifyBukuCancelled(nrp!, id);
+        
+        return Ok(new { message = "Buku berhasil dibatalkan" });
+    }
+
     [HttpGet("stats")]
-    public IActionResult GetStats([FromQuery] string? nrp = null)
+    public IActionResult GetStats()
     {
         var currentNrp = HttpContext.Items["Nrp"]?.ToString();
         var role = HttpContext.Items["Role"]?.ToString();
@@ -77,38 +151,72 @@ public class BukuController : ControllerBase
         {
             query = query.Where(b => b.MhsNrp == currentNrp);
         }
-        // Jika admin dan ada parameter nrp, filter berdasarkan NRP tertentu
-        else if (role == "admin" && !string.IsNullOrEmpty(nrp))
-        {
-            query = query.Where(b => b.MhsNrp == nrp);
-        }
         
         var bukus = query.ToList();
         var grouped = bukus.GroupBy(b => b.BukuStatus).ToDictionary(g => g.Key ?? "unknown", g => g.Count());
         
-        // Untuk admin, tambahkan statistik khusus dashboard
         var result = new {
             total = bukus.Count,
             dalam_antrian = grouped.GetValueOrDefault("dalam_antrian", 0),
             diproses = grouped.GetValueOrDefault("diproses", 0),
-            selesai_convert = grouped.GetValueOrDefault("selesai_convert", 0),
             lolos = grouped.GetValueOrDefault("lolos", 0),
-            tidak_lolos = grouped.GetValueOrDefault("tidak_lolos", 0)
+            tidak_lolos = grouped.GetValueOrDefault("tidak_lolos", 0),
+            dibatalkan = grouped.GetValueOrDefault("dibatalkan", 0)
         };
         
-        // Jika admin, tambahkan statistik dashboard
+        // Jika admin, tambahkan count per jurusan
         if (role == "admin")
         {
-            return Ok(new {
-                result.total,
-                result.dalam_antrian,
-                result.diproses,
-                result.selesai_convert,
-                result.lolos,
-                result.tidak_lolos,
-                // Dashboard cards
-                menunggu_validasi = result.dalam_antrian + result.diproses + result.selesai_convert
-            });
+            try
+            {
+                var nrps = bukus.Select(b => b.MhsNrp).Distinct().ToList();
+                
+                if (nrps.Count == 0)
+                {
+                    return Ok(new {
+                        result.total,
+                        result.dalam_antrian,
+                        result.diproses,
+                        result.lolos,
+                        result.tidak_lolos,
+                        result.dibatalkan,
+                        per_jurusan = new List<object>()
+                    });
+                }
+                
+                var bukuPerJurusan = (from m in _sttsDb.Mahasiswas
+                    where nrps.Contains(m.MhsNrp) && m.JurKode != null
+                    join j in _sttsDb.Jurusans on m.JurKode equals j.JurKode
+                    group m by new { m.JurKode, j.JurSingkat } into g
+                    select new {
+                        kode = g.Key.JurKode,
+                        singkatan = g.Key.JurSingkat,
+                        total_mhs = g.Count()
+                    }).ToList();
+                
+                return Ok(new {
+                    result.total,
+                    result.dalam_antrian,
+                    result.diproses,
+                    result.lolos,
+                    result.tidak_lolos,
+                    result.dibatalkan,
+                    per_jurusan = bukuPerJurusan
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Stats per jurusan: {ex.Message}");
+                return Ok(new {
+                    result.total,
+                    result.dalam_antrian,
+                    result.diproses,
+                    result.lolos,
+                    result.tidak_lolos,
+                    result.dibatalkan,
+                    per_jurusan = new List<object>()
+                });
+            }
         }
         
         return Ok(result);
@@ -166,21 +274,26 @@ public class BukuController : ControllerBase
             var totalCount = bukuList.Count();
             var bukus = bukuList.Skip(offset).Take(limit).ToList();
             var nrps = bukus.Select(b => b.MhsNrp).Distinct().ToList();
-            var mahasiswas = _sttsDb.Mahasiswas.Where(m => nrps.Contains(m.MhsNrp)).ToDictionary(m => m.MhsNrp);
-            var jurKodes = mahasiswas.Values.Where(m => m.JurKode != null).Select(m => m.JurKode!).Distinct().ToList();
-            var jurusans = _sttsDb.Jurusans.Where(j => jurKodes.Contains(j.JurKode)).ToDictionary(j => j.JurKode);
+            
+            var mahasiswaJurusan = (from m in _sttsDb.Mahasiswas
+                where nrps.Contains(m.MhsNrp)
+                join j in _sttsDb.Jurusans on m.JurKode equals j.JurKode into jGroup
+                from j in jGroup.DefaultIfEmpty()
+                select new {
+                    m.MhsNrp,
+                    m.MhsNama,
+                    JurSingkat = j != null ? j.JurSingkat : "Unknown"
+                }).ToDictionary(x => x.MhsNrp);
             
             var result = bukus.Select(b => {
-                var mhs = mahasiswas.ContainsKey(b.MhsNrp) ? mahasiswas[b.MhsNrp] : null;
-                var jurKode = mhs?.JurKode;
-                var jurNama = jurKode != null && jurusans.ContainsKey(jurKode) ? jurusans[jurKode].JurNama : "Unknown";
+                var mhs = mahasiswaJurusan.ContainsKey(b.MhsNrp) ? mahasiswaJurusan[b.MhsNrp] : null;
                 
                 return new {
                     id = b.BukuId,
                     judul = b.BukuJudul,
                     nrp = b.MhsNrp,
                     nama = mhs?.MhsNama ?? "Unknown",
-                    jurusan = jurNama,
+                    jurusan = mhs?.JurSingkat ?? "Unknown",
                     tanggal_upload = b.BukuCreatedAt,
                     jumlah_bab = b.BukuJumlahBab,
                     status = b.BukuStatus,
@@ -213,8 +326,8 @@ public class BukuController : ControllerBase
         
         var mahasiswaTotal = query.Count();
         
-        var bukuIds = query.Skip(offset).Take(limit).Select(b => b.BukuId).ToList();
-        var mahasiswaBukus = _db.Bukus.Where(b => bukuIds.Contains(b.BukuId)).ToList();
+        var mahasiswaBukus = query.Skip(offset).Take(limit).ToList();
+        var bukuIds = mahasiswaBukus.Select(b => b.BukuId).ToList();
         var babs = _db.Babs.Where(b => bukuIds.Contains((int)b.BukuId)).OrderBy(b => b.BabOrder).ToList();
         
         var mahasiswaBukuList = mahasiswaBukus.Select(b => new {

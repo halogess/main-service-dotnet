@@ -19,19 +19,10 @@ public class AuthMiddleware
         var path = context.Request.Path.Value?.ToLower();
         Console.WriteLine($"[AUTH] Middleware called for path: {path}");
         
-        // Skip auth untuk endpoint login, internal, websocket, dan health check
-        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.StartsWith("/api/internal") == true || path == "/ws" || path == "/" || path == "/health")
+        // Skip auth untuk endpoint login, websocket, testing, dan health check
+        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.StartsWith("/api/testing") == true || path == "/ws" || path == "/" || path == "/health")
         {
             Console.WriteLine($"[AUTH] Skipping auth for: {path}");
-            await _next(context);
-            return;
-        }
-
-        // Skip JWT validation jika ada X-API-Key (untuk AI service)
-        var apiKey = context.Request.Headers["X-API-Key"].FirstOrDefault();
-        if (!string.IsNullOrEmpty(apiKey))
-        {
-            Console.WriteLine($"[AUTH] X-API-Key detected, skipping JWT validation");
             await _next(context);
             return;
         }
@@ -109,7 +100,9 @@ public class AuthMiddleware
             else
             {
                 var mahasiswa = await sttsDb.Mahasiswas
-                    .FirstOrDefaultAsync(m => m.MhsNrp == username);
+                    .Where(m => m.MhsNrp == username)
+                    .Select(m => new { m.MhsNrp, m.MhsNama })
+                    .FirstOrDefaultAsync();
                 
                 Console.WriteLine($"[AUTH] Mahasiswa found: {mahasiswa != null}, NRP: {mahasiswa?.MhsNrp}");
 
@@ -122,7 +115,7 @@ public class AuthMiddleware
                 }
 
                 context.Items["Username"] = username;
-                context.Items["Nrp"] = mahasiswa.MhsNrp;
+                context.Items["Nrp"] = username;
                 context.Items["Role"] = role ?? "mahasiswa";
             }
             

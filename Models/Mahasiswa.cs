@@ -9,5 +9,5 @@ public class Mahasiswa
     public byte? MhsStatus { get; set; }   // tinyint(1)
     public string? JurKode { get; set; }
     public decimal? MhsIpk { get; set; }
-
+    public string? MhsLulusTahun { get; set; }
 }

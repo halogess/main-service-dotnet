@@ -42,8 +42,8 @@ public class DokumenController : ControllerBase
         }
     }
 
-    [HttpPatch("{id}/cancel")]
-    public async Task<IActionResult> CancelDokumen(int id)
+    [HttpPatch("{id}/batal")]
+    public async Task<IActionResult> BatalDokumen(int id)
     {
         var nrp = HttpContext.Items["Nrp"]?.ToString();
         var dokumen = _db.Dokumens.FirstOrDefault(d => d.DokumenId == id && d.MhsNrp == nrp);
@@ -51,10 +51,11 @@ public class DokumenController : ControllerBase
         if (dokumen == null)
             return NotFound(new { message = "Dokumen tidak ditemukan" });
         
-        if (dokumen.DokumenStatus != "dalam_antrian" && dokumen.DokumenStatus != "diproses")
-            return BadRequest(new { message = "Dokumen tidak dapat dibatalkan" });
+        if (dokumen.DokumenStatus != "dalam_antrian")
+            return BadRequest(new { message = "Hanya dokumen dalam antrian yang bisa dibatalkan" });
         
         dokumen.DokumenStatus = "dibatalkan";
+        dokumen.DokumenUpdatedAt = DateTime.Now;
         _db.SaveChanges();
         
         await _wsService.NotifyDokumenCancelled(nrp!, id);

@@ -67,30 +67,7 @@ public class BukuController : ControllerBase
         return Ok(new { judul = judul });
     }
 
-    [HttpDelete("{id}")]
-    public async Task<IActionResult> HapusBuku(int id)
-    {
-        if (HttpContext.Items["Role"]?.ToString() != "admin")
-            return Forbid();
-        
-        var buku = await _db.Bukus.FindAsync(id);
-        if (buku == null)
-            return NotFound(new { message = "Buku tidak ditemukan" });
-        
-        var mahasiswa = await _sttsDb.Mahasiswas.FirstOrDefaultAsync(m => m.MhsNrp == buku.MhsNrp);
-        if (mahasiswa == null)
-            return NotFound(new { message = "Mahasiswa tidak ditemukan" });
-        
-        if (mahasiswa.MhsStatus == 1)
-            return BadRequest(new { message = "Hanya buku mahasiswa yang bukan aktif yang bisa dihapus" });
-        
-        var babs = await _db.Babs.Where(b => b.BukuId == (uint)buku.BukuId).ToListAsync();
-        _db.Babs.RemoveRange(babs);
-        _db.Bukus.Remove(buku);
-        await _db.SaveChangesAsync();
-        
-        return Ok(new { message = "Buku berhasil dihapus" });
-    }
+
 
     [HttpPatch("{id}/batal")]
     public async Task<IActionResult> BatalBuku(int id)

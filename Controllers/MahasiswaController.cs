@@ -21,61 +21,9 @@ namespace ValidasiTugasAkhir.MainService.Controllers
             _sttsDb = sttsDb;
         }
 
-        // Endpoint: GET /api/mahasiswa
-        [HttpGet]
-        public async Task<ActionResult<IEnumerable<Mahasiswa>>> GetAll()
-        {
-            try
-            {
-                var mahasiswa = await _mahasiswaService.GetMahasiswasAsync();
 
-                return Ok(mahasiswa.Select(m => new 
-                {
-                    mhs_nrp = m.MhsNrp,
-                    mhs_nama = m.MhsNama,
-                    mhs_email = m.MhsEmail,
-                    mhs_hp = m.MhsHp,
-                    mhs_status = m.MhsStatus,
-                    jur_kode = m.JurKode,
-                    mhs_ipk = m.MhsIpk
-                }));
-            }
-            catch (Exception)
-            {
-                return StatusCode(500, new { message = "Terjadi kesalahan internal" });
-            }
-        }
 
-        [HttpGet("status/{status}")]
-        public async Task<IActionResult> GetMahasiswaByStatus(int status)
-        {
-            if (HttpContext.Items["Role"]?.ToString() != "admin")
-                return Forbid();
 
-            var mahasiswaByStatus = await _sttsDb.Mahasiswas
-                .Where(m => m.MhsStatus == status)
-                .ToListAsync();
-            
-            var nrps = mahasiswaByStatus.Select(m => m.MhsNrp).ToList();
-            var proposals = await _sttsDb.Proposals
-                .Where(p => nrps.Contains(p.MhsNrp) && p.ProposalPerpanjangan == 0 && p.ProposalJudulBaru != null)
-                .ToListAsync();
-            
-            var mahasiswaList = mahasiswaByStatus
-                .Where(m => proposals.Any(p => p.MhsNrp == m.MhsNrp))
-                .Select(m => new {
-                    nrp = m.MhsNrp,
-                    nama = m.MhsNama,
-                    status = m.MhsStatus,
-                    jur_kode = m.JurKode,
-                    proposal_count = proposals.Count(p => p.MhsNrp == m.MhsNrp),
-                    latest_judul = proposals.Where(p => p.MhsNrp == m.MhsNrp).OrderByDescending(p => p.ProposalTglDoc).First().ProposalJudulBaru
-                })
-                .Take(50)
-                .ToList();
-
-            return Ok(new { status, count = mahasiswaList.Count, data = mahasiswaList });
-        }
 
         [HttpGet("nonaktif/angkatan")]
         public IActionResult GetNonaktifAngkatan()

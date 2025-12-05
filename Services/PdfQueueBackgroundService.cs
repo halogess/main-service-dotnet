@@ -79,6 +79,13 @@ public class PdfQueueBackgroundService : BackgroundService
                             throw new FileNotFoundException($"File tidak ditemukan: {fullFilePath}");
                         }
 
+                        var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
+                        if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
+                        {
+                            await docxExtraction.ExtractDocxToDatabase(fullFilePath, (int)queue.DokumenId.Value);
+                            _logger.LogInformation("Extracted DOCX elements for dokumen ID: {DokumenId}", queue.DokumenId);
+                        }
+
                         var credential = await db.AdobeCredentials
                             .Where(c => c.AdobeCredentialsStatus == "active" && c.AdobeCredentialsQuotaUsed < c.AdobeCredentialsQuotaLimit)
                             .OrderBy(c => c.AdobeCredentialsQuotaUsed)

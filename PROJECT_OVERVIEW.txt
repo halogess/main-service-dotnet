@@ -1,0 +1,655 @@
+================================================================================
+                    SISTEM VALIDASI TUGAS AKHIR
+                    Main Service - .NET 9.0
+================================================================================
+
+DESKRIPSI PROJECT
+================================================================================
+Sistem Validasi Tugas Akhir adalah aplikasi web service yang dirancang untuk 
+membantu mahasiswa dan admin dalam proses validasi dokumen tugas akhir. 
+Sistem ini menggunakan Adobe PDF Services API untuk mengkonversi dokumen 
+Word (.docx) menjadi PDF, kemudian melakukan validasi otomatis terhadap 
+struktur dan format dokumen sesuai standar yang ditetapkan.
+
+
+TEKNOLOGI YANG DIGUNAKAN
+================================================================================
+Backend Framework    : ASP.NET Core 9.0
+Database            : MySQL 8.0+ (2 database terpisah)
+                      - db_stts (data mahasiswa & jurusan)
+                      - db_korektor_buku (data validasi)
+ORM                 : Entity Framework Core 9.0
+External API        : Adobe PDF Services API
+Real-time Comm.     : WebSocket
+Authentication      : JWT (Access Token + Refresh Token)
+Containerization    : Docker & Docker Compose
+
+
+ARSITEKTUR SISTEM
+================================================================================
+Project ini menggunakan arsitektur layered dengan pemisahan concern:
+
+1. Controllers/      - API endpoints & request handling
+2. Services/         - Business logic & external API integration
+3. Models/          - Entity models & database schema
+4. Database/        - DbContext untuk multi-database
+5. Middleware/      - Authentication & authorization
+6. storage/         - File storage untuk dokumen
+
+
+USER ROLES & AKSES
+================================================================================
+1. MAHASISWA
+   - Upload dokumen tugas akhir (buku lengkap atau dokumen tunggal)
+   - Melihat status validasi dokumen
+   - Membatalkan dokumen yang masih dalam antrian
+   - Melihat riwayat validasi
+   - Melihat statistik dokumen pribadi
+
+2. ADMIN
+   - Semua akses mahasiswa
+   - Melihat semua dokumen dari semua mahasiswa
+   - Filter berdasarkan jurusan, angkatan, status
+   - Melihat statistik global
+   - Mengelola data mahasiswa non-aktif
+   - Menghapus dokumen mahasiswa non-aktif
+
+
+WORKFLOW USER - MAHASISWA
+================================================================================
+
+1. AUTENTIKASI
+   -------------------------------------------------------------------------
+   a. Mahasiswa login menggunakan NRP dan password
+   b. Sistem memvalidasi kredensial ke external API (ws.stts.edu)
+   c. Jika valid, sistem generate:
+      - Access Token (expired 15 menit)
+      - Refresh Token (expired 7 hari)
+   d. Access Token digunakan untuk setiap request API
+   e. Jika Access Token expired, gunakan Refresh Token untuk mendapat token baru
+
+   Endpoint:
+   - POST /api/auth/login
+   - POST /api/auth/refresh
+
+
+2. UPLOAD DOKUMEN BUKU (Multi-file)
+   -------------------------------------------------------------------------
+   a. Mahasiswa memilih menu "Upload Buku"
+   b. Sistem cek apakah mahasiswa masih punya buku dalam antrian
+      - Jika YA: Upload ditolak dengan pesan error
+      - Jika TIDAK: Lanjut ke step berikutnya
+   
+   c. Mahasiswa mengisi:
+      - Judul buku (bisa auto-fill dari proposal terakhir)
+      - Upload multiple file .docx (BAB 1, BAB 2, dst)
+   
+   d. Sistem validasi setiap file:
+      - Ekstensi harus .docx
+      - File harus valid Word document (cek magic bytes)
+   
+   e. Sistem menyimpan:
+      - Record buku di database (status: "dalam_antrian")
+      - Record bab untuk setiap file
+      - File .docx di storage: storage/buku/{nrp}/{buku_id}/
+      - Record antrian untuk konversi PDF
+   
+   f. Background service otomatis memproses:
+      - Ambil antrian tertua dengan status "in_queue"
+      - Update status buku menjadi "diproses"
+      - Kirim notifikasi real-time via WebSocket
+      - Konversi DOCX ke PDF menggunakan Adobe API
+      - Simpan PDF di storage
+      - Update status antrian menjadi "completed"
+      - Jika semua bab selesai dikonversi, status buku = "selesai_convert"
+   
+   g. Mahasiswa menerima notifikasi real-time:
+      - Status berubah dari "dalam_antrian" → "diproses" → "selesai_convert"
+
+   Endpoint:
+   - POST /api/buku (upload)
+   - GET /api/buku/can-upload (cek apakah bisa upload)
+   - GET /api/buku/judul (ambil judul dari proposal)
+
+
+3. UPLOAD DOKUMEN TUNGGAL
+   -------------------------------------------------------------------------
+   a. Mahasiswa memilih menu "Upload Dokumen"
+   b. Sistem cek apakah mahasiswa masih punya dokumen dalam antrian
+      - Jika YA: Upload ditolak
+      - Jika TIDAK: Lanjut
+   
+   c. Mahasiswa upload 1 file .docx
+   
+   d. Sistem validasi file (sama seperti buku)
+   
+   e. Sistem menyimpan:
+      - Record dokumen di database (status: "dalam_antrian")
+      - File .docx di storage: storage/dokumen/{nrp}/{dokumen_id}/
+      - Record antrian untuk konversi PDF
+   
+   f. Background service memproses (sama seperti buku)
+   
+   g. Mahasiswa menerima notifikasi real-time
+
+   Endpoint:
+   - POST /api/dokumen (upload)
+   - GET /api/dokumen/can-upload
+
+
+4. MONITORING STATUS DOKUMEN
+   -------------------------------------------------------------------------
+   a. Mahasiswa membuka dashboard
+   b. Sistem menampilkan list dokumen dengan informasi:
+      - ID dokumen/buku
+      - Judul (untuk buku)
+      - Filename (untuk dokumen)
+      - Tanggal upload
+      - Status: dalam_antrian, diproses, lolos, tidak_lolos, dibatalkan
+      - Skor validasi (jika sudah selesai)
+      - Jumlah kesalahan (jika ada)
+   
+   c. Mahasiswa bisa filter berdasarkan:
+      - Status (multiple selection)
+      - Sort by tanggal (asc/desc)
+      - Pagination (limit & offset)
+   
+   d. Real-time update via WebSocket:
+      - Ketika status berubah, UI otomatis update tanpa refresh
+
+   Endpoint:
+   - GET /api/buku (list buku mahasiswa)
+   - GET /api/dokumen (list dokumen mahasiswa)
+   - WS /ws (WebSocket connection)
+
+
+5. MELIHAT STATISTIK
+   -------------------------------------------------------------------------
+   Mahasiswa bisa melihat statistik dokumen pribadi:
+   - Total dokumen/buku yang pernah diupload
+   - Jumlah dalam antrian
+   - Jumlah sedang diproses
+   - Jumlah lolos validasi
+   - Jumlah tidak lolos validasi
+   - Jumlah dibatalkan
+
+   Endpoint:
+   - GET /api/buku/stats
+   - GET /api/dokumen/stats
+
+
+6. MEMBATALKAN DOKUMEN
+   -------------------------------------------------------------------------
+   a. Mahasiswa memilih dokumen/buku yang ingin dibatalkan
+   b. Sistem cek:
+      - Dokumen harus milik mahasiswa tersebut
+      - Status harus "dalam_antrian"
+   c. Jika valid:
+      - Update status menjadi "dibatalkan"
+      - Kirim notifikasi WebSocket
+      - Dokumen tidak akan diproses oleh background service
+
+   Endpoint:
+   - PATCH /api/buku/{id}/batal
+   - PATCH /api/dokumen/{id}/batal
+
+
+WORKFLOW USER - ADMIN
+================================================================================
+
+1. MELIHAT SEMUA DOKUMEN
+   -------------------------------------------------------------------------
+   Admin bisa melihat dokumen dari semua mahasiswa dengan filter:
+   - Status dokumen (dalam_antrian, diproses, lolos, tidak_lolos)
+   - NRP mahasiswa
+   - Jurusan
+   - Search by NRP atau nama mahasiswa
+   - Tanggal upload (start date & end date)
+   - Sort & pagination
+
+   Data yang ditampilkan:
+   - ID dokumen/buku
+   - Judul
+   - NRP & Nama mahasiswa
+   - Jurusan
+   - Tanggal upload
+   - Jumlah bab (untuk buku)
+   - Status
+   - Skor & jumlah kesalahan
+
+   Endpoint:
+   - GET /api/buku?nrp=xxx&jurusan=xxx&search=xxx&startDate=xxx&endDate=xxx
+
+
+2. MELIHAT STATISTIK GLOBAL
+   -------------------------------------------------------------------------
+   Admin bisa melihat:
+   - Total semua dokumen/buku
+   - Breakdown per status
+   - Statistik per jurusan (jumlah mahasiswa yang upload)
+
+   Endpoint:
+   - GET /api/buku/stats
+
+
+3. MENGELOLA MAHASISWA NON-AKTIF
+   -------------------------------------------------------------------------
+   Admin bisa:
+   a. Melihat list mahasiswa non-aktif yang pernah upload dokumen
+   b. Filter berdasarkan:
+      - Status mahasiswa (tidak-aktif, DO, cuti, alumni, dll)
+      - Angkatan
+      - Jurusan
+      - Search by NRP/nama
+   
+   c. Melihat riwayat validasi per mahasiswa non-aktif
+   
+   d. Menghapus dokumen mahasiswa non-aktif:
+      - Hapus record dari database
+      - Hapus file dari storage
+      - Batch delete (multiple mahasiswa sekaligus)
+
+   Endpoint:
+   - GET /api/mahasiswa/nonaktif/buku
+   - GET /api/mahasiswa/nonaktif/angkatan
+   - GET /api/mahasiswa/nonaktif/status
+   - GET /api/mahasiswa/nonaktif/jurusan
+   - DELETE /api/mahasiswa/nonaktif/buku
+
+
+PROSES KONVERSI PDF (Background Service)
+================================================================================
+
+1. QUEUE SYSTEM
+   -------------------------------------------------------------------------
+   - Background service berjalan terus-menerus (infinite loop)
+   - Setiap 5 detik, cek antrian baru
+   - Ambil antrian tertua dengan status "in_queue"
+   - Proses satu per satu (FIFO - First In First Out)
+
+
+2. ADOBE PDF SERVICES INTEGRATION
+   -------------------------------------------------------------------------
+   a. Get Access Token
+      - Request token ke Adobe IMS
+      - Token di-cache dan reuse sampai expired
+      - Auto refresh jika expired
+   
+   b. Create Upload URI
+      - Request upload URI dari Adobe API
+      - Dapat Asset ID dan Upload URI (S3)
+   
+   c. Upload Document
+      - Upload file .docx ke S3 menggunakan Upload URI
+   
+   d. Create Conversion Job
+      - Request Adobe untuk convert DOCX ke PDF
+      - Dapat Job ID
+   
+   e. Poll Job Status
+      - Cek status job setiap 2 detik
+      - Tunggu sampai status = "done"
+      - Dapat Download URI
+   
+   f. Download PDF
+      - Download PDF dari S3
+      - Simpan ke storage lokal
+
+
+3. CREDENTIAL MANAGEMENT
+   -------------------------------------------------------------------------
+   - Sistem support multiple Adobe credentials
+   - Setiap credential punya quota limit
+   - Background service otomatis pilih credential dengan quota tersisa
+   - Jika semua quota habis, konversi gagal
+   - Auto reset quota setiap bulan (via AdobeQuotaResetService)
+
+
+4. ERROR HANDLING
+   -------------------------------------------------------------------------
+   Jika konversi gagal:
+   - Update status antrian menjadi "failed"
+   - Simpan error message
+   - Log error ke database (adobe_api_log)
+   - Tidak retry otomatis (harus manual)
+
+
+5. LOGGING
+   -------------------------------------------------------------------------
+   Setiap API call ke Adobe di-log:
+   - Credential yang digunakan
+   - Endpoint & method
+   - Status code
+   - Response time
+   - Error message (jika ada)
+   - Antrian ID
+
+
+REAL-TIME NOTIFICATION (WebSocket)
+================================================================================
+
+1. CONNECTION
+   -------------------------------------------------------------------------
+   - Client connect ke WS /ws dengan NRP di query string
+   - Server maintain connection per NRP
+   - Multiple connection per NRP (multi-device support)
+
+
+2. NOTIFICATION TYPES
+   -------------------------------------------------------------------------
+   a. status_changed (dokumen)
+      {
+        "type": "status_changed",
+        "dokumen_id": 123,
+        "status": "diproses",
+        "timestamp": "2024-01-01T10:00:00"
+      }
+   
+   b. dokumen_cancelled
+      {
+        "type": "dokumen_cancelled",
+        "dokumen_id": 123,
+        "timestamp": "2024-01-01T10:00:00"
+      }
+   
+   c. buku_status_changed
+      {
+        "type": "buku_status_changed",
+        "buku_id": 456,
+        "status": "diproses",
+        "timestamp": "2024-01-01T10:00:00"
+      }
+   
+   d. buku_cancelled
+      {
+        "type": "buku_cancelled",
+        "buku_id": 456,
+        "timestamp": "2024-01-01T10:00:00"
+      }
+
+
+3. AUTO RECONNECT
+   -------------------------------------------------------------------------
+   - Client harus implement auto reconnect
+   - Jika connection lost, reconnect dengan exponential backoff
+
+
+FILE STORAGE STRUCTURE
+================================================================================
+
+storage/
+├── buku/
+│   └── {nrp}/
+│       └── {buku_id}/
+│           ├── bab_1.docx
+│           ├── bab_1.pdf
+│           ├── bab_2.docx
+│           ├── bab_2.pdf
+│           └── ...
+│
+└── dokumen/
+    └── {nrp}/
+        └── {dokumen_id}/
+            ├── filename.docx
+            └── filename.pdf
+
+
+DATABASE SCHEMA (Simplified)
+================================================================================
+
+db_korektor_buku:
+-----------------
+1. buku
+   - buku_id (PK)
+   - mhs_nrp
+   - buku_judul
+   - buku_status (dalam_antrian, diproses, selesai_convert, lolos, tidak_lolos, dibatalkan)
+   - buku_skor
+   - buku_jumlah_kesalahan
+   - buku_jumlah_bab
+   - buku_created_at
+   - buku_updated_at
+
+2. bab
+   - bab_id (PK)
+   - buku_id (FK)
+   - bab_order
+   - bab_filename
+   - bab_docx_path
+   - bab_pdf_path
+
+3. dokumen
+   - dokumen_id (PK)
+   - mhs_nrp
+   - dokumen_filename
+   - dokumen_filesize_bytes
+   - dokumen_status (dalam_antrian, diproses, lolos, tidak_lolos, dibatalkan)
+   - dokumen_skor
+   - dokumen_jumlah_kesalahan
+   - dokumen_docx_path
+   - dokumen_pdf_path
+   - dokumen_created_at
+   - dokumen_updated_at
+
+4. antrian
+   - antrian_id (PK)
+   - antrian_tipe (buku/dokumen)
+   - buku_id (FK, nullable)
+   - bab_id (FK, nullable)
+   - dokumen_id (FK, nullable)
+   - antrian_worker (convert_pdf, struktur, visual)
+   - antrian_convert_status (in_queue, processing, completed, failed)
+   - antrian_visual_status
+   - antrian_struktur_status
+   - antrian_error_message
+   - antrian_created_at
+   - antrian_updated_at
+
+5. adobe_credentials
+   - adobe_credentials_id (PK)
+   - adobe_client_id
+   - adobe_client_secret
+   - adobe_credentials_status (active/inactive)
+   - adobe_credentials_quota_limit
+   - adobe_credentials_quota_used
+   - adobe_credentials_created_at
+   - adobe_credentials_updated_at
+
+6. adobe_api_log
+   - adobe_api_log_id (PK)
+   - adobe_credentials_id (FK)
+   - antrian_id (FK)
+   - activity (get_token, create_upload_uri, upload_document, create_job, get_status, download_pdf)
+   - endpoint
+   - method
+   - status_code
+   - response_time_ms
+   - error_message
+   - created_at
+
+db_stts:
+--------
+1. mahasiswa
+   - mhs_nrp (PK)
+   - mhs_nama
+   - mhs_status (1=aktif, 0=tidak aktif, 2=mengundurkan diri, 3=DO, 4=cuti, dll)
+   - mhs_angkatan
+   - mhs_lulus_tahun
+   - jur_kode (FK)
+
+2. jurusan
+   - jur_kode (PK)
+   - jur_nama
+   - jur_singkat
+
+3. proposal
+   - proposal_id (PK)
+   - mhs_nrp (FK)
+   - proposal_judul_baru
+   - proposal_tgl_doc
+   - proposal_perpanjangan
+
+
+STATUS FLOW
+================================================================================
+
+DOKUMEN/BUKU:
+dalam_antrian → diproses → selesai_convert → lolos/tidak_lolos
+                    ↓
+                dibatalkan (manual by user)
+
+ANTRIAN (convert_pdf):
+in_queue → processing → completed/failed
+
+
+SECURITY & AUTHENTICATION
+================================================================================
+
+1. JWT Authentication
+   - Setiap request (kecuali login) harus include header:
+     Authorization: Bearer {access_token}
+   
+   - Middleware AuthMiddleware akan:
+     * Validasi token
+     * Extract NRP dan Role dari token
+     * Set ke HttpContext.Items
+     * Reject jika token invalid/expired
+
+2. Authorization
+   - Mahasiswa hanya bisa akses data milik sendiri
+   - Admin bisa akses semua data
+   - Validasi di setiap endpoint
+
+3. File Validation
+   - Ekstensi file harus .docx
+   - Magic bytes validation (cek header file)
+   - Prevent malicious file upload
+
+
+ERROR HANDLING
+================================================================================
+
+1. API Response Format
+   Success:
+   {
+     "message": "Success message",
+     "data": {...}
+   }
+   
+   Error:
+   {
+     "message": "Error message",
+     "error": "Detailed error (optional)"
+   }
+
+2. HTTP Status Codes
+   - 200: Success
+   - 400: Bad Request (validation error)
+   - 401: Unauthorized (token invalid/expired)
+   - 403: Forbidden (no permission)
+   - 404: Not Found
+   - 500: Internal Server Error
+
+
+DEPLOYMENT
+================================================================================
+
+1. Development (Local)
+   - dotnet run
+   - Service: http://localhost:5062
+   - Hot reload enabled
+
+2. Production (Docker)
+   - docker-compose up --build
+   - Service: http://localhost:5062
+   - Auto restart on failure
+   - Volume mount untuk storage persistence
+
+3. Environment Variables
+   - Konfigurasi di .env file
+   - Database connections
+   - JWT secret
+   - Adobe credentials
+   - Storage path
+
+
+MONITORING & LOGGING
+================================================================================
+
+1. Application Logs
+   - Console output (stdout)
+   - Log level: Information, Warning, Error
+   - Structured logging
+
+2. Adobe API Logs
+   - Tersimpan di database (adobe_api_log)
+   - Track quota usage
+   - Performance monitoring
+   - Error tracking
+
+3. Background Service Logs
+   - Queue processing status
+   - Conversion success/failure
+   - Error details
+
+
+FUTURE ENHANCEMENTS
+================================================================================
+
+1. Validasi Struktur Dokumen
+   - Cek format heading, numbering, spacing
+   - Validasi sesuai template STTS
+
+2. Validasi Visual
+   - Cek margin, font, line spacing
+   - Detect plagiarism
+
+3. Notification System
+   - Email notification
+   - Push notification
+
+4. Report & Analytics
+   - Dashboard analytics
+   - Export report (PDF/Excel)
+
+5. Batch Processing
+   - Upload multiple buku sekaligus
+   - Bulk validation
+
+
+TROUBLESHOOTING COMMON ISSUES
+================================================================================
+
+1. Database Connection Error
+   - Cek MySQL service running
+   - Cek connection string di .env
+   - Gunakan host.docker.internal untuk Docker
+
+2. Storage Permission Error
+   - Cek directory storage sudah dibuat
+   - Cek permission (Linux/macOS: chmod 777)
+
+3. Adobe API Error
+   - Cek credentials valid
+   - Cek quota belum habis
+   - Cek network connection
+
+4. WebSocket Connection Failed
+   - Cek CORS configuration
+   - Cek firewall settings
+
+5. Background Service Not Processing
+   - Cek logs untuk error
+   - Cek antrian status di database
+   - Restart service
+
+
+CONTACT & SUPPORT
+================================================================================
+
+Untuk pertanyaan atau issue, silakan hubungi tim development atau
+buat issue di repository GitHub.
+
+================================================================================
+                        END OF DOCUMENT
+================================================================================

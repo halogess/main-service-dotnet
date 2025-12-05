@@ -8,6 +8,8 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<Buku> Bukus { get; set; }
     public DbSet<Bab> Babs { get; set; }
     public DbSet<Dokumen> Dokumens { get; set; }
+    public DbSet<DokumenElemen> DokumenElemens { get; set; }
+    public DbSet<DokumenMedia> DokumenMedias { get; set; }
 
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
     public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
@@ -36,6 +38,17 @@ public class KorektorBukuDbContext : DbContext
             
             entity.Property(e => e.DokumenUpdatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
+        });
+
+        modelBuilder.Entity<DokumenElemen>(entity =>
+        {
+            entity.HasKey(e => e.DokumenElemenId);
+            entity.Property(e => e.DokumenElemenJsonTree).HasColumnType("json");
+        });
+
+        modelBuilder.Entity<DokumenMedia>(entity =>
+        {
+            entity.HasKey(e => e.DokumenMediaId);
         });
 
 

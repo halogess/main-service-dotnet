@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using ValidasiTugasAkhir.MainService.Models;
+using ValidasiTugasAkhir.MainService.Services;
 using Microsoft.EntityFrameworkCore;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
@@ -10,11 +11,13 @@ public class TestingController : ControllerBase
 {
     private readonly KorektorBukuDbContext _db;
     private readonly SttsDbContext _sttsDb;
+    private readonly IDocxExtractionService _docxExtraction;
 
-    public TestingController(KorektorBukuDbContext db, SttsDbContext sttsDb)
+    public TestingController(KorektorBukuDbContext db, SttsDbContext sttsDb, IDocxExtractionService docxExtraction)
     {
         _db = db;
         _sttsDb = sttsDb;
+        _docxExtraction = docxExtraction;
     }
 
     [HttpGet("bulk-insert-buku-aktif")]
@@ -287,8 +290,125 @@ public class TestingController : ControllerBase
         });
     }
 
+    [HttpGet("reset-visual/{tipe}/{id}")]
+    public async Task<IActionResult> ResetVisual(string tipe, int id)
+    {
+        if (tipe != "buku" && tipe != "dokumen")
+            return BadRequest(new { message = "Tipe harus 'buku' atau 'dokumen'" });
 
+        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+        var deletedFolders = new List<string>();
 
+        try
+        {
+            if (tipe == "buku")
+            {
+                var buku = await _db.Bukus.FirstOrDefaultAsync(b => b.BukuId == id);
+                if (buku == null)
+                    return NotFound(new { message = "Buku tidak ditemukan" });
 
+                var imageDir = Path.Combine(storagePath, "buku", buku.MhsNrp, id.ToString(), "images");
+                var imageResultDir = Path.Combine(storagePath, "buku", buku.MhsNrp, id.ToString(), "image-result");
+                var imageResultPdfDir = Path.Combine(storagePath, "buku", buku.MhsNrp, id.ToString(), "image-result-pdf");
+                var imageResultOcrDir = Path.Combine(storagePath, "buku", buku.MhsNrp, id.ToString(), "image-result-ocr");
 
+                if (Directory.Exists(imageDir))
+                {
+                    Directory.Delete(imageDir, true);
+                    deletedFolders.Add(imageDir);
+                }
+                if (Directory.Exists(imageResultDir))
+                {
+                    Directory.Delete(imageResultDir, true);
+                    deletedFolders.Add(imageResultDir);
+                }
+                if (Directory.Exists(imageResultPdfDir))
+                {
+                    Directory.Delete(imageResultPdfDir, true);
+                    deletedFolders.Add(imageResultPdfDir);
+                }
+                if (Directory.Exists(imageResultOcrDir))
+                {
+                    Directory.Delete(imageResultOcrDir, true);
+                    deletedFolders.Add(imageResultOcrDir);
+                }
+
+                var updated = await _db.Antrians
+                    .Where(a => a.BukuId == id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(a => a.AntrianVisualStatus, "in_queue"));
+
+                return Ok(new { message = "Reset visual berhasil", deleted_folders = deletedFolders, updated_antrian = updated });
+            }
+            else
+            {
+                var dokumen = await _db.Dokumens.FirstOrDefaultAsync(d => d.DokumenId == id);
+                if (dokumen == null)
+                    return NotFound(new { message = "Dokumen tidak ditemukan" });
+
+                var imageDir = Path.Combine(storagePath, "dokumen", dokumen.MhsNrp, id.ToString(), "images");
+                var imageResultDir = Path.Combine(storagePath, "dokumen", dokumen.MhsNrp, id.ToString(), "image-result");
+                var imageResultPdfDir = Path.Combine(storagePath, "dokumen", dokumen.MhsNrp, id.ToString(), "image-result-pdf");
+                var imageResultOcrDir = Path.Combine(storagePath, "dokumen", dokumen.MhsNrp, id.ToString(), "image-result-ocr");
+
+                if (Directory.Exists(imageDir))
+                {
+                    Directory.Delete(imageDir, true);
+                    deletedFolders.Add(imageDir);
+                }
+                if (Directory.Exists(imageResultDir))
+                {
+                    Directory.Delete(imageResultDir, true);
+                    deletedFolders.Add(imageResultDir);
+                }
+                if (Directory.Exists(imageResultPdfDir))
+                {
+                    Directory.Delete(imageResultPdfDir, true);
+                    deletedFolders.Add(imageResultPdfDir);
+                }
+                if (Directory.Exists(imageResultOcrDir))
+                {
+                    Directory.Delete(imageResultOcrDir, true);
+                    deletedFolders.Add(imageResultOcrDir);
+                }
+
+                var updated = await _db.Antrians
+                    .Where(a => a.DokumenId == id)
+                    .ExecuteUpdateAsync(s => s.SetProperty(a => a.AntrianVisualStatus, "in_queue"));
+
+                return Ok(new { message = "Reset visual berhasil", deleted_folders = deletedFolders, updated_antrian = updated });
+            }
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Gagal reset visual", error = ex.Message, stack = ex.StackTrace });
+        }
+    }
+
+    [HttpPost("extract-docx/{dokumenId}")]
+    public async Task<IActionResult> ExtractDocx(int dokumenId)
+    {
+        try
+        {
+            var dokumen = await _db.Dokumens.FindAsync(dokumenId);
+            if (dokumen == null)
+                return NotFound(new { message = "Dokumen tidak ditemukan" });
+
+            if (string.IsNullOrEmpty(dokumen.DokumenDocxPath))
+                return BadRequest(new { message = "Path DOCX tidak ditemukan" });
+
+            var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+            var docxPath = Path.Combine(storagePath, dokumen.DokumenDocxPath);
+
+            if (!System.IO.File.Exists(docxPath))
+                return NotFound(new { message = "File DOCX tidak ditemukan" });
+
+            await _docxExtraction.ExtractDocxToDatabase(docxPath, dokumenId);
+
+            return Ok(new { message = "Ekstraksi DOCX berhasil", dokumen_id = dokumenId });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Gagal ekstraksi DOCX", error = ex.Message });
+        }
+    }
 }

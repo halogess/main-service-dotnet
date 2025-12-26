@@ -27,29 +27,39 @@ public class DocxExtractionService : IDocxExtractionService
 
     public async Task ExtractDocxToDatabase(string docxPath, int dokumenId)
     {
-        using var doc = WordprocessingDocument.Open(docxPath, false);
-        
-        await ExtractAllMedia(doc, dokumenId);
-        
-        var body = doc.MainDocumentPart!.Document.Body!;
-        int seq = 1;
-        
-        foreach (var elem in body.Elements())
+        try
         {
-            var (type, json) = ConvertElementToJson(elem, doc.MainDocumentPart);
+            _logger.LogInformation("Starting extraction for dokumen {DokumenId}, path: {Path}", dokumenId, docxPath);
             
-            var dokumenElemen = new DokumenElemen
+            using var doc = WordprocessingDocument.Open(docxPath, false);
+            
+            await ExtractAllMedia(doc, dokumenId);
+            
+            var body = doc.MainDocumentPart!.Document.Body!;
+            int seq = 1;
+            
+            foreach (var elem in body.Elements())
             {
-                DokumenId = dokumenId,
-                DokumenElemenSequence = seq++,
-                DokumenElemenType = type,
-                DokumenElemenJsonTree = json
-            };
+                foreach (var (type, json) in ConvertBodyElementToItems(elem))
+                {
+                    _db.DokumenElemens.Add(new DokumenElemen
+                    {
+                        DokumenId = dokumenId,
+                        DokumenElemenSequence = seq++,
+                        DokumenElemenType = type,
+                        DokumenElemenJsonTree = json.ToString(Formatting.None)
+                    });
+                }
+            }
             
-            _db.DokumenElemens.Add(dokumenElemen);
+            await _db.SaveChangesAsync();
+            _logger.LogInformation("Extraction completed for dokumen {DokumenId}, {Count} elements", dokumenId, seq - 1);
         }
-        
-        await _db.SaveChangesAsync();
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Extraction failed for dokumen {DokumenId}", dokumenId);
+            throw;
+        }
     }
 
     private async Task ExtractAllMedia(WordprocessingDocument doc, int dokumenId)
@@ -89,34 +99,168 @@ public class DocxExtractionService : IDocxExtractionService
         await _db.SaveChangesAsync();
     }
 
-    private (string type, string json) ConvertElementToJson(OpenXmlElement elem, MainDocumentPart mainPart)
+    private IEnumerable<(string type, JObject json)> ConvertBodyElementToItems(OpenXmlElement elem)
     {
-        var result = new JObject();
-        string type;
+        if (elem is Paragraph p)
+            return FlattenParagraph(p);
 
-        switch (elem)
+        if (elem is Table t)
+            return new[] { ("table", new JObject { ["content"] = new JObject { ["rows"] = ConvertTableRows(t, null!) } }) };
+
+        if (elem is SectionProperties)
+            return new[] { ("sectionBreak", new JObject()) };
+
+        if (elem is DocumentFormat.OpenXml.Math.OfficeMath math)
+            return new[] { ("math", new JObject { ["content"] = new JArray { new JObject { ["type"] = "math", ["text"] = ExtractMathText(math) } } }) };
+
+        if (elem is BookmarkStart || elem is BookmarkEnd)
+            return Array.Empty<(string, JObject)>();
+
+        return new[] { (elem.LocalName, new JObject { ["xml"] = elem.OuterXml }) };
+    }
+
+    private IEnumerable<(string type, JObject json)> FlattenParagraph(Paragraph p)
+    {
+        var paragraphType = DetectParagraphType(p);
+        var content = ExtractParagraphContent(p);
+
+        if (content.Count == 0) yield break;
+
+        yield return (paragraphType, new JObject { ["content"] = content });
+    }
+
+    private JArray ExtractParagraphContent(Paragraph p)
+    {
+        var content = new JArray();
+        var sb = new System.Text.StringBuilder();
+
+        void FlushText()
         {
-            case Paragraph p:
-                type = DetectParagraphType(p);
-                result["content"] = ExtractParagraphContent(p);
-                break;
-
-            case Table t:
-                type = "table";
-                result["rows"] = ConvertTableRows(t, mainPart);
-                break;
-
-            case SectionProperties:
-                type = "sectionBreak";
-                break;
-
-            default:
-                type = elem.LocalName;
-                result["xml"] = elem.OuterXml;
-                break;
+            var text = sb.ToString();
+            sb.Clear();
+            if (!string.IsNullOrWhiteSpace(text))
+                content.Add(new JObject { ["type"] = "text", ["value"] = text });
         }
 
-        return (type, result.ToString(Formatting.None));
+        void ProcessElement(OpenXmlElement elem)
+        {
+            if (elem is DocumentFormat.OpenXml.Math.OfficeMath om)
+            {
+                FlushText();
+                var result = om.InnerText?.Trim() ?? "";
+                if (!string.IsNullOrWhiteSpace(result))
+                    content.Add(new JObject { ["type"] = "math", ["text"] = result });
+            }
+            else if (elem is DocumentFormat.OpenXml.Math.Paragraph mathPara)
+            {
+                FlushText();
+                foreach (var oMath in mathPara.Elements<DocumentFormat.OpenXml.Math.OfficeMath>())
+                {
+                    var result = string.Join("", oMath.Descendants<DocumentFormat.OpenXml.Math.Text>().Select(t => t.Text).Where(t => !string.IsNullOrWhiteSpace(t)));
+                    if (!string.IsNullOrWhiteSpace(result))
+                        content.Add(new JObject { ["type"] = "math", ["text"] = result });
+                }
+            }
+            else if (elem is Text t)
+            {
+                sb.Append(t.Text);
+            }
+            else if (elem is TabChar)
+            {
+                sb.Append('\t');
+            }
+            else if (elem is Break)
+            {
+                sb.Append('\n');
+            }
+            else if (elem is Drawing drawing)
+            {
+                FlushText();
+                var drawingItem = ExtractDrawingContent(drawing);
+                if (drawingItem != null)
+                    content.Add(drawingItem);
+            }
+            else if (elem is not DocumentFormat.OpenXml.Wordprocessing.TextBoxContent)
+            {
+                foreach (var child in elem.ChildElements)
+                    ProcessElement(child);
+            }
+        }
+
+        foreach (var child in p.ChildElements)
+            ProcessElement(child);
+
+        FlushText();
+        return content;
+    }
+
+    private JObject? ExtractDrawingContent(Drawing drawing)
+    {
+        var blips = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>()
+            .Where(b => b.Embed?.Value != null)
+            .Select(b => b.Embed!.Value)
+            .Distinct()
+            .ToList();
+        
+        if (blips.Count > 0)
+        {
+            if (blips.Count == 1)
+                return new JObject { ["type"] = "image", ["rId"] = blips[0] };
+            
+            var images = new JArray();
+            foreach (var rId in blips)
+                images.Add(new JObject { ["type"] = "image", ["rId"] = rId });
+            
+            return new JObject { ["type"] = "composite", ["content"] = images };
+        }
+
+        var shapeContent = new JArray();
+        
+        var txbxContent = drawing.Descendants<DocumentFormat.OpenXml.Wordprocessing.TextBoxContent>().FirstOrDefault();
+        if (txbxContent != null)
+        {
+            var textboxItems = ExtractTextBoxContent(txbxContent);
+            foreach (var item in textboxItems)
+                shapeContent.Add(item);
+        }
+        else
+        {
+            var drawingTexts = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Text>().Select(t => t.Text);
+            foreach (var txt in drawingTexts)
+            {
+                if (!string.IsNullOrWhiteSpace(txt))
+                    shapeContent.Add(new JObject { ["type"] = "text", ["value"] = txt.Trim() });
+            }
+        }
+        
+        var result = new JObject { ["type"] = "shape" };
+        
+        if (shapeContent.Count > 0)
+            result["content"] = shapeContent;
+        
+        return result;
+    }
+
+    private JArray ExtractTextBoxContent(OpenXmlElement container)
+    {
+        var content = new JArray();
+        
+        foreach (var elem in container.ChildElements)
+        {
+            if (elem is Paragraph para)
+            {
+                var paraContent = ExtractParagraphContent(para);
+                foreach (var item in paraContent)
+                    content.Add(item);
+            }
+            else if (elem is Table table)
+            {
+                var tableRows = ConvertTableRows(table, null!);
+                content.Add(new JObject { ["type"] = "table", ["rows"] = tableRows });
+            }
+        }
+        
+        return content;
     }
 
     private string DetectParagraphType(Paragraph p)
@@ -152,37 +296,28 @@ public class DocxExtractionService : IDocxExtractionService
         return "paragraph";
     }
 
-    private string ExtractParagraphContent(Paragraph p)
+    private string ExtractMathText(OpenXmlElement mathElement)
     {
-        var content = new System.Text.StringBuilder();
-
-        foreach (var run in p.Elements<Run>())
+        // Try InnerText first
+        var innerText = mathElement.InnerText?.Trim();
+        if (!string.IsNullOrWhiteSpace(innerText))
         {
-            foreach (var text in run.Elements<Text>())
-            {
-                content.Append(text.Text);
-            }
-
-            foreach (var br in run.Elements<Break>())
-            {
-                if (br.Type == null || br.Type == BreakValues.TextWrapping)
-                {
-                    content.Append("<br/>");
-                }
-            }
-
-            foreach (var drawing in run.Elements<Drawing>())
-            {
-                var blip = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
-                if (blip?.Embed?.Value != null)
-                {
-                    content.Append($"<img rId=\"{blip.Embed.Value}\"/>");
-                }
-            }
+            _logger.LogInformation("Math InnerText: '{Text}'", innerText);
+            return innerText;
         }
-
-        return content.ToString();
+        
+        // Fallback: extract from all Text descendants
+        var texts = mathElement.Descendants<DocumentFormat.OpenXml.Math.Text>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t));
+        
+        var result = string.Join("", texts);
+        _logger.LogInformation("Math from descendants: '{Text}'", result);
+        
+        return string.IsNullOrWhiteSpace(result) ? "[formula]" : result;
     }
+
+
 
     private JArray ConvertTableRows(Table t, MainDocumentPart mainPart)
     {
@@ -190,25 +325,31 @@ public class DocxExtractionService : IDocxExtractionService
 
         foreach (var row in t.Elements<TableRow>())
         {
-            var rowObj = new JObject();
             var cells = new JArray();
 
             foreach (var cell in row.Elements<TableCell>())
             {
-                var cellContent = new System.Text.StringBuilder();
-
-                foreach (var p in cell.Elements<Paragraph>())
+                var cellInlines = new JArray();
+                
+                foreach (var elem in cell.ChildElements)
                 {
-                    if (cellContent.Length > 0)
-                        cellContent.Append("<br/>");
-                    cellContent.Append(ExtractParagraphContent(p));
+                    if (elem is Paragraph para)
+                    {
+                        var paraContent = ExtractParagraphContent(para);
+                        foreach (var item in paraContent)
+                            cellInlines.Add(item);
+                    }
+                    else if (elem is Table nestedTable)
+                    {
+                        var nestedRows = ConvertTableRows(nestedTable, null!);
+                        cellInlines.Add(new JObject { ["type"] = "table", ["rows"] = nestedRows });
+                    }
                 }
-
-                cells.Add(cellContent.ToString());
+                
+                cells.Add(cellInlines);
             }
 
-            rowObj["cells"] = cells;
-            rows.Add(rowObj);
+            rows.Add(new JObject { ["cells"] = cells });
         }
 
         return rows;

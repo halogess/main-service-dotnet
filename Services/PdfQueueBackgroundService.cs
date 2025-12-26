@@ -79,9 +79,9 @@ public class PdfQueueBackgroundService : BackgroundService
                             throw new FileNotFoundException($"File tidak ditemukan: {fullFilePath}");
                         }
 
-                        var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
                         if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                         {
+                            var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
                             await docxExtraction.ExtractDocxToDatabase(fullFilePath, (int)queue.DokumenId.Value);
                             _logger.LogInformation("Extracted DOCX elements for dokumen ID: {DokumenId}", queue.DokumenId);
                         }

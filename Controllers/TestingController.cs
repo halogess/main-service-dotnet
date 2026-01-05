@@ -411,4 +411,47 @@ public class TestingController : ControllerBase
             return StatusCode(500, new { message = "Gagal ekstraksi DOCX", error = ex.Message });
         }
     }
+
+    [HttpPost("re-extract-docx/{dokumenId}")]
+    public async Task<IActionResult> ReExtractDocx(int dokumenId)
+    {
+        try
+        {
+            var dokumen = await _db.Dokumens.FindAsync(dokumenId);
+            if (dokumen == null)
+                return NotFound(new { message = "Dokumen tidak ditemukan" });
+
+            if (string.IsNullOrEmpty(dokumen.DokumenDocxPath))
+                return BadRequest(new { message = "Path DOCX tidak ditemukan" });
+
+            var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+            var docxPath = Path.Combine(storagePath, dokumen.DokumenDocxPath);
+
+            if (!System.IO.File.Exists(docxPath))
+                return NotFound(new { message = "File DOCX tidak ditemukan" });
+
+            // Delete existing elements and media
+            var existingElements = _db.DokumenElemens.Where(e => e.DokumenId == dokumenId);
+            _db.DokumenElemens.RemoveRange(existingElements);
+            
+            var existingMedia = _db.DokumenMedias.Where(m => m.DokumenId == dokumenId);
+            _db.DokumenMedias.RemoveRange(existingMedia);
+            
+            await _db.SaveChangesAsync();
+
+            // Re-extract
+            await _docxExtraction.ExtractDocxToDatabase(docxPath, dokumenId);
+
+            var newCount = await _db.DokumenElemens.CountAsync(e => e.DokumenId == dokumenId);
+            return Ok(new { 
+                message = "Re-ekstraksi DOCX berhasil", 
+                dokumen_id = dokumenId,
+                element_count = newCount
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Gagal re-ekstraksi DOCX", error = ex.Message, stack = ex.StackTrace });
+        }
+    }
 }

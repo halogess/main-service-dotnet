@@ -22,4 +22,7 @@ public class DokumenElemen
 
     [Column("dokumen_elemen_json_tree", TypeName = "json")]
     public string? DokumenElemenJsonTree { get; set; }
+
+    [Column("dokumen_elemen_xml", TypeName = "longtext")]
+    public string? DokumenElemenXml { get; set; }
 }

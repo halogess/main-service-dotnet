@@ -36,6 +36,9 @@ public class DocxExtractionService : IDocxExtractionService
             await ExtractAllMedia(doc, dokumenId);
             
             var body = doc.MainDocumentPart!.Document.Body!;
+            var numberingPart = doc.MainDocumentPart.NumberingDefinitionsPart;
+            // Map: numId -> level -> counter
+            var numberingCounters = new Dictionary<int, Dictionary<int, int>>();
             
             // Collect all elements with their floating info
             var elementsWithPosition = new List<(OpenXmlElement element, bool isFloating, int floatYPosition, int originalIndex)>();
@@ -54,7 +57,7 @@ public class DocxExtractionService : IDocxExtractionService
             int seq = 1;
             foreach (var elem in reorderedElements)
             {
-                foreach (var (type, json) in ConvertBodyElementToItems(elem))
+                foreach (var (type, json) in ConvertBodyElementToItems(elem, numberingPart, numberingCounters))
                 {
                     _db.DokumenElemens.Add(new DokumenElemen
                     {
@@ -214,39 +217,28 @@ public class DocxExtractionService : IDocxExtractionService
             using var stream = imgPart.GetStream();
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms);
-            byte[] bytes = ms.ToArray();
             
-            string folder = Path.Combine(_storagePath, "dokumen_images", dokumenId.ToString());
-            Directory.CreateDirectory(folder);
+            string ext = Path.GetExtension(imgPart.Uri.OriginalString).TrimStart('.');
+            if (string.IsNullOrEmpty(ext)) ext = "png";
             
-            string ext = imgPart.ContentType.Split('/').Last();
-            string filename = $"{Guid.NewGuid()}.{ext}";
-            string filepath = Path.Combine(folder, filename);
+            string filename = $"{dokumenId}_{rId}.{ext}";
+            string fullPath = Path.Combine(_storagePath, filename);
             
-            await File.WriteAllBytesAsync(filepath, bytes);
-            
-            var dokumenMedia = new DokumenMedia
-            {
-                DokumenId = dokumenId,
-                DokumenMediaRid = rId,
-                DokumenMediaFilename = filename,
-                DokumenMediaFilepath = filepath,
-                DokumenMediaContentType = imgPart.ContentType
-            };
-            
-            _db.DokumenMedias.Add(dokumenMedia);
+            await File.WriteAllBytesAsync(fullPath, ms.ToArray());
+            _logger.LogInformation("Saved media: {Filename}", filename);
         }
-        
-        await _db.SaveChangesAsync();
     }
 
-    private IEnumerable<(string type, JObject json)> ConvertBodyElementToItems(OpenXmlElement elem)
+    private IEnumerable<(string type, JObject json)> ConvertBodyElementToItems(
+        OpenXmlElement elem, 
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         if (elem is Paragraph p)
-            return FlattenParagraph(p);
+            return FlattenParagraph(p, numberingPart, numberingCounters);
 
         if (elem is Table t)
-            return new[] { ("table", new JObject { ["content"] = new JObject { ["rows"] = ConvertTableRows(t, null!) } }) };
+            return new[] { ("table", new JObject { ["content"] = new JObject { ["rows"] = ConvertTableRows(t, numberingPart, numberingCounters) } }) };
 
         if (elem is SectionProperties)
             return new[] { ("sectionBreak", new JObject()) };
@@ -260,10 +252,13 @@ public class DocxExtractionService : IDocxExtractionService
         return new[] { (elem.LocalName, new JObject { ["xml"] = elem.OuterXml }) };
     }
 
-    private IEnumerable<(string type, JObject json)> FlattenParagraph(Paragraph p)
+    private IEnumerable<(string type, JObject json)> FlattenParagraph(
+        Paragraph p,
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         var paragraphType = DetectParagraphType(p);
-        var content = ExtractParagraphContentSorted(p);
+        var content = ExtractParagraphContentSorted(p, numberingPart, numberingCounters);
 
         if (content.Count == 0) yield break;
 
@@ -275,27 +270,74 @@ public class DocxExtractionService : IDocxExtractionService
     /// Items without _sortY (or _sortY=0) appear first in their original order,
     /// then anchored shapes with _sortY > 0 are appended sorted by their Y position.
     /// </summary>
-    private JArray ExtractParagraphContentSorted(Paragraph p)
+    private JArray ExtractParagraphContentSorted(
+        Paragraph p,
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         var regularItems = new List<(JToken item, int originalIndex)>();
         var anchoredItems = new List<(JObject item, int sortY, int originalIndex)>();
-        var sb = new System.Text.StringBuilder();
+        
         int itemIndex = 0;
+        var helper = new ParagraphContentHelper();
+        
+        // --- Numbering Extraction Logic ---
+        string numberingText = "";
+        
+        if (p.ParagraphProperties?.NumberingProperties != null && numberingPart != null && numberingCounters != null)
+        {
+            try 
+            {
+                var numPr = p.ParagraphProperties.NumberingProperties;
+                var numId = numPr.NumberingId?.Val;
+                var ilvl = numPr.NumberingLevelReference?.Val ?? 0;
+                
+                if (numId != null)
+                {
+                    string label = GetNumberingText(numberingPart, numId.Value, ilvl.Value, numberingCounters);
+                    if (!string.IsNullOrEmpty(label))
+                    {
+                        numberingText = label + " "; // Add space for separation
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                 _logger.LogWarning(ex, "Failed to resolve numbering for paragraph");
+            }
+        }
+        
+        // Add numbering as the VERY FIRST item if valid
+        if (!string.IsNullOrEmpty(numberingText))
+        {
+             regularItems.Add((new JObject { ["type"] = "text", ["value"] = numberingText }, itemIndex++));
+        }
+        // ----------------------------------
 
         void FlushText()
         {
-            var text = sb.ToString();
-            sb.Clear();
-            if (!string.IsNullOrWhiteSpace(text))
+            var text = helper.FlushAndClear();
+            if (!string.IsNullOrEmpty(text))
+            {
                 regularItems.Add((new JObject { ["type"] = "text", ["value"] = text }, itemIndex++));
+            }
         }
-
+        
         void ProcessElement(OpenXmlElement elem, bool skipTextBox = false)
         {
-            if (elem is DocumentFormat.OpenXml.Math.OfficeMath om)
+            var sb = helper.StringBuilder;
+            
+            if (elem is Run or DocumentFormat.OpenXml.Math.Run) 
+            {
+                foreach (var child in elem.ChildElements)
+                {
+                    ProcessElement(child, skipTextBox);
+                }
+            }
+            else if (elem is DocumentFormat.OpenXml.Math.OfficeMath om)
             {
                 FlushText();
-                var result = om.InnerText?.Trim() ?? "";
+                var result = string.Join("", om.Descendants<DocumentFormat.OpenXml.Math.Text>().Select(t => t.Text).Where(t => !string.IsNullOrWhiteSpace(t)));
                 if (!string.IsNullOrWhiteSpace(result))
                     regularItems.Add((new JObject { ["type"] = "math", ["text"] = result }, itemIndex++));
             }
@@ -327,7 +369,7 @@ public class DocxExtractionService : IDocxExtractionService
                 
                 // Check if this drawing is anchored (floating)
                 var anchor = drawing.Descendants<DocumentFormat.OpenXml.Drawing.Wordprocessing.Anchor>().FirstOrDefault();
-                var drawingItem = ExtractDrawingContent(drawing);
+                var drawingItem = ExtractDrawingContent(drawing, numberingPart, numberingCounters);
                 
                 if (drawingItem != null)
                 {
@@ -365,7 +407,7 @@ public class DocxExtractionService : IDocxExtractionService
             else if (elem is DocumentFormat.OpenXml.Wordprocessing.TextBoxContent txbx && !skipTextBox)
             {
                 FlushText();
-                var shapeData = ExtractTextBoxAsShape(txbx, elem.Parent);
+                var shapeData = ExtractTextBoxAsShape(txbx, elem.Parent, numberingPart, numberingCounters);
                 if (shapeData != null)
                     regularItems.Add((shapeData, itemIndex++));
             }
@@ -401,16 +443,161 @@ public class DocxExtractionService : IDocxExtractionService
         
         return result;
     }
+    
+    private string GetNumberingText(NumberingDefinitionsPart numberingPart, int numId, int ilvl, Dictionary<int, Dictionary<int, int>> counters)
+    {
+        // 1. Find the Num instance
+        var numInstance = numberingPart.Numbering.Elements<DocumentFormat.OpenXml.Wordprocessing.NumberingInstance>().FirstOrDefault(n => n.NumberID?.Value == numId);
+        if (numInstance == null) return "?";
+        
+        int abstractNumId = numInstance.AbstractNumId?.Val?.Value ?? -1;
+        
+        // 2. Find AbstractNum
+        var abstractNum = numberingPart.Numbering.Elements<DocumentFormat.OpenXml.Wordprocessing.AbstractNum>().FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
+        if (abstractNum == null) return "?";
+        
+        // 3. Find Level definition
+        var level = abstractNum.Elements<DocumentFormat.OpenXml.Wordprocessing.Level>().FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == ilvl);
+        if (level == null) return "?";
+        
+        // 4. Update Counter
+        if (!counters.ContainsKey(numId))
+            counters[numId] = new Dictionary<int, int>();
+            
+        if (!counters[numId].ContainsKey(ilvl))
+        {
+             // Initialize counter (default to StartingIndex or 1)
+             int start = level.StartNumberingValue?.Val ?? 1;
+             counters[numId][ilvl] = start;
+        }
+        else
+        {
+             // Increment
+             counters[numId][ilvl]++;
+        }
+        
+        // Reset deeper levels? usually implicit in Word, but simple approx:
+        // When level N increments, reset N+1, N+2, etc.
+        foreach(var key in counters[numId].Keys.ToList())
+        {
+            if (key > ilvl) counters[numId].Remove(key);
+        }
+        
+        int currentVal = counters[numId][ilvl];
+        
+        // 5. Format Text
+        // lvlText e.g. "%1." or "(%1)"
+        // numFmt e.g. "decimal", "bullet", "lowerLetter"
+        
+        string lvlText = level.LevelText?.Val?.ToString() ?? "";
+        string numFmt = level.NumberingFormat?.Val?.ToString() ?? "decimal";
+        
+        if (numFmt == "bullet")
+        {
+             // Ignore counter for bullets, use the actual char if present in LevelText or fallback
+             return lvlText.Length > 0 ? lvlText : "•"; 
+        }
+        
+        // Convert integer to requested format string
+        string valStr = currentVal.ToString();
+        
+        if (numFmt == "lowerLetter") 
+        {
+            // 1->a, 2->b...
+            valStr = GetLetter(currentVal, true);
+        }
+        else if (numFmt == "upperLetter")
+        {
+            valStr = GetLetter(currentVal, false);
+        }
+        else if (numFmt == "lowerRoman")
+        {
+            valStr = ToRoman(currentVal).ToLowerInvariant();
+        }
+        else if (numFmt == "upperRoman")
+        {
+            valStr = ToRoman(currentVal);
+        }
+        
+        // Replace placeholders %1, %2 etc. with values from higher levels if needed
+        // For simplicity, we mostly handle %1 for current level. 
+        // A robust system needs to pull counters[numId][0], counters[numId][1] etc.
+        
+        // Replace the place holder for this level (level index is 0-based, placeholder is 1-based usually)
+        // e.g. for Level 0, placeholder is %1. For Level 1, might be %1.%2
+        
+        // Simple replacement algorithm:
+        // Iterate levels 0 to ilvl, get their current counter values, format them, and replace %1..%(ilvl+1)
+        
+        string formatted = lvlText;
+        for (int i = 0; i <= ilvl; i++)
+        {
+             int cVal = counters[numId].ContainsKey(i) ? counters[numId][i] : (abstractNum.Elements<DocumentFormat.OpenXml.Wordprocessing.Level>().FirstOrDefault(l => l.LevelIndex==i)?.StartNumberingValue?.Val ?? 1);
+             
+             // We need the format of THAT level too
+             var subLevel = abstractNum.Elements<DocumentFormat.OpenXml.Wordprocessing.Level>().FirstOrDefault(l => l.LevelIndex==i);
+             string subFmt = subLevel?.NumberingFormat?.Val?.ToString() ?? "decimal";
+             
+             string subValStr = cVal.ToString();
+             if (subFmt == "lowerLetter") subValStr = GetLetter(cVal, true);
+             else if (subFmt == "upperLetter") subValStr = GetLetter(cVal, false);
+             else if (subFmt == "lowerRoman") subValStr = ToRoman(cVal).ToLowerInvariant();
+             else if (subFmt == "upperRoman") subValStr = ToRoman(cVal);
+             else if (subFmt == "bullet") subValStr = subLevel?.LevelText?.Val ?? "";
+
+             formatted = formatted.Replace($"%{i+1}", subValStr);
+        }
+        
+        return formatted;
+    }
+    
+    private string GetLetter(int val, bool lower)
+    {
+        // 1->A, 26->Z, 27->AA...
+        if (val <= 0) return "?";
+        val--; 
+        string s = "";
+        do {
+            s = (char)('A' + (val % 26)) + s;
+            val /= 26;
+            val--;
+        } while (val >= 0);
+        return lower ? s.ToLowerInvariant() : s;
+    }
+    
+    private string ToRoman(int number) 
+    {
+        if (number < 1) return string.Empty;
+        if (number >= 1000) return "M" + ToRoman(number - 1000);
+        if (number >= 900) return "CM" + ToRoman(number - 900);
+        if (number >= 500) return "D" + ToRoman(number - 500);
+        if (number >= 400) return "CD" + ToRoman(number - 400);
+        if (number >= 100) return "C" + ToRoman(number - 100);
+        if (number >= 90) return "XC" + ToRoman(number - 90);
+        if (number >= 50) return "L" + ToRoman(number - 50);
+        if (number >= 40) return "XL" + ToRoman(number - 40);
+        if (number >= 10) return "X" + ToRoman(number - 10);
+        if (number >= 9) return "IX" + ToRoman(number - 9);
+        if (number >= 5) return "V" + ToRoman(number - 5);
+        if (number >= 4) return "IV" + ToRoman(number - 4);
+        return "I" + ToRoman(number - 1);
+    }
 
     /// <summary>
     /// Legacy method for table cell extraction - uses sorted extraction
     /// </summary>
-    private JArray ExtractParagraphContent(Paragraph p)
+    private JArray ExtractParagraphContent(
+        Paragraph p,
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
-        return ExtractParagraphContentSorted(p);
+        return ExtractParagraphContentSorted(p, numberingPart, numberingCounters);
     }
 
-    private JObject? ExtractDrawingContent(Drawing drawing)
+    private JObject? ExtractDrawingContent(
+        Drawing drawing,
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         var (shapeId, shapeName) = GetShapeIdentity(drawing);
         
@@ -477,6 +664,19 @@ public class DocxExtractionService : IDocxExtractionService
         
         var txbxContents = drawing.Descendants<DocumentFormat.OpenXml.Wordprocessing.TextBoxContent>().ToList();
         
+        // Check for TextBox content
+        var txbxContent = drawing.Descendants<DocumentFormat.OpenXml.Wordprocessing.TextBoxContent>().FirstOrDefault();
+        if (txbxContent != null)
+        {
+            // Extract content from text box
+            var content = ExtractTextBoxAsItems(txbxContent, numberingPart, numberingCounters);
+            return new JObject { 
+                ["type"] = "shape", 
+                ["content"] = content, 
+                ["_sortY"] = sortYPosition
+            };
+        }
+
         // Pure image (no textbox)
         if (blips.Count == 1 && !txbxContents.Any())
             return new JObject { ["type"] = "image", ["rId"] = blips[0] };
@@ -551,7 +751,10 @@ public class DocxExtractionService : IDocxExtractionService
         };
     }
 
-    private JArray ExtractTextBoxContent(OpenXmlElement container)
+    private JArray ExtractTextBoxContent(
+        OpenXmlElement container,
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         var content = new JArray();
         
@@ -559,13 +762,13 @@ public class DocxExtractionService : IDocxExtractionService
         {
             if (elem is Paragraph para)
             {
-                var paraContent = ExtractParagraphContent(para);
+                var paraContent = ExtractParagraphContent(para, numberingPart, numberingCounters);
                 foreach (var item in paraContent)
                     content.Add(item);
             }
             else if (elem is Table table)
             {
-                var tableRows = ConvertTableRows(table, null!);
+                var tableRows = ConvertTableRows(table, numberingPart, numberingCounters);
                 content.Add(new JObject { ["type"] = "table", ["rows"] = tableRows });
             }
         }
@@ -573,7 +776,10 @@ public class DocxExtractionService : IDocxExtractionService
         return content;
     }
 
-    private JArray ExtractTextBoxAsItems(OpenXmlElement container)
+    private JArray ExtractTextBoxAsItems(
+        OpenXmlElement container,
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         var items = new JArray();
         
@@ -581,13 +787,13 @@ public class DocxExtractionService : IDocxExtractionService
         {
             if (elem is Paragraph para)
             {
-                var paraContent = ExtractParagraphContent(para);
+                var paraContent = ExtractParagraphContent(para, numberingPart, numberingCounters);
                 foreach (var item in paraContent)
                     items.Add(item);
             }
             else if (elem is Table table)
             {
-                var tableRows = ConvertTableRows(table, null!);
+                var tableRows = ConvertTableRows(table, numberingPart, numberingCounters);
                 items.Add(new JObject { ["type"] = "table", ["rows"] = tableRows });
             }
         }
@@ -595,10 +801,14 @@ public class DocxExtractionService : IDocxExtractionService
         return items;
     }
 
-    private JObject? ExtractTextBoxAsShape(OpenXmlElement txbxContent, OpenXmlElement? parent)
+    private JObject? ExtractTextBoxAsShape(
+        OpenXmlElement txbxContent, 
+        OpenXmlElement? parent,
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         var (shapeId, shapeName) = GetVmlShapeIdentity(parent);
-        var content = ExtractTextBoxAsItems(txbxContent);
+        var content = ExtractTextBoxAsItems(txbxContent, numberingPart, numberingCounters);
         
         var result = new JObject { ["type"] = "shape" };
         if (content.Count > 0)
@@ -696,69 +906,58 @@ public class DocxExtractionService : IDocxExtractionService
 
 
 
-    private JArray ConvertTableRows(Table t, MainDocumentPart mainPart)
+    private JArray ConvertTableRows(
+        Table table, 
+        NumberingDefinitionsPart? numberingPart = null,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
     {
         var rows = new JArray();
-
-        foreach (var row in t.Elements<TableRow>())
+        
+        foreach (var row in table.Descendants<TableRow>())
         {
-            var cells = new JArray();
-
-            foreach (var cell in row.Elements<TableCell>())
+            var rowJson = new JObject { ["cells"] = new JArray() };
+            foreach (var cell in row.Descendants<TableCell>())
             {
-                var cellInlines = new JArray();
+                var cellContent = new JArray();
                 
-                // Collect all items with their Y positions for sorting
-                var itemsWithPosition = new List<(JToken item, int yPosition, int originalIndex)>();
-                int itemIndex = 0;
-                
-                foreach (var elem in cell.ChildElements)
+                foreach (var element in cell.Elements())
                 {
-                    if (elem is Paragraph para)
-                    {
-                        var paraContent = ExtractParagraphContent(para);
-                        foreach (var item in paraContent)
-                        {
-                            // Get Y position from _sortY property if it exists
-                            int yPos = 0;
-                            if (item is JObject jObj && jObj["_sortY"] != null)
-                            {
-                                yPos = jObj["_sortY"]!.Value<int>();
-                            }
-                            itemsWithPosition.Add((item, yPos, itemIndex++));
-                        }
-                    }
-                    else if (elem is Table nestedTable)
-                    {
-                        var nestedRows = ConvertTableRows(nestedTable, null!);
-                        var tableItem = new JObject { ["type"] = "table", ["rows"] = nestedRows };
-                        itemsWithPosition.Add((tableItem, 0, itemIndex++));
-                    }
+                     if (element is Paragraph p)
+                     {
+                         var pType = DetectParagraphType(p);
+                         // Use Sorted here
+                         var pContent = ExtractParagraphContentSorted(p, numberingPart, numberingCounters);
+                         if (pContent.Count > 0)
+                            cellContent.Add(new JObject { ["type"] = pType, ["content"] = pContent });
+                     }
+                     else if (element is Table nestedTable)
+                     {
+                         // Recursive table processing
+                         var nestedRows = ConvertTableRows(nestedTable, numberingPart, numberingCounters);
+                         cellContent.Add(new JObject { ["type"] = "table", ["content"] = new JObject { ["rows"] = nestedRows } });
+                     }
                 }
                 
-                // Sort items by Y position (shapes with Y > 0 should be in visual order)
-                var sortedItems = itemsWithPosition
-                    .OrderBy(x => x.yPosition > 0 ? x.yPosition : int.MaxValue) // Items with Y position first
-                    .ThenBy(x => x.originalIndex) // Then by original order for items without Y position
-                    .ToList();
-                
-                foreach (var (item, yPos, idx) in sortedItems)
-                {
-                    // Remove _sortY property before adding to result (internal use only)
-                    if (item is JObject jObj && jObj["_sortY"] != null)
-                    {
-                        jObj.Remove("_sortY");
-                    }
-                    cellInlines.Add(item);
-                }
-                
-                cells.Add(cellInlines);
+                ((JArray)rowJson["cells"]!).Add(new JObject { ["content"] = cellContent });
             }
-
-            rows.Add(new JObject { ["cells"] = cells });
+            rows.Add(rowJson);
         }
-
         return rows;
     }
 
+}
+
+/// <summary>
+/// Helper class for paragraph content extraction
+/// </summary>
+internal class ParagraphContentHelper
+{
+    public System.Text.StringBuilder StringBuilder { get; } = new System.Text.StringBuilder();
+    
+    public string FlushAndClear()
+    {
+        var text = StringBuilder.ToString();
+        StringBuilder.Clear();
+        return text;
+    }
 }

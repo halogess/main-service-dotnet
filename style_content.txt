@@ -1,0 +1,1 @@
+﻿<w:style w:type="paragraph" w:customStyle="1" w:styleId="STTSSegmenProgramContent"><w:name w:val="[STTS] Segmen Program Content"/><w:basedOn w:val="STTSSegmenProgram"/><w:qFormat/><w:rsid w:val="007834C5"/><w:pPr><w:numPr><w:numId w:val="19"/></w:numPr></w:pPr><w:rPr><w:rFonts w:ascii="Courier New" w:hAnsi="Courier New"/><w:b w:val="0"/><w:sz w:val="20"/></w:rPr></w:style>

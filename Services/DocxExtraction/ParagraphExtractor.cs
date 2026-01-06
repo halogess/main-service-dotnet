@@ -111,27 +111,46 @@ public class ParagraphExtractor
                 // Try to get numbering from direct pPr or style chain
                 int? numId = null;
                 int ilvl = 0;
+                string source = "none";
                 
                 // Check direct numPr first
                 var directNumPr = p.ParagraphProperties?.NumberingProperties;
                 if (directNumPr?.NumberingId?.Val != null)
                 {
-                    numId = directNumPr.NumberingId.Val.Value;
-                    ilvl = directNumPr.NumberingLevelReference?.Val?.Value ?? 0;
+                    int directNumId = directNumPr.NumberingId.Val.Value;
+                    // numId=0 means "disable numbering from style" - don't process further
+                    if (directNumId == 0)
+                    {
+                        // Explicitly disabled, skip numbering entirely
+                        numId = null;
+                        source = "disabled";
+                    }
+                    else
+                    {
+                        numId = directNumId;
+                        ilvl = directNumPr.NumberingLevelReference?.Val?.Value ?? 0;
+                        source = "direct";
+                    }
                 }
-                // Fallback to style chain
+                // Fallback to style chain (only if no direct numPr)
                 else if (_styleResolver != null)
                 {
                     var (styleNumId, styleIlvl) = _styleResolver.GetEffectiveNumberingProperties(p);
-                    numId = styleNumId;
-                    ilvl = styleIlvl;
+                    if (styleNumId != null && styleNumId.Value != 0)
+                    {
+                        numId = styleNumId;
+                        ilvl = styleIlvl;
+                        source = "style";
+                    }
                 }
                 
-                if (numId != null)
+                if (numId != null && numId.Value > 0)
                 {
                     string label = GetNumberingText(numberingPart, numId.Value, ilvl, numberingCounters);
                     if (!string.IsNullOrEmpty(label))
                         numberingText = label + " ";
+                    _logger.LogInformation("Numbering: source={Source}, numId={NumId}, ilvl={Ilvl}, label={Label}", 
+                        source, numId, ilvl, label);
                 }
             }
             catch (Exception ex)
@@ -162,7 +181,7 @@ public class ParagraphExtractor
             else if (elem is DocumentFormat.OpenXml.Math.OfficeMath om)
             {
                 FlushText();
-                var result = string.Join("", om.Descendants<DocumentFormat.OpenXml.Math.Text>().Select(t => t.Text).Where(t => !string.IsNullOrWhiteSpace(t)));
+                var result = ExtractMathContent(om);
                 if (!string.IsNullOrWhiteSpace(result))
                     regularItems.Add((new JObject { ["type"] = "math", ["text"] = result }, itemIndex++));
             }
@@ -171,7 +190,7 @@ public class ParagraphExtractor
                 FlushText();
                 foreach (var oMath in mathPara.Elements<DocumentFormat.OpenXml.Math.OfficeMath>())
                 {
-                    var result = string.Join("", oMath.Descendants<DocumentFormat.OpenXml.Math.Text>().Select(t => t.Text).Where(t => !string.IsNullOrWhiteSpace(t)));
+                    var result = ExtractMathContent(oMath);
                     if (!string.IsNullOrWhiteSpace(result))
                         regularItems.Add((new JObject { ["type"] = "math", ["text"] = result }, itemIndex++));
                 }
@@ -310,6 +329,8 @@ public class ParagraphExtractor
     }
 
     // Numbering helper methods
+    // Note: counters are keyed by abstractNumId (not numId) because multiple numIds can share the same abstractNumId
+    // When a numId has startOverride, it resets the counter for that abstractNumId
     public string GetNumberingText(NumberingDefinitionsPart numberingPart, int numId, int ilvl, Dictionary<int, Dictionary<int, int>> counters)
     {
         var numInstance = numberingPart.Numbering.Elements<NumberingInstance>().FirstOrDefault(n => n.NumberID?.Value == numId);
@@ -323,25 +344,48 @@ public class ParagraphExtractor
         var level = abstractNum.Elements<Level>().FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == ilvl);
         if (level == null) return "?";
         
-        if (!counters.ContainsKey(numId))
-            counters[numId] = new Dictionary<int, int>();
-            
-        if (!counters[numId].ContainsKey(ilvl))
+        // Check for lvlOverride with startOverride in num instance
+        // This allows restart of numbering at specific values
+        int? startOverride = null;
+        var lvlOverride = numInstance.Elements<LevelOverride>().FirstOrDefault(lo => lo.LevelIndex?.Value == ilvl);
+        if (lvlOverride != null)
         {
+            startOverride = lvlOverride.StartOverrideNumberingValue?.Val?.Value;
+        }
+        
+        // Use abstractNumId as key (not numId) so that different numIds sharing same abstractNumId share counter
+        if (!counters.ContainsKey(abstractNumId))
+            counters[abstractNumId] = new Dictionary<int, int>();
+        
+        // Track applied startOverrides using negative numId as key in a special entry
+        // Key -1 stores a set of applied numIds (encoded as bit positions would be complex, so we use negative keys)
+        int appliedKey = -numId - 1; // Use negative numId as key to track if startOverride was applied
+        bool startOverrideApplied = counters.ContainsKey(appliedKey);
+        
+        if (startOverride.HasValue && !startOverrideApplied)
+        {
+            // First time seeing this numId with startOverride - apply it and mark as applied
+            counters[appliedKey] = new Dictionary<int, int>(); // Just mark that this numId's startOverride was applied
+            counters[abstractNumId][ilvl] = startOverride.Value;
+        }
+        else if (!counters[abstractNumId].ContainsKey(ilvl))
+        {
+            // First time seeing this level for this abstractNumId (no startOverride or already applied)
             int start = level.StartNumberingValue?.Val ?? 1;
-            counters[numId][ilvl] = start;
+            counters[abstractNumId][ilvl] = start;
         }
         else
         {
-            counters[numId][ilvl]++;
+            counters[abstractNumId][ilvl]++;
         }
         
-        foreach (var key in counters[numId].Keys.ToList())
+        // Reset lower levels when we move to a higher level
+        foreach (var key in counters[abstractNumId].Keys.ToList())
         {
-            if (key > ilvl) counters[numId].Remove(key);
+            if (key > ilvl) counters[abstractNumId].Remove(key);
         }
         
-        int currentVal = counters[numId][ilvl];
+        int currentVal = counters[abstractNumId][ilvl];
         
         string lvlText = level.LevelText?.Val?.ToString() ?? "";
         string numFmt = level.NumberingFormat?.Val?.ToString() ?? "decimal";
@@ -352,7 +396,7 @@ public class ParagraphExtractor
         string formatted = lvlText;
         for (int i = 0; i <= ilvl; i++)
         {
-            int cVal = counters[numId].ContainsKey(i) ? counters[numId][i] : (int)(abstractNum.Elements<Level>().FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == i)?.StartNumberingValue?.Val ?? 1);
+            int cVal = counters[abstractNumId].ContainsKey(i) ? counters[abstractNumId][i] : (int)(abstractNum.Elements<Level>().FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == i)?.StartNumberingValue?.Val ?? 1);
              
             var subLevel = abstractNum.Elements<Level>().FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == i);
             string subFmt = subLevel?.NumberingFormat?.Val?.ToString() ?? "decimal";

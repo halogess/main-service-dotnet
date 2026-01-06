@@ -51,6 +51,11 @@ public class DocxExtractionService : IDocxExtractionService
             
             using var doc = WordprocessingDocument.Open(docxPath, false);
             
+            // Initialize StyleResolver for style chain resolution
+            var stylesPart = doc.MainDocumentPart?.StyleDefinitionsPart;
+            var styleResolver = new StyleResolver(stylesPart);
+            _paragraphExtractor.SetStyleResolver(styleResolver);
+            
             await _mediaExtractor.ExtractAllMedia(doc, dokumenId);
             
             var body = doc.MainDocumentPart!.Document.Body!;

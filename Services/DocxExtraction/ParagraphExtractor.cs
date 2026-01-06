@@ -29,11 +29,20 @@ public class ParagraphExtractor
 {
     private readonly ILogger _logger;
     private readonly DrawingExtractor _drawingExtractor;
+    private StyleResolver? _styleResolver;
 
     public ParagraphExtractor(ILogger logger, DrawingExtractor drawingExtractor)
     {
         _logger = logger;
         _drawingExtractor = drawingExtractor;
+    }
+    
+    /// <summary>
+    /// Sets the StyleResolver for resolving numbering from style chain
+    /// </summary>
+    public void SetStyleResolver(StyleResolver? styleResolver)
+    {
+        _styleResolver = styleResolver;
     }
 
     public string DetectParagraphType(Paragraph p)
@@ -80,6 +89,7 @@ public class ParagraphExtractor
         yield return (paragraphType, new JObject { ["content"] = content });
     }
 
+
     public JArray ExtractParagraphContentSorted(
         Paragraph p,
         NumberingDefinitionsPart? numberingPart = null,
@@ -94,17 +104,32 @@ public class ParagraphExtractor
         // --- Numbering Extraction Logic ---
         string numberingText = "";
         
-        if (p.ParagraphProperties?.NumberingProperties != null && numberingPart != null && numberingCounters != null)
+        if (numberingPart != null && numberingCounters != null)
         {
             try 
             {
-                var numPr = p.ParagraphProperties.NumberingProperties;
-                var numId = numPr.NumberingId?.Val;
-                var ilvl = numPr.NumberingLevelReference?.Val ?? 0;
+                // Try to get numbering from direct pPr or style chain
+                int? numId = null;
+                int ilvl = 0;
+                
+                // Check direct numPr first
+                var directNumPr = p.ParagraphProperties?.NumberingProperties;
+                if (directNumPr?.NumberingId?.Val != null)
+                {
+                    numId = directNumPr.NumberingId.Val.Value;
+                    ilvl = directNumPr.NumberingLevelReference?.Val?.Value ?? 0;
+                }
+                // Fallback to style chain
+                else if (_styleResolver != null)
+                {
+                    var (styleNumId, styleIlvl) = _styleResolver.GetEffectiveNumberingProperties(p);
+                    numId = styleNumId;
+                    ilvl = styleIlvl;
+                }
                 
                 if (numId != null)
                 {
-                    string label = GetNumberingText(numberingPart, numId.Value, ilvl.Value, numberingCounters);
+                    string label = GetNumberingText(numberingPart, numId.Value, ilvl, numberingCounters);
                     if (!string.IsNullOrEmpty(label))
                         numberingText = label + " ";
                 }
@@ -333,7 +358,8 @@ public class ParagraphExtractor
             string subFmt = subLevel?.NumberingFormat?.Val?.ToString() ?? "decimal";
              
             string subValStr = cVal.ToString();
-            if (subFmt == "lowerLetter") subValStr = GetLetter(cVal, true);
+            if (subFmt == "decimalZero") subValStr = cVal.ToString("D2"); // 01, 02, 03...
+            else if (subFmt == "lowerLetter") subValStr = GetLetter(cVal, true);
             else if (subFmt == "upperLetter") subValStr = GetLetter(cVal, false);
             else if (subFmt == "lowerRoman") subValStr = ToRoman(cVal).ToLowerInvariant();
             else if (subFmt == "upperRoman") subValStr = ToRoman(cVal);

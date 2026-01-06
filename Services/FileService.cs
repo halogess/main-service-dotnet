@@ -64,7 +64,7 @@ public class FileService : IFileService
             if (stylesPart == null)
                 throw new InvalidOperationException("File tidak memiliki style definition. Pastikan file dibuat di Microsoft Word");
             
-            if (!stylesPart.Styles.OuterXml.Contains("styleId=\"Normal\""))
+            if (stylesPart?.Styles == null || !stylesPart.Styles.OuterXml.Contains("styleId=\"Normal\""))
                 throw new InvalidOperationException("File tidak memiliki style standar Microsoft Word");
         }
         catch (InvalidOperationException)

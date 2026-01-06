@@ -166,7 +166,7 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                 mahasiswaQuery = mahasiswaQuery.Where(m => m.JurKode == jurusan);
             
             if (!string.IsNullOrEmpty(search))
-                mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsNrp.Contains(search) || m.MhsNama.Contains(search));
+                mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsNrp.Contains(search) || (m.MhsNama != null && m.MhsNama.Contains(search)));
 
             var mahasiswaNonAktif = mahasiswaQuery.Select(m => m.MhsNrp).ToList();
             var filteredBukus = bukuList.Where(b => mahasiswaNonAktif.Contains(b.MhsNrp)).ToList();
@@ -208,16 +208,15 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                     jumlah_kesalahan = b.BukuJumlahKesalahan ?? 0
                 }).ToList();
 
-                var mhsData = mhs != null ? mhs : null;
                 return new {
                     nrp = g.Key,
-                    nama = mhsData?.MhsNama ?? "Unknown",
-                    angkatan = mhsData?.MhsAngkatan,
-                    status_mahasiswa = GetMahasiswaStatusLabel(mhsData?.MhsStatus, mhsData?.MhsLulusTahun),
+                    nama = mhs?.MhsNama ?? "Unknown",
+                    angkatan = mhs?.MhsAngkatan,
+                    status_mahasiswa = GetMahasiswaStatusLabel(mhs?.MhsStatus, mhs?.MhsLulusTahun),
                     jurusan = new {
-                        kode = mhsData?.JurKode,
-                        nama = mhsData?.JurNama ?? "Unknown",
-                        singkatan = mhsData?.JurSingkat ?? "Unknown"
+                        kode = mhs?.JurKode,
+                        nama = mhs?.JurNama ?? "Unknown",
+                        singkatan = mhs?.JurSingkat ?? "Unknown"
                     },
                     total_buku = bukuListData.Count,
                     riwayat_validasi = bukuListData

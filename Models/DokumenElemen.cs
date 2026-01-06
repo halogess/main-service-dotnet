@@ -13,6 +13,9 @@ public class DokumenElemen
     [Column("dokumen_id")]
     public int? DokumenId { get; set; }
 
+    [Column("dsec_id")]
+    public uint? DsecId { get; set; }
+
     [Column("dokumen_elemen_sequence")]
     public int? DokumenElemenSequence { get; set; }
 

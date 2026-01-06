@@ -10,10 +10,13 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<Dokumen> Dokumens { get; set; }
     public DbSet<DokumenElemen> DokumenElemens { get; set; }
     public DbSet<DokumenMedia> DokumenMedias { get; set; }
+    public DbSet<DokumenSection> DokumenSections { get; set; }
 
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
     public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
     public DbSet<Antrian> Antrians { get; set; }
+    public DbSet<Aturan> Aturans { get; set; }
+    public DbSet<AturanDetail> AturanDetails { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -51,6 +54,10 @@ public class KorektorBukuDbContext : DbContext
             entity.HasKey(e => e.DokumenMediaId);
         });
 
+        modelBuilder.Entity<DokumenSection>(entity =>
+        {
+            entity.HasKey(e => e.DsecId);
+        });
 
 
         modelBuilder.Entity<AdobeCredential>(entity =>
@@ -78,6 +85,26 @@ public class KorektorBukuDbContext : DbContext
             entity.Property(e => e.AntrianUpdatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP")
                 .ValueGeneratedOnAddOrUpdate();
+        });
+
+        modelBuilder.Entity<Aturan>(entity =>
+        {
+            entity.HasKey(e => e.AturanId);
+            entity.HasIndex(e => e.AturanVersi).IsUnique();
+            entity.Property(e => e.AturanCreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.Property(e => e.AturanUpdatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .ValueGeneratedOnAddOrUpdate();
+        });
+
+        modelBuilder.Entity<AturanDetail>(entity =>
+        {
+            entity.HasKey(e => e.AturanDetailId);
+            entity.HasOne(e => e.Aturan)
+                .WithMany()
+                .HasForeignKey(e => e.AturanId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

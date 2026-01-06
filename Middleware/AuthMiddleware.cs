@@ -18,7 +18,7 @@ public class AuthMiddleware
     {
         var path = context.Request.Path.Value?.ToLower();
         
-        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.Contains("/api/testing") == true || path == "/ws" || path == "/" || path == "/health")
+        if (path == "/api/auth/login" || path == "/api/auth/refresh" || path?.Contains("/api/testing") == true || path?.Contains("/api/rules") == true || path == "/ws" || path == "/" || path == "/health")
         {
             await _next(context);
             return;

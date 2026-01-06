@@ -13,6 +13,9 @@ public class Dokumen
     [Column("mhs_nrp")]
     public string MhsNrp { get; set; } = string.Empty;
 
+    [Column("dokumen_tipe")]
+    public string? DokumenTipe { get; set; }
+
     [Column("dokumen_filename")]
     public string DokumenFilename { get; set; } = string.Empty;
 

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
 
@@ -6,11 +7,11 @@ namespace ValidasiTugasAkhir.MainService.Controllers;
 [Route("api/[controller]")]
 public class JurusanController : ControllerBase
 {
-    private readonly SttsDbContext _sttsDb;
+    private readonly IJurusanService _jurusanService;
 
-    public JurusanController(SttsDbContext sttsDb)
+    public JurusanController(IJurusanService jurusanService)
     {
-        _sttsDb = sttsDb;
+        _jurusanService = jurusanService;
     }
 
     [HttpGet]
@@ -19,15 +20,13 @@ public class JurusanController : ControllerBase
         if (HttpContext.Items["Role"]?.ToString() != "admin")
             return Forbid();
 
-        var jurusans = _sttsDb.Jurusans
-            .Where(j => j.JurStatus == 1)
-            .Select(j => new {
-                kode = j.JurKode,
-                nama = j.JurNama,
-                singkatan = j.JurSingkat
-            })
-            .ToList();
-
-        return Ok(jurusans);
+        var jurusans = _jurusanService.GetActiveJurusans();
+        
+        return Ok(jurusans.Select(j => new
+        {
+            kode = j.Kode,
+            nama = j.Nama,
+            singkatan = j.Singkatan
+        }));
     }
 }

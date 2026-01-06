@@ -314,6 +314,252 @@ public class ParagraphExtractor
         return result;
     }
 
+    /// <summary>
+    /// Comprehensive extraction of math content including all special elements
+    /// </summary>
+    public string ExtractMathContent(OpenXmlElement mathElement)
+    {
+        var sb = new StringBuilder();
+        ExtractMathElementRecursive(mathElement, sb);
+        return sb.ToString();
+    }
+    
+    private void ExtractMathElementRecursive(OpenXmlElement element, StringBuilder sb)
+    {
+        // Process children in order
+        foreach (var child in element.ChildElements)
+        {
+            // Math Text - the basic text content
+            if (child is DocumentFormat.OpenXml.Math.Text t)
+            {
+                sb.Append(t.Text);
+            }
+            // Delimiter - handles (), [], {}, ||, etc.
+            else if (child is DocumentFormat.OpenXml.Math.Delimiter d)
+            {
+                // Get delimiter properties
+                var dPr = d.DelimiterProperties;
+                string beginChar = dPr?.BeginChar?.Val?.Value ?? "(";
+                string endChar = dPr?.EndChar?.Val?.Value ?? ")";
+                
+                sb.Append(beginChar);
+                
+                // Process delimiter elements (m:e inside delimiter)
+                foreach (var dElem in d.Elements<DocumentFormat.OpenXml.Math.Base>())
+                {
+                    ExtractMathElementRecursive(dElem, sb);
+                }
+                
+                sb.Append(endChar);
+            }
+            // Nary - summation, product, integral (∑, ∏, ∫)
+            else if (child is DocumentFormat.OpenXml.Math.Nary nary)
+            {
+                var naryPr = nary.NaryProperties;
+                string chr = naryPr?.AccentChar?.Val?.Value ?? "∑";
+                sb.Append(chr);
+                
+                // Subscript (lower limit)
+                var sub = nary.SubArgument;
+                if (sub != null)
+                {
+                    sb.Append("_");
+                    ExtractMathElementRecursive(sub, sb);
+                }
+                
+                // Superscript (upper limit)  
+                var sup = nary.SuperArgument;
+                if (sup != null)
+                {
+                    sb.Append("^");
+                    ExtractMathElementRecursive(sup, sb);
+                }
+                
+                // Base/argument
+                var baseElem = nary.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null)
+                {
+                    ExtractMathElementRecursive(baseElem, sb);
+                }
+            }
+            // Radical (square root, nth root)
+            else if (child is DocumentFormat.OpenXml.Math.Radical rad)
+            {
+                var radPr = rad.RadicalProperties;
+                var hideDegreeVal = radPr?.HideDegree?.Val?.Value;
+                bool hideDegree = hideDegreeVal == null || hideDegreeVal == DocumentFormat.OpenXml.Math.BooleanValues.True || hideDegreeVal == DocumentFormat.OpenXml.Math.BooleanValues.On;
+                
+                sb.Append("√");
+                
+                // Degree (for nth root)
+                if (!hideDegree)
+                {
+                    var degree = rad.Degree;
+                    if (degree != null)
+                    {
+                        sb.Append("[");
+                        ExtractMathElementRecursive(degree, sb);
+                        sb.Append("]");
+                    }
+                }
+                
+                sb.Append("(");
+                var baseElem = rad.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null)
+                {
+                    ExtractMathElementRecursive(baseElem, sb);
+                }
+                sb.Append(")");
+            }
+            // Fraction
+            else if (child is DocumentFormat.OpenXml.Math.Fraction frac)
+            {
+                sb.Append("(");
+                var num = frac.Numerator;
+                if (num != null) ExtractMathElementRecursive(num, sb);
+                sb.Append("/");
+                var den = frac.Denominator;
+                if (den != null) ExtractMathElementRecursive(den, sb);
+                sb.Append(")");
+            }
+            // Superscript
+            else if (child is DocumentFormat.OpenXml.Math.Superscript sSup)
+            {
+                var baseElem = sSup.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                sb.Append("^");
+                var supArg = sSup.SuperArgument;
+                if (supArg != null) ExtractMathElementRecursive(supArg, sb);
+            }
+            // Subscript
+            else if (child is DocumentFormat.OpenXml.Math.Subscript sSub)
+            {
+                var baseElem = sSub.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                sb.Append("_");
+                var subArg = sSub.SubArgument;
+                if (subArg != null) ExtractMathElementRecursive(subArg, sb);
+            }
+            // SubSuperscript (both sub and super)
+            else if (child is DocumentFormat.OpenXml.Math.SubSuperscript sSubSup)
+            {
+                var baseElem = sSubSup.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                sb.Append("_");
+                var subArg = sSubSup.SubArgument;
+                if (subArg != null) ExtractMathElementRecursive(subArg, sb);
+                sb.Append("^");
+                var supArg = sSubSup.SuperArgument;
+                if (supArg != null) ExtractMathElementRecursive(supArg, sb);
+            }
+            // Accent (overline, hat, arrow, etc.)
+            else if (child is DocumentFormat.OpenXml.Math.Accent acc)
+            {
+                var accPr = acc.AccentProperties;
+                string accChar = accPr?.AccentChar?.Val?.Value ?? "";
+                
+                var baseElem = acc.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                if (!string.IsNullOrEmpty(accChar)) sb.Append(accChar);
+            }
+            // Bar (overbar, underbar)
+            else if (child is DocumentFormat.OpenXml.Math.Bar bar)
+            {
+                var baseElem = bar.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                sb.Append("̄"); // combining overline
+            }
+            // Function (sin, cos, lim, etc.)
+            else if (child is DocumentFormat.OpenXml.Math.MathFunction func)
+            {
+                var funcName = func.FunctionName;
+                if (funcName != null) ExtractMathElementRecursive(funcName, sb);
+                
+                var baseElem = func.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+            }
+            // Limit Lower (e.g., lim with subscript)
+            else if (child is DocumentFormat.OpenXml.Math.LimitLower limLow)
+            {
+                var baseElem = limLow.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                sb.Append("_");
+                var limit = limLow.Limit;
+                if (limit != null) ExtractMathElementRecursive(limit, sb);
+            }
+            // Limit Upper
+            else if (child is DocumentFormat.OpenXml.Math.LimitUpper limUp)
+            {
+                var baseElem = limUp.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                sb.Append("^");
+                var limit = limUp.Limit;
+                if (limit != null) ExtractMathElementRecursive(limit, sb);
+            }
+            // Matrix
+            else if (child is DocumentFormat.OpenXml.Math.Matrix matrix)
+            {
+                sb.Append("[");
+                bool firstRow = true;
+                foreach (var row in matrix.Elements<DocumentFormat.OpenXml.Math.MatrixRow>())
+                {
+                    if (!firstRow) sb.Append("; ");
+                    firstRow = false;
+                    
+                    bool firstCol = true;
+                    foreach (var col in row.Elements<DocumentFormat.OpenXml.Math.Base>())
+                    {
+                        if (!firstCol) sb.Append(", ");
+                        firstCol = false;
+                        ExtractMathElementRecursive(col, sb);
+                    }
+                }
+                sb.Append("]");
+            }
+            // GroupChar (underbrace, overbrace, etc.)
+            else if (child is DocumentFormat.OpenXml.Math.GroupChar grpChr)
+            {
+                var grpPr = grpChr.GroupCharProperties;
+                string chr = grpPr?.AccentChar?.Val?.Value ?? "";
+                
+                var baseElem = grpChr.Elements<DocumentFormat.OpenXml.Math.Base>().FirstOrDefault();
+                if (baseElem != null) ExtractMathElementRecursive(baseElem, sb);
+                if (!string.IsNullOrEmpty(chr)) sb.Append(chr);
+            }
+            // Box, BorderBox, Equation Array - just recurse
+            else if (child is DocumentFormat.OpenXml.Math.Box 
+                  || child is DocumentFormat.OpenXml.Math.BorderBox
+                  || child is DocumentFormat.OpenXml.Math.EquationArray
+                  || child is DocumentFormat.OpenXml.Math.Phantom
+                  || child is DocumentFormat.OpenXml.Math.Run
+                  || child is DocumentFormat.OpenXml.Math.OfficeMath
+                  || child is DocumentFormat.OpenXml.Math.Base
+                  || child is DocumentFormat.OpenXml.Math.FunctionName
+                  || child is DocumentFormat.OpenXml.Math.Numerator
+                  || child is DocumentFormat.OpenXml.Math.Denominator
+                  || child is DocumentFormat.OpenXml.Math.Degree
+                  || child is DocumentFormat.OpenXml.Math.SubArgument
+                  || child is DocumentFormat.OpenXml.Math.SuperArgument
+                  || child is DocumentFormat.OpenXml.Math.Limit)
+            {
+                ExtractMathElementRecursive(child, sb);
+            }
+            // Skip properties and other non-content elements
+            else if (child.LocalName.EndsWith("Pr") || child is DocumentFormat.OpenXml.Math.ControlProperties)
+            {
+                // Skip properties
+            }
+            else
+            {
+                // For unknown elements, try to recurse if they have children
+                if (child.HasChildren)
+                {
+                    ExtractMathElementRecursive(child, sb);
+                }
+            }
+        }
+    }
+
     public string ExtractMathText(OpenXmlElement mathElement)
     {
         var innerText = mathElement.InnerText?.Trim();
@@ -387,11 +633,15 @@ public class ParagraphExtractor
         
         int currentVal = counters[abstractNumId][ilvl];
         
-        string lvlText = level.LevelText?.Val?.ToString() ?? "";
+        string lvlText = level.LevelText?.Val?.Value ?? "";
         string numFmt = level.NumberingFormat?.Val?.ToString() ?? "decimal";
         
         if (numFmt == "bullet")
-            return lvlText.Length > 0 ? lvlText : "•";
+        {
+            // Normalize bullet character - Word often uses Symbol/Wingdings font characters
+            string normalizedBullet = NormalizeBulletChar(lvlText);
+            return normalizedBullet.Length > 0 ? normalizedBullet : "•";
+        }
         
         string formatted = lvlText;
         for (int i = 0; i <= ilvl; i++)
@@ -407,12 +657,80 @@ public class ParagraphExtractor
             else if (subFmt == "upperLetter") subValStr = GetLetter(cVal, false);
             else if (subFmt == "lowerRoman") subValStr = ToRoman(cVal).ToLowerInvariant();
             else if (subFmt == "upperRoman") subValStr = ToRoman(cVal);
-            else if (subFmt == "bullet") subValStr = subLevel?.LevelText?.Val?.Value ?? "";
+            else if (subFmt == "bullet") subValStr = NormalizeBulletChar(subLevel?.LevelText?.Val?.Value ?? "");
 
             formatted = formatted.Replace($"%{i + 1}", subValStr);
         }
         
         return formatted;
+    }
+    
+    /// <summary>
+    /// Normalize bullet characters from Symbol/Wingdings fonts to proper Unicode
+    /// </summary>
+    private string NormalizeBulletChar(string bulletChar)
+    {
+        if (string.IsNullOrEmpty(bulletChar)) return "•";
+        
+        // Symbol font character mappings (Private Use Area -> Unicode)
+        // These are common bullet characters in Symbol font
+        var symbolMappings = new Dictionary<char, char>
+        {
+            { '\uF0B7', '•' },  // Bullet
+            { '\uF0A7', '•' },  // Bullet variant
+            { '\uF076', '•' },  // Another bullet
+            { '\uF0D8', '◆' },  // Diamond
+            { '\uF0FC', '✓' },  // Check mark
+            { '\uF0A8', '■' },  // Square bullet
+            { '\uF0E0', '→' },  // Arrow
+            { '\uF0E8', '⮕' },  // Arrow variant
+        };
+        
+        // Wingdings font character mappings
+        var wingdingsMappings = new Dictionary<char, char>
+        {
+            { '\u006C', '●' },  // Circle (Wingdings 'l')
+            { '\u006E', '■' },  // Square (Wingdings 'n')
+            { '\u0075', '◆' },  // Diamond (Wingdings 'u')
+            { '\u00A8', '➢' },  // Arrow (Wingdings)
+            { '\u00FC', '✓' },  // Check mark (Wingdings)
+            { '\u0076', '✔' },  // Check (Wingdings 'v')
+            { '\u00D8', '➔' },  // Arrow (Wingdings)
+            { '\u0077', '✗' },  // Cross (Wingdings 'w')
+        };
+        
+        // Check if it's a single character that needs mapping
+        if (bulletChar.Length == 1)
+        {
+            char c = bulletChar[0];
+            
+            // Try Symbol font mapping first (characters in Private Use Area)
+            if (symbolMappings.TryGetValue(c, out char symbol))
+                return symbol.ToString();
+                
+            // Try Wingdings mapping
+            if (wingdingsMappings.TryGetValue(c, out char wingding))
+                return wingding.ToString();
+                
+            // Common standalone bullet characters that are fine as-is
+            if (c == '•' || c == '●' || c == '○' || c == '■' || c == '□' || 
+                c == '◆' || c == '◇' || c == '▪' || c == '▫' || c == '►' ||
+                c == '➢' || c == '➤' || c == '✓' || c == '✔' || c == '✗' ||
+                c == '-' || c == '–' || c == '—' || c == '*')
+                return bulletChar;
+                
+            // If it's in Private Use Area but not mapped, use default bullet
+            if (c >= '\uE000' && c <= '\uF8FF')
+                return "•";
+                
+            // Check for common problematic characters that become '?' or '.'
+            // These are usually font-encoded symbols
+            if (c == '?' || c < 32)
+                return "•";
+        }
+        
+        // Return as-is if nothing matched
+        return bulletChar;
     }
     
     private string GetLetter(int val, bool lower)

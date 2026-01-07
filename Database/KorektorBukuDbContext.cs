@@ -14,6 +14,12 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<DokumenPart> DokumenParts { get; set; }
     public DbSet<DokumenNote> DokumenNotes { get; set; }
     public DbSet<DokumenFormatParagraf> DokumenFormatParagrafs { get; set; }
+    public DbSet<DokumenFormatTable> DokumenFormatTables { get; set; }
+    public DbSet<DokumenFormatTableRow> DokumenFormatTableRows { get; set; }
+    public DbSet<DokumenFormatTableCell> DokumenFormatTableCells { get; set; }
+    public DbSet<DokumenFormatText> DokumenFormatTexts { get; set; }
+    public DbSet<DokumenFormatDrawing> DokumenFormatDrawings { get; set; }
+    public DbSet<DokumenFormatField> DokumenFormatFields { get; set; }
 
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
     public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
@@ -93,6 +99,47 @@ public class KorektorBukuDbContext : DbContext
             entity.Property(e => e.DfpParaMarkRprJson).HasColumnType("longtext");
             entity.Property(e => e.DfpPprChangeJson).HasColumnType("longtext");
             entity.Property(e => e.DfpRawPprXml).HasColumnType("longtext");
+        });
+
+        modelBuilder.Entity<DokumenFormatTable>(entity =>
+        {
+            entity.HasKey(e => e.DftId);
+            entity.Property(e => e.DftTblBordersJson).HasColumnType("longtext");
+            entity.Property(e => e.DftTblpprJson).HasColumnType("longtext");
+            entity.Property(e => e.DftRawTblprXml).HasColumnType("longtext");
+        });
+
+        modelBuilder.Entity<DokumenFormatTableRow>(entity =>
+        {
+            entity.HasKey(e => e.DftrId);
+            entity.Property(e => e.DftrRawTrprXml).HasColumnType("longtext");
+        });
+
+        modelBuilder.Entity<DokumenFormatTableCell>(entity =>
+        {
+            entity.HasKey(e => e.DftcId);
+            entity.Property(e => e.DftcRawTcprXml).HasColumnType("longtext");
+        });
+
+        modelBuilder.Entity<DokumenFormatText>(entity =>
+        {
+            entity.HasKey(e => e.DftxId);
+            entity.Property(e => e.DftxRawRprXml).HasColumnType("longtext");
+        });
+
+        modelBuilder.Entity<DokumenFormatDrawing>(entity =>
+        {
+            entity.HasKey(e => e.DfdrId);
+            entity.Property(e => e.DfdrAnchorJson).HasColumnType("longtext");
+            entity.Property(e => e.DfdrWrapJson).HasColumnType("longtext");
+            entity.Property(e => e.DfdrRawDrawingXml).HasColumnType("longtext");
+        });
+
+        modelBuilder.Entity<DokumenFormatField>(entity =>
+        {
+            entity.HasKey(e => e.DffdId);
+            entity.Property(e => e.DffdInstrText).HasColumnType("text");
+            entity.Property(e => e.DffdResultText).HasColumnType("text");
         });
 
         modelBuilder.Entity<AdobeCredential>(entity =>

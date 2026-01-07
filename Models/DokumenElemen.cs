@@ -14,10 +14,10 @@ public class DokumenElemen
     public ulong DelemenId { get; set; }
 
     /// <summary>
-    /// Link to the parent document
+    /// Link to the containing part (body, header, footer, etc.)
     /// </summary>
-    [Column("dokumen_id")]
-    public uint? DokumenId { get; set; }
+    [Column("dpart_id")]
+    public uint? DpartId { get; set; }
 
     /// <summary>
     /// Order within the document (1-indexed)
@@ -43,12 +43,6 @@ public class DokumenElemen
     /// </summary>
     [Column("delemen_xml", TypeName = "longtext")]
     public string DelemenXml { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Link to the containing part (body, header, footer, etc.)
-    /// </summary>
-    [Column("dpart_id")]
-    public uint? DpartId { get; set; }
 
     // Navigation properties
     public virtual DokumenPart? Part { get; set; }

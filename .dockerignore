@@ -6,3 +6,5 @@ storage/
 *.user
 *.suo
 .env
+DbFixer/
+DocChecker/

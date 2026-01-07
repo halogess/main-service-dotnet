@@ -73,9 +73,9 @@ public class FloatingElementHelper
     /// <summary>
     /// Reorders floating elements locally within their clusters.
     /// </summary>
-    public List<OpenXmlElement> ReorderFloatingElements(List<(OpenXmlElement element, bool isFloating, int floatYPosition, int originalIndex)> elements)
+    public List<(OpenXmlElement element, int originalIndex)> ReorderFloatingElements(List<(OpenXmlElement element, bool isFloating, int floatYPosition, int originalIndex)> elements)
     {
-        var result = new List<OpenXmlElement>();
+        var result = new List<(OpenXmlElement element, int originalIndex)>();
         var cluster = new List<(OpenXmlElement element, int yPos, int origIdx)>();
 
         foreach (var (element, isFloating, floatY, origIdx) in elements)
@@ -91,16 +91,19 @@ public class FloatingElementHelper
                     var sortedCluster = cluster
                         .OrderBy(c => c.yPos)
                         .ThenBy(c => c.origIdx)
-                        .Select(c => c.element);
+                        .Select(c => (c.element, c.origIdx));
                     
                     result.AddRange(sortedCluster);
                     
-                    if (cluster.Count > 1)
-                        _logger.LogInformation("Sorted local cluster of {Count} floating elements around index {Idx}", cluster.Count, cluster[0].origIdx);
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        var positions = string.Join(", ", cluster.Select(c => $"{c.yPos} (idx {c.origIdx})"));
+                        _logger.LogDebug("Reordered floating cluster: {Positions}", positions);
+                    }
                     
                     cluster.Clear();
                 }
-                result.Add(element);
+                result.Add((element, origIdx));
             }
         }
 
@@ -109,11 +112,15 @@ public class FloatingElementHelper
             var sortedCluster = cluster
                 .OrderBy(c => c.yPos)
                 .ThenBy(c => c.origIdx)
-                .Select(c => c.element);
+                .Select(c => (c.element, c.origIdx));
+            
             result.AddRange(sortedCluster);
             
-            if (cluster.Count > 1)
-                _logger.LogInformation("Sorted final cluster of {Count} floating elements", cluster.Count);
+            if (_logger.IsEnabled(LogLevel.Debug))
+            {
+                var positions = string.Join(", ", cluster.Select(c => $"{c.yPos} (idx {c.origIdx})"));
+                _logger.LogDebug("Reordered floating cluster at end: {Positions}", positions);
+            }
         }
 
         return result;

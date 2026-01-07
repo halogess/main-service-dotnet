@@ -1,0 +1,4 @@
+﻿Checking element identity consistency...
+Total elements: 374
+Identity mismatches: 0
+PASS: objects preserve identity.

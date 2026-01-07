@@ -431,7 +431,13 @@ public class TestingController : ControllerBase
                 return NotFound(new { message = "File DOCX tidak ditemukan" });
 
             // Delete existing elements and media
-            var existingElements = _db.DokumenElemens.Where(e => e.DokumenId == dokumenId);
+            // Get all part IDs for this dokumen through sections
+            var partIds = await _db.DokumenParts
+                .Where(p => p.Section != null && p.Section.DokumenId == dokumenId)
+                .Select(p => p.DpartId)
+                .ToListAsync();
+            
+            var existingElements = _db.DokumenElemens.Where(e => e.DpartId.HasValue && partIds.Contains(e.DpartId.Value));
             _db.DokumenElemens.RemoveRange(existingElements);
             
             var existingMedia = _db.DokumenMedias.Where(m => m.DokumenId == dokumenId);
@@ -442,7 +448,12 @@ public class TestingController : ControllerBase
             // Re-extract
             await _docxExtraction.ExtractDocxToDatabase(docxPath, dokumenId);
 
-            var newCount = await _db.DokumenElemens.CountAsync(e => e.DokumenId == dokumenId);
+            // Get updated part IDs after re-extraction
+            var newPartIds = await _db.DokumenParts
+                .Where(p => p.Section != null && p.Section.DokumenId == dokumenId)
+                .Select(p => p.DpartId)
+                .ToListAsync();
+            var newCount = await _db.DokumenElemens.CountAsync(e => e.DpartId.HasValue && newPartIds.Contains(e.DpartId.Value));
             return Ok(new { 
                 message = "Re-ekstraksi DOCX berhasil", 
                 dokumen_id = dokumenId,

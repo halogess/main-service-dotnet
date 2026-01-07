@@ -4,7 +4,7 @@ using ValidasiTugasAkhir.MainService.Models;
 namespace ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 
 /// <summary>
-/// Extracts table row formatting properties from OpenXML w:trPr into DokumenFormatRow.
+/// Extracts table row formatting properties from OpenXML w:trPr into DokumenFormatTableRow.
 /// Uses TableStyleResolver to get effective properties after style inheritance and conditional formatting.
 /// </summary>
 public class TableRowFormatExtractor
@@ -20,13 +20,13 @@ public class TableRowFormatExtractor
     /// Extract row properties from a TableRow element.
     /// Requires position context for conditional style resolution.
     /// </summary>
-    public DokumenFormatRow ExtractFormat(
+    public DokumenFormatTableRow ExtractFormat(
         TableRow row,
         int rowIndex = 0,
         int totalRows = 1,
         Table? table = null)
     {
-        var format = new DokumenFormatRow();
+        var format = new DokumenFormatTableRow();
         
         // Get effective (resolved) row properties if resolver and table are available
         var effectiveTrPr = (_styleResolver != null && table != null)
@@ -36,7 +36,7 @@ public class TableRowFormatExtractor
         // Store raw XML for debugging (original direct formatting)
         var directTrPr = row.GetFirstChild<TableRowProperties>();
         if (directTrPr != null)
-            format.DfrRawTrprXml = directTrPr.OuterXml;
+            format.DftrRawTrprXml = directTrPr.OuterXml;
         
         if (effectiveTrPr == null)
             return format;
@@ -47,7 +47,7 @@ public class TableRowFormatExtractor
         if (tableHeader != null)
         {
             // OnOffOnlyValues: if element exists, it's true; if Val is present, use it
-            format.DfrTblHeader = tableHeader.Val?.HasValue == true ? (tableHeader.Val.Value == OnOffOnlyValues.On) : true;
+            format.DftrTblHeader = tableHeader.Val?.HasValue == true ? (tableHeader.Val.Value == OnOffOnlyValues.On) : true;
         }
         
         // Can't Split Row (w:cantSplit)
@@ -55,7 +55,7 @@ public class TableRowFormatExtractor
         var cantSplit = effectiveTrPr.GetFirstChild<CantSplit>();
         if (cantSplit != null)
         {
-            format.DfrCantSplit = cantSplit.Val?.HasValue == true ? (cantSplit.Val.Value == OnOffOnlyValues.On) : true;
+            format.DftrCantSplit = cantSplit.Val?.HasValue == true ? (cantSplit.Val.Value == OnOffOnlyValues.On) : true;
         }
         
         return format;

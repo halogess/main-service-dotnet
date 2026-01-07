@@ -24,7 +24,6 @@ public class DocxExtractionService : IDocxExtractionService
     private readonly MediaExtractor _mediaExtractor;
     private readonly DrawingExtractor _drawingExtractor;
     private readonly ParagraphExtractor _paragraphExtractor;
-    private readonly TableExtractor _tableExtractor;
 
     public DocxExtractionService(KorektorBukuDbContext db, ILogger<DocxExtractionService> logger)
     {
@@ -37,10 +36,6 @@ public class DocxExtractionService : IDocxExtractionService
         _mediaExtractor = new MediaExtractor(_logger, _storagePath);
         _drawingExtractor = new DrawingExtractor(_logger);
         _paragraphExtractor = new ParagraphExtractor(_logger, _drawingExtractor);
-        _tableExtractor = new TableExtractor(
-            _logger, 
-            _paragraphExtractor.ExtractParagraphContentSorted,
-            _paragraphExtractor.DetectParagraphType);
     }
 
     public async Task ExtractDocxToDatabase(string docxPath, int dokumenId)
@@ -51,10 +46,30 @@ public class DocxExtractionService : IDocxExtractionService
             
             using var doc = WordprocessingDocument.Open(docxPath, false);
             
-            // Initialize StyleResolver for style chain resolution
+            // Initialize StyleResolver for paragraph style chain resolution
             var stylesPart = doc.MainDocumentPart?.StyleDefinitionsPart;
             var styleResolver = new StyleResolver(stylesPart);
             _paragraphExtractor.SetStyleResolver(styleResolver);
+            _paragraphExtractor.SetDbContext(_db); // Enable inline format saving
+            
+            // Initialize TableStyleResolver for table format resolution
+            var tableStyleResolver = new TableStyleResolver(stylesPart);
+            var tableFormatExtractor = new TableFormatExtractor(tableStyleResolver);
+            var rowFormatExtractor = new TableRowFormatExtractor(tableStyleResolver);
+            var cellFormatExtractor = new TableCellFormatExtractor(tableStyleResolver);
+            
+            // Initialize TableExtractor with format extractors
+            var tableExtractor = new TableExtractor(
+                _logger,
+                _db,
+                tableFormatExtractor,
+                rowFormatExtractor,
+                cellFormatExtractor,
+                _paragraphExtractor.ExtractParagraphContentSorted,
+                _paragraphExtractor.DetectParagraphType);
+            
+            // Inject table extraction callback into ParagraphExtractor for handling nested tables in textboxes
+            _paragraphExtractor.SetTableExtractor(tableExtractor.ConvertTableToJsonAsync);
             
             await _mediaExtractor.ExtractAllMedia(doc, dokumenId);
             
@@ -66,11 +81,15 @@ public class DocxExtractionService : IDocxExtractionService
             var paragraphFormatExtractor = new ParagraphFormatExtractor(styleResolver, numberingPart);
             
             // === SECTION EXTRACTION ===
+            // IMPORTANT: elemIndex must EXCLUDE SectionProperties to match elementIndexMap logic later
             var sectionInfos = new List<(int elementIndex, SectionProperties sectPr)>();
             int elemIndex = 0;
             
             foreach (var elem in body.Elements())
             {
+                // Skip body-level SectionProperties in indexing (it's handled separately)
+                if (elem is SectionProperties) continue;
+                
                 if (elem is Paragraph para)
                 {
                     var sectPr = para.ParagraphProperties?.GetFirstChild<SectionProperties>();
@@ -90,12 +109,13 @@ public class DocxExtractionService : IDocxExtractionService
             
             foreach (var (upToIndex, sectPr) in sectionInfos)
             {
-                var section = SectionExtractor.ExtractSectionProperties(sectPr, dokumenId, sectionIndex++);
+                var section = SectionExtractor.ExtractSectionProperties(sectPr, dokumenId, sectionIndex);
                 _db.DokumenSections.Add(section);
                 await _db.SaveChangesAsync();
                 sectionIdMap.Add((upToIndex, section.DsecId, section));
                 _logger.LogInformation("Created section {Index} with ID {DsecId} for dokumen {DokumenId}", 
                     sectionIndex, section.DsecId, dokumenId);
+                sectionIndex++;
             }
             
             // === PART EXTRACTION ===
@@ -151,7 +171,7 @@ public class DocxExtractionService : IDocxExtractionService
                         if (headerPartDoc?.Header != null)
                         {
                             await ExtractPartContent(headerPartDoc.Header, headerPart.DpartId, (uint)dokumenId, 
-                                numberingPart, numberingCounters, paragraphFormatExtractor);
+                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor);
                         }
                     }
                 }
@@ -182,7 +202,7 @@ public class DocxExtractionService : IDocxExtractionService
                         if (footerPartDoc?.Footer != null)
                         {
                             await ExtractPartContent(footerPartDoc.Footer, footerPart.DpartId, (uint)dokumenId, 
-                                numberingPart, numberingCounters, paragraphFormatExtractor);
+                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor);
                         }
                     }
                 }
@@ -215,27 +235,19 @@ public class DocxExtractionService : IDocxExtractionService
             }
             
             int seq = 1;
-            var elementIndexMap = new Dictionary<OpenXmlElement, int>();
-            idx = 0;
-            foreach (var elem in body.Elements())
-            {
-                if (elem is not SectionProperties)
-                    elementIndexMap[elem] = idx++;
-            }
             
             // Track which sequence contains footnote/endnote references
             // Key: (kind, refId), Value: sequence number
             var noteRefToSequence = new Dictionary<(string kind, long refId), uint>();
             
-            foreach (var elem in reorderedElements)
+            foreach (var (elem, origIndex) in reorderedElements)
             {
-                int origIndex = elementIndexMap.TryGetValue(elem, out var i) ? i : 0;
                 uint dsecId = GetSectionId(origIndex);
                 uint dpartId = partMap.TryGetValue(dsecId, out var parts) && parts.TryGetValue("body", out var bodyPartId) 
                     ? bodyPartId : 0;
                 
-                // Extract paragraph format if this is a paragraph
                 uint? dfpId = null;
+                // Extract paragraph format if this is a paragraph
                 if (elem is Paragraph para)
                 {
                     // Create format record for paragraph (with EFFECTIVE resolved properties)
@@ -259,33 +271,59 @@ public class DocxExtractionService : IDocxExtractionService
                     }
                 }
                 
-                foreach (var (type, json) in ConvertBodyElementToItems(elem, numberingPart, numberingCounters))
+                try 
                 {
-                    // Add dfp_id to JSON for paragraph/list types
-                    if (dfpId.HasValue && (type.StartsWith("paragraph") || type.StartsWith("list-item") || type.StartsWith("h") || type == "title" || type == "subtitle"))
+                    foreach (var (type, json) in await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
                     {
-                        json["dfp_id"] = dfpId.Value;
+                        // Add dfp_id to JSON for paragraph/list types - ensure it comes before content
+                        if (dfpId.HasValue && (type.StartsWith("paragraph") || type.StartsWith("list-item") || type.StartsWith("h") || type == "title" || type == "subtitle"))
+                        {
+                            // Reconstruct to put dfp_id before content
+                            var reordered = new JObject { ["dfp_id"] = dfpId.Value };
+                            foreach (var prop in json.Properties())
+                            {
+                                reordered[prop.Name] = prop.Value;
+                            }
+                            // Replace json with reordered version
+                            json.RemoveAll();
+                            foreach (var prop in reordered.Properties())
+                            {
+                                json[prop.Name] = prop.Value;
+                            }
+                        }
+                        
+                        _db.DokumenElemens.Add(new DokumenElemen
+                        {
+                            DpartId = dpartId > 0 ? dpartId : null,
+                            DelemenSequence = (uint)seq++,
+                            DelemenType = type,
+                            DelemenJsonTree = json.ToString(Formatting.None),
+                            DelemenXml = elem.OuterXml
+                        });
                     }
-                    
-                    _db.DokumenElemens.Add(new DokumenElemen
-                    {
-                        DokumenId = (uint)dokumenId,
-                        DpartId = dpartId > 0 ? dpartId : null,
-                        DelemenSequence = (uint)seq++,
-                        DelemenType = type,
-                        DelemenJsonTree = json.ToString(Formatting.None),
-                        DelemenXml = elem.OuterXml
-                    });
+                }
+                catch (Exception ex)
+                {
+                    var xmlPreview = elem.OuterXml.Length > 200 ? elem.OuterXml.Substring(0, 200) + "..." : elem.OuterXml;
+                    _logger.LogError(ex, 
+                        "Failed to extract element sequence {Seq} of type {Type}. " +
+                        "InnerException: {Inner}. XML Preview: {XmlPreview}. Skipping.", 
+                        seq, elem.GetType().Name, 
+                        ex.InnerException?.Message ?? "none",
+                        xmlPreview);
+                    // Continue to next element
                 }
             }
             
-            // Save elements first to get their IDs
+            // Save remaining elements
             await _db.SaveChangesAsync();
             
             // Build map: sequence -> DelemenId
+            // Get all parts for this dokumen to filter elements
+            var allPartIds = partMap.Values.SelectMany(p => p.Values).ToHashSet();
             var sequenceToDelemenId = new Dictionary<uint, ulong>();
             var savedElements = _db.DokumenElemens
-                .Where(e => e.DokumenId == (uint)dokumenId)
+                .Where(e => e.DpartId.HasValue && allPartIds.Contains(e.DpartId.Value))
                 .Select(e => new { e.DelemenId, e.DelemenSequence })
                 .ToList();
             foreach (var elem in savedElements)
@@ -381,7 +419,8 @@ public class DocxExtractionService : IDocxExtractionService
         uint dokumenId,
         NumberingDefinitionsPart? numberingPart,
         Dictionary<int, Dictionary<int, int>> numberingCounters,
-        ParagraphFormatExtractor paragraphFormatExtractor)
+        ParagraphFormatExtractor paragraphFormatExtractor,
+        TableExtractor tableExtractor)
     {
         int seq = 1;
         foreach (var elem in partContent.Elements())
@@ -394,14 +433,21 @@ public class DocxExtractionService : IDocxExtractionService
                 await _db.SaveChangesAsync();
                 uint? dfpId = format.DfpId;
                 
-                foreach (var (type, json) in ConvertBodyElementToItems(elem, numberingPart, numberingCounters))
+                foreach (var (type, json) in await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
                 {
+                    // Reorder dfp_id to come before content
                     if (dfpId.HasValue)
-                        json["dfp_id"] = dfpId.Value;
+                    {
+                        var reordered = new JObject { ["dfp_id"] = dfpId.Value };
+                        foreach (var prop in json.Properties())
+                            reordered[prop.Name] = prop.Value;
+                        json.RemoveAll();
+                        foreach (var prop in reordered.Properties())
+                            json[prop.Name] = prop.Value;
+                    }
                     
                     _db.DokumenElemens.Add(new DokumenElemen
                     {
-                        DokumenId = dokumenId,
                         DpartId = dpartId,
                         DelemenSequence = (uint)seq++,
                         DelemenType = type,
@@ -412,11 +458,10 @@ public class DocxExtractionService : IDocxExtractionService
             }
             else if (elem is Table)
             {
-                foreach (var (type, json) in ConvertBodyElementToItems(elem, numberingPart, numberingCounters))
+                foreach (var (type, json) in await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
                 {
                     _db.DokumenElemens.Add(new DokumenElemen
                     {
-                        DokumenId = dokumenId,
                         DpartId = dpartId,
                         DelemenSequence = (uint)seq++,
                         DelemenType = type,
@@ -441,16 +486,20 @@ public class DocxExtractionService : IDocxExtractionService
         return "default";
     }
 
-    private IEnumerable<(string type, JObject json)> ConvertBodyElementToItems(
+    private async Task<IEnumerable<(string type, JObject json)>> ConvertBodyElementToItemsAsync(
         OpenXmlElement elem, 
-        NumberingDefinitionsPart? numberingPart = null,
-        Dictionary<int, Dictionary<int, int>>? numberingCounters = null)
+        NumberingDefinitionsPart? numberingPart,
+        Dictionary<int, Dictionary<int, int>>? numberingCounters,
+        TableExtractor tableExtractor)
     {
         if (elem is Paragraph p)
             return _paragraphExtractor.FlattenParagraph(p, numberingPart, numberingCounters);
 
         if (elem is Table t)
-            return new[] { ("table", new JObject { ["content"] = new JObject { ["rows"] = _tableExtractor.ConvertTableRows(t, numberingPart, numberingCounters) } }) };
+        {
+            var tableJson = await tableExtractor.ConvertTableToJsonAsync(t, numberingPart, numberingCounters);
+            return new[] { ("table", tableJson) };
+        }
 
         if (elem is SectionProperties)
             return new[] { ("sectionBreak", new JObject()) };
@@ -458,8 +507,12 @@ public class DocxExtractionService : IDocxExtractionService
         if (elem is DocumentFormat.OpenXml.Math.OfficeMath math)
             return new[] { ("math", new JObject { ["content"] = new JArray { new JObject { ["type"] = "math", ["text"] = MathExtractor.ExtractMathText(math) } } }) };
 
-        if (elem is BookmarkStart || elem is BookmarkEnd)
-            return Array.Empty<(string, JObject)>();
+        // Extract bookmark markers to maintain element count consistency
+        if (elem is BookmarkStart bookmarkStart)
+            return new[] { ("bookmarkStart", new JObject { ["name"] = bookmarkStart.Name?.Value ?? "", ["id"] = bookmarkStart.Id?.Value ?? "" }) };
+        
+        if (elem is BookmarkEnd bookmarkEnd)
+            return new[] { ("bookmarkEnd", new JObject { ["id"] = bookmarkEnd.Id?.Value ?? "" }) };
 
         return new[] { (elem.LocalName, new JObject { ["xml"] = elem.OuterXml }) };
     }
@@ -485,10 +538,12 @@ public class DocxExtractionService : IDocxExtractionService
             }
             else if (elem is Table t)
             {
+                // Note: Tables in footnotes/endnotes don't get format extraction
+                // to keep the implementation simpler. They use basic structure only.
                 content.Add(new JObject 
                 { 
                     ["type"] = "table", 
-                    ["rows"] = _tableExtractor.ConvertTableRows(t, numberingPart, numberingCounters) 
+                    ["rows"] = new JArray() // Empty for now, or extract basic structure without format
                 });
             }
         }

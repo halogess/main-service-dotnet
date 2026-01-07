@@ -79,18 +79,18 @@ public class DrawingExtractor
         }
 
         if (blips.Count == 1 && !txbxContents.Any())
-            return new JObject { ["type"] = "image", ["rId"] = blips[0] };
+            return new JObject { ["type"] = "image", ["rId"] = blips[0], ["_sortY"] = sortYPosition };
         
         if (blips.Count > 1 && !txbxContents.Any())
         {
             var images = new JArray();
             foreach (var rId in blips)
                 images.Add(new JObject { ["type"] = "image", ["rId"] = rId });
-            return new JObject { ["type"] = "composite", ["content"] = images };
+            return new JObject { ["type"] = "composite", ["content"] = images, ["_sortY"] = sortYPosition };
         }
         
         if (chartRefs.Count == 1 && !txbxContents.Any() && blips.Count == 0)
-            return new JObject { ["type"] = "image", ["rId"] = chartRefs[0] };
+            return new JObject { ["type"] = "chart", ["rId"] = chartRefs[0], ["_sortY"] = sortYPosition };
         
         if (blips.Count > 0 || chartRefs.Count > 0 || txbxContents.Any())
         {
@@ -100,13 +100,19 @@ public class DrawingExtractor
                 content.Add(new JObject { ["type"] = "image", ["rId"] = rId });
             
             foreach (var rId in chartRefs)
-                content.Add(new JObject { ["type"] = "image", ["rId"] = rId });
+                content.Add(new JObject { ["type"] = "chart", ["rId"] = rId });
             
+            // Each textbox gets its own shape object for better structure
             foreach (var txbx in txbxContents)
             {
-                var textItems = extractTextBoxAsItems(txbx, null, null);
-                foreach (var item in textItems)
-                    content.Add(item);
+                var textItems = extractTextBoxAsItems(txbx, numberingPart, numberingCounters);
+                if (textItems.Count > 0)
+                {
+                    content.Add(new JObject { 
+                        ["type"] = "textbox", 
+                        ["content"] = textItems 
+                    });
+                }
             }
             
             var result = new JObject { 

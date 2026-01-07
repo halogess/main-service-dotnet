@@ -1,0 +1,56 @@
+﻿=== Raw DOCX Body Element Count Analysis ===
+Total elements (excluding sectPr): 373
+  - Paragraphs: 355
+    - Empty paragraphs (no content): 118
+    - Paragraphs with section break: 31
+  - Tables: 16
+  - SectionProperties (excluded): 1
+  - Other types: 2
+
+Other element types:
+    BookmarkEnd: 2
+
+=== Expected Element Count After Extraction ===
+Non-empty paragraphs: 237
+Tables: 16
+Total expected: 253
+Actually extracted (from test): 253
+Difference: 0
+
+=== Section Boundary Analysis ===
+  Section break at element index 10 (paragraph)
+  Section break at element index 12 (paragraph)
+  Section break at element index 18 (paragraph)
+  Section break at element index 23 (paragraph)
+  Section break at element index 41 (paragraph)
+  Section break at element index 52 (paragraph)
+  Section break at element index 57 (paragraph)
+  Section break at element index 71 (paragraph)
+  Section break at element index 76 (paragraph)
+  Section break at element index 104 (paragraph)
+  Section break at element index 137 (paragraph)
+  Section break at element index 157 (paragraph)
+  Section break at element index 171 (paragraph)
+  Section break at element index 174 (paragraph)
+  Section break at element index 181 (paragraph)
+  Section break at element index 189 (paragraph)
+  Section break at element index 195 (paragraph)
+  Section break at element index 197 (paragraph)
+  Section break at element index 199 (paragraph)
+  Section break at element index 202 (paragraph)
+  Section break at element index 228 (paragraph)
+  Section break at element index 241 (paragraph)
+  Section break at element index 257 (paragraph)
+  Section break at element index 270 (paragraph)
+  Section break at element index 282 (paragraph)
+  Section break at element index 292 (paragraph)
+  Section break at element index 297 (paragraph)
+  Section break at element index 309 (paragraph)
+  Section break at element index 318 (paragraph)
+  Section break at element index 331 (paragraph)
+  Section break at element index 345 (paragraph)
+  Body section property found (applies to remaining elements)
+
+Total sections: 32
+
+=== Done ===

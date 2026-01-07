@@ -19,6 +19,27 @@ public static class SectionExtractor
             DsecIndex = (uint)sectionIndex
         };
         
+        // Section Type (break type)
+        var sectionType = sectPr.GetFirstChild<SectionType>();
+        if (sectionType?.Val?.Value != null)
+        {
+            section.DsecType = sectionType.Val.Value.ToString().ToLower();
+            // Values: nextPage, continuous, evenPage, oddPage, nextColumn
+        }
+        else
+        {
+            section.DsecType = "nextPage"; // Default
+        }
+        
+        // Title Page (first page different header/footer)
+        var titlePage = sectPr.GetFirstChild<TitlePage>();
+        section.DsecHasTitlePage = titlePage != null && (titlePage.Val?.Value ?? true);
+        
+        // Different odd/even pages - this is typically set at document level (w:settings/w:evenAndOddHeaders)
+        // But we store it per section for flexibility
+        // Note: In Word, this is a document-wide setting, not per-section
+        section.DsecDifferentOddEven = false; // Will be updated from settings.xml if needed
+        
         // Page Size
         var pageSize = sectPr.GetFirstChild<PageSize>();
         if (pageSize != null)
@@ -51,20 +72,42 @@ public static class SectionExtractor
         }
         
         // Gutter position
-        var bidi = sectPr.GetFirstChild<BiDi>();
-        section.DsecGutterPosition = bidi != null ? "top" : "left";
+        var gutterAtTop = sectPr.GetFirstChild<GutterOnRight>();
+        section.DsecGutterPosition = gutterAtTop != null ? "top" : "left";
         
         // Page Numbering
         var pageNumberType = sectPr.GetFirstChild<PageNumberType>();
         if (pageNumberType != null)
         {
-            if (pageNumberType.Format != null && pageNumberType.Format.HasValue)
-                section.DsecPageNumFormat = pageNumberType.Format.Value.ToString().ToLower();
+            // Default to "decimal" if Format is not specified (Word's implicit default)
+            section.DsecPageNumFormat = pageNumberType.Format != null && pageNumberType.Format.HasValue
+                ? pageNumberType.Format.Value.ToString().ToLower()
+                : "decimal";
+            
             if (pageNumberType.Start != null)
                 section.DsecPageNumStart = (uint)pageNumberType.Start.Value;
-            section.DsecPageNumRestart = pageNumberType.ChapterStyle != null;
+        }
+        
+        // Columns
+        var columns = sectPr.GetFirstChild<Columns>();
+        if (columns != null)
+        {
+            section.DsecColumnCount = (uint)(columns.ColumnCount?.Value ?? 1);
+        }
+        else
+        {
+            section.DsecColumnCount = 1;
         }
         
         return section;
+    }
+    
+    /// <summary>
+    /// Updates the DifferentOddEven property from document settings
+    /// Call this after creating sections to update from settings.xml
+    /// </summary>
+    public static void UpdateOddEvenFromSettings(DokumenSection section, bool hasEvenAndOddHeaders)
+    {
+        section.DsecDifferentOddEven = hasEvenAndOddHeaders;
     }
 }

@@ -4,29 +4,44 @@ using DocumentFormat.OpenXml.Wordprocessing;
 namespace ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 
 /// <summary>
-/// Resolves styles and numbering from style chain
+/// Resolves styles with full inheritance:
+/// docDefaults → basedOn chain → paragraph style → character style → direct formatting
 /// </summary>
 public class StyleResolver
 {
     private readonly Dictionary<string, Style> _stylesById = new();
     private readonly StylesPart? _stylesPart;
     
+    // Cached docDefaults
+    private RunPropertiesBaseStyle? _docDefaultsRPr;
+    private ParagraphPropertiesBaseStyle? _docDefaultsPPr;
+    
     public StyleResolver(StylesPart? stylesPart)
     {
         _stylesPart = stylesPart;
         if (stylesPart?.Styles != null)
         {
+            // Cache all styles by ID
             foreach (var style in stylesPart.Styles.Elements<Style>())
             {
                 var styleId = style.StyleId?.Value;
                 if (!string.IsNullOrEmpty(styleId))
                     _stylesById[styleId] = style;
             }
+            
+            // Cache docDefaults
+            var docDefaults = stylesPart.Styles.DocDefaults;
+            if (docDefaults != null)
+            {
+                _docDefaultsRPr = docDefaults.RunPropertiesDefault?.RunPropertiesBaseStyle;
+                _docDefaultsPPr = docDefaults.ParagraphPropertiesDefault?.ParagraphPropertiesBaseStyle;
+            }
         }
     }
     
     /// <summary>
     /// Gets the style chain from basedOn relationships (parent → child order)
+    /// Result: [oldest ancestor, ..., immediate parent, the style itself]
     /// </summary>
     public List<Style> GetStyleChain(string? styleId)
     {
@@ -48,6 +63,108 @@ public class StyleResolver
         }
         
         return chain;
+    }
+    
+    /// <summary>
+    /// Resolves effective RunProperties for a Run, walking the full inheritance chain:
+    /// 1. docDefaults (rPrDefault)
+    /// 2. Paragraph style's linked character style (if any)
+    /// 3. Paragraph style's rPr from basedOn chain
+    /// 4. Character style (rStyle) basedOn chain
+    /// 5. Direct rPr on the run
+    /// </summary>
+    public EffectiveRunProperties GetEffectiveRunProperties(Run run, ParagraphProperties? paragraphProps = null)
+    {
+        var effective = new EffectiveRunProperties();
+        
+        // 1. Start with docDefaults
+        if (_docDefaultsRPr != null)
+        {
+            MergeRunProperties(effective, _docDefaultsRPr, "docDefaults");
+        }
+        
+        // 2. Apply paragraph style's rPr (from basedOn chain)
+        var paragraphStyleId = paragraphProps?.ParagraphStyleId?.Val?.Value;
+        if (!string.IsNullOrEmpty(paragraphStyleId))
+        {
+            var paragraphStyleChain = GetStyleChain(paragraphStyleId);
+            // Apply from oldest ancestor to the style itself
+            foreach (var style in paragraphStyleChain)
+            {
+                // Paragraph styles can have StyleRunProperties that apply to text
+                var styleRPr = style.StyleRunProperties;
+                if (styleRPr != null)
+                {
+                    MergeRunProperties(effective, styleRPr, $"paragraphStyle:{style.StyleId?.Value}");
+                }
+            }
+        }
+        
+        // 3. Apply character style (rStyle) from basedOn chain
+        var runProps = run.RunProperties;
+        var charStyleId = runProps?.RunStyle?.Val?.Value;
+        if (!string.IsNullOrEmpty(charStyleId))
+        {
+            var charStyleChain = GetStyleChain(charStyleId);
+            foreach (var style in charStyleChain)
+            {
+                var styleRPr = style.StyleRunProperties;
+                if (styleRPr != null)
+                {
+                    MergeRunProperties(effective, styleRPr, $"charStyle:{style.StyleId?.Value}");
+                }
+            }
+        }
+        
+        // 4. Apply direct formatting (highest priority)
+        if (runProps != null)
+        {
+            MergeRunProperties(effective, runProps, "direct");
+        }
+        
+        return effective;
+    }
+    
+    /// <summary>
+    /// Resolves effective ParagraphProperties for a Paragraph, walking the full inheritance chain:
+    /// 1. docDefaults (pPrDefault)
+    /// 2. Normal style (implicit base if no explicit style)
+    /// 3. Paragraph style basedOn chain
+    /// 4. Direct pPr on the paragraph
+    /// </summary>
+    public EffectiveParagraphProperties GetEffectiveParagraphProperties(Paragraph paragraph)
+    {
+        var effective = new EffectiveParagraphProperties();
+        
+        // 1. Start with docDefaults
+        if (_docDefaultsPPr != null)
+        {
+            MergeParagraphProperties(effective, _docDefaultsPPr);
+        }
+        
+        // 2. Get paragraph style and apply basedOn chain
+        var directPPr = paragraph.ParagraphProperties;
+        var styleId = directPPr?.ParagraphStyleId?.Val?.Value ?? "Normal";
+        effective.StyleId = styleId;
+        
+        var styleChain = GetStyleChain(styleId);
+        foreach (var style in styleChain)
+        {
+            effective.StyleName = style.StyleName?.Val?.Value ?? style.StyleId?.Value;
+            var stylePPr = style.StyleParagraphProperties;
+            if (stylePPr != null)
+            {
+                MergeParagraphProperties(effective, stylePPr);
+            }
+        }
+        
+        // 3. Apply direct formatting (highest priority)
+        if (directPPr != null)
+        {
+            MergeParagraphProperties(effective, directPPr);
+        }
+        
+        return effective;
     }
     
     /// <summary>
@@ -82,5 +199,467 @@ public class StyleResolver
         }
         
         return (null, 0);
+    }
+    
+    /// <summary>
+    /// Gets a style by ID
+    /// </summary>
+    public Style? GetStyle(string? styleId)
+    {
+        if (string.IsNullOrEmpty(styleId)) return null;
+        return _stylesById.TryGetValue(styleId, out var style) ? style : null;
+    }
+    
+    // ========================================================================
+    // NUMBERING-AWARE PROPERTY RESOLUTION
+    // ========================================================================
+    
+    /// <summary>
+    /// Resolves effective ParagraphProperties for a list paragraph, including w:lvl/w:pPr.
+    /// Order: docDefaults → style chain → w:lvl/w:pPr (numbering.xml) → direct pPr
+    /// </summary>
+    public EffectiveParagraphProperties GetEffectiveParagraphPropertiesWithNumbering(
+        Paragraph paragraph,
+        NumberingDefinitionsPart? numberingPart,
+        int? numId = null,
+        int ilvl = 0)
+    {
+        var effective = new EffectiveParagraphProperties();
+        
+        // 1. Start with docDefaults
+        if (_docDefaultsPPr != null)
+        {
+            MergeParagraphProperties(effective, _docDefaultsPPr);
+        }
+        
+        // 2. Get paragraph style and apply basedOn chain
+        var directPPr = paragraph.ParagraphProperties;
+        var styleId = directPPr?.ParagraphStyleId?.Val?.Value ?? "Normal";
+        effective.StyleId = styleId;
+        
+        var styleChain = GetStyleChain(styleId);
+        foreach (var style in styleChain)
+        {
+            effective.StyleName = style.StyleName?.Val?.Value ?? style.StyleId?.Value;
+            var stylePPr = style.StyleParagraphProperties;
+            if (stylePPr != null)
+            {
+                MergeParagraphProperties(effective, stylePPr);
+            }
+        }
+        
+        // 3. Apply w:lvl/w:pPr from numbering.xml (overrides style)
+        if (numberingPart != null && numId.HasValue && numId.Value > 0)
+        {
+            var level = NumberingResolver.GetNumberingLevel(numberingPart, numId.Value, ilvl);
+            if (level != null)
+            {
+                var levelPPr = level.PreviousParagraphProperties;
+                if (levelPPr != null)
+                {
+                    NumberingResolver.MergeNumberingLevelParagraphProperties(effective, levelPPr);
+                }
+            }
+        }
+        
+        // 4. Apply direct formatting (highest priority)
+        if (directPPr != null)
+        {
+            MergeParagraphProperties(effective, directPPr);
+        }
+        
+        return effective;
+    }
+    
+    /// <summary>
+    /// Resolves effective RunProperties for the numbering label (the "1." or "•").
+    /// This is different from regular run text - it uses w:lvl/w:rPr.
+    /// Order: docDefaults → w:lvl/w:rPr (numbering.xml)
+    /// </summary>
+    public EffectiveRunProperties GetEffectiveNumberingLabelRunProperties(
+        NumberingDefinitionsPart? numberingPart,
+        int numId,
+        int ilvl = 0)
+    {
+        var effective = new EffectiveRunProperties();
+        
+        // 1. Start with docDefaults
+        if (_docDefaultsRPr != null)
+        {
+            MergeRunProperties(effective, _docDefaultsRPr, "docDefaults");
+        }
+        
+        // 2. Apply w:lvl/w:rPr from numbering.xml
+        if (numberingPart != null && numId > 0)
+        {
+            var level = NumberingResolver.GetNumberingLevel(numberingPart, numId, ilvl);
+            if (level != null)
+            {
+                var levelRPr = level.NumberingSymbolRunProperties;
+                if (levelRPr != null)
+                {
+                    NumberingResolver.MergeNumberingLevelRunProperties(effective, levelRPr, $"lvl:{ilvl}");
+                }
+            }
+        }
+        
+        return effective;
+    }
+    
+    // ========================================================================
+    // MERGE METHODS - RunProperties
+    // ========================================================================
+    
+    /// <summary>
+    /// Merge RunProperties into EffectiveRunProperties (later values override earlier)
+    /// </summary>
+    private void MergeRunProperties(EffectiveRunProperties effective, RunProperties rPr, string source)
+    {
+        effective.ResolvedFromStyle = source;
+        
+        // Font
+        var fonts = rPr.GetFirstChild<RunFonts>();
+        if (fonts != null)
+        {
+            if (fonts.Ascii?.Value != null) effective.FontAscii = fonts.Ascii.Value;
+            if (fonts.HighAnsi?.Value != null) effective.FontHighAnsi = fonts.HighAnsi.Value;
+            if (fonts.EastAsia?.Value != null) effective.FontEastAsia = fonts.EastAsia.Value;
+            if (fonts.ComplexScript?.Value != null) effective.FontComplexScript = fonts.ComplexScript.Value;
+        }
+        
+        // Font Size
+        var fontSize = rPr.GetFirstChild<FontSize>();
+        if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
+            effective.FontSize = sz;
+        
+        var fontSizeCs = rPr.GetFirstChild<FontSizeComplexScript>();
+        if (fontSizeCs?.Val?.Value != null && int.TryParse(fontSizeCs.Val.Value, out int szCs))
+            effective.FontSizeCs = szCs;
+        
+        // Bold - note: presence of element without Val means true, Val=false means false
+        var bold = rPr.GetFirstChild<Bold>();
+        if (bold != null)
+            effective.Bold = bold.Val?.Value ?? true;
+        
+        // Italic
+        var italic = rPr.GetFirstChild<Italic>();
+        if (italic != null)
+            effective.Italic = italic.Val?.Value ?? true;
+        
+        // Underline
+        var underline = rPr.GetFirstChild<Underline>();
+        if (underline != null)
+        {
+            var val = underline.Val?.Value;
+            effective.Underline = val != null && val != UnderlineValues.None;
+            effective.UnderlineStyle = val?.ToString()?.ToLower();
+        }
+        
+        // Strike
+        var strike = rPr.GetFirstChild<Strike>();
+        if (strike != null)
+            effective.Strike = strike.Val?.Value ?? true;
+        
+        var dblStrike = rPr.GetFirstChild<DoubleStrike>();
+        if (dblStrike != null)
+            effective.DoubleStrike = dblStrike.Val?.Value ?? true;
+        
+        // Vertical alignment (superscript/subscript)
+        var vertAlign = rPr.GetFirstChild<VerticalTextAlignment>();
+        if (vertAlign?.Val?.Value != null)
+            effective.VerticalAlignment = vertAlign.Val.Value.ToString().ToLower();
+        
+        // Color
+        var color = rPr.GetFirstChild<Color>();
+        if (color?.Val?.Value != null)
+            effective.Color = color.Val.Value;
+        
+        // Highlight
+        var highlight = rPr.GetFirstChild<Highlight>();
+        if (highlight?.Val?.Value != null)
+            effective.HighlightColor = highlight.Val.Value.ToString().ToLower();
+        
+        // Caps
+        var caps = rPr.GetFirstChild<Caps>();
+        if (caps != null)
+            effective.Caps = caps.Val?.Value ?? true;
+        
+        var smallCaps = rPr.GetFirstChild<SmallCaps>();
+        if (smallCaps != null)
+            effective.SmallCaps = smallCaps.Val?.Value ?? true;
+        
+        // Hidden
+        var vanish = rPr.GetFirstChild<Vanish>();
+        if (vanish != null)
+            effective.Hidden = vanish.Val?.Value ?? true;
+        
+        // Spacing
+        var spacing = rPr.GetFirstChild<Spacing>();
+        if (spacing?.Val?.Value != null)
+            effective.Spacing = spacing.Val.Value;
+    }
+    
+    // Overload for StyleRunProperties which has similar structure
+    private void MergeRunProperties(EffectiveRunProperties effective, StyleRunProperties rPr, string source)
+    {
+        effective.ResolvedFromStyle = source;
+        
+        var fonts = rPr.GetFirstChild<RunFonts>();
+        if (fonts != null)
+        {
+            if (fonts.Ascii?.Value != null) effective.FontAscii = fonts.Ascii.Value;
+            if (fonts.HighAnsi?.Value != null) effective.FontHighAnsi = fonts.HighAnsi.Value;
+            if (fonts.EastAsia?.Value != null) effective.FontEastAsia = fonts.EastAsia.Value;
+            if (fonts.ComplexScript?.Value != null) effective.FontComplexScript = fonts.ComplexScript.Value;
+        }
+        
+        var fontSize = rPr.GetFirstChild<FontSize>();
+        if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
+            effective.FontSize = sz;
+        
+        var fontSizeCs = rPr.GetFirstChild<FontSizeComplexScript>();
+        if (fontSizeCs?.Val?.Value != null && int.TryParse(fontSizeCs.Val.Value, out int szCs))
+            effective.FontSizeCs = szCs;
+        
+        var bold = rPr.GetFirstChild<Bold>();
+        if (bold != null)
+            effective.Bold = bold.Val?.Value ?? true;
+        
+        var italic = rPr.GetFirstChild<Italic>();
+        if (italic != null)
+            effective.Italic = italic.Val?.Value ?? true;
+        
+        var underline = rPr.GetFirstChild<Underline>();
+        if (underline != null)
+        {
+            var val = underline.Val?.Value;
+            effective.Underline = val != null && val != UnderlineValues.None;
+            effective.UnderlineStyle = val?.ToString()?.ToLower();
+        }
+        
+        var strike = rPr.GetFirstChild<Strike>();
+        if (strike != null)
+            effective.Strike = strike.Val?.Value ?? true;
+        
+        var dblStrike = rPr.GetFirstChild<DoubleStrike>();
+        if (dblStrike != null)
+            effective.DoubleStrike = dblStrike.Val?.Value ?? true;
+        
+        var vertAlign = rPr.GetFirstChild<VerticalTextAlignment>();
+        if (vertAlign?.Val?.Value != null)
+            effective.VerticalAlignment = vertAlign.Val.Value.ToString().ToLower();
+        
+        var color = rPr.GetFirstChild<Color>();
+        if (color?.Val?.Value != null)
+            effective.Color = color.Val.Value;
+        
+        var highlight = rPr.GetFirstChild<Highlight>();
+        if (highlight?.Val?.Value != null)
+            effective.HighlightColor = highlight.Val.Value.ToString().ToLower();
+        
+        var caps = rPr.GetFirstChild<Caps>();
+        if (caps != null)
+            effective.Caps = caps.Val?.Value ?? true;
+        
+        var smallCaps = rPr.GetFirstChild<SmallCaps>();
+        if (smallCaps != null)
+            effective.SmallCaps = smallCaps.Val?.Value ?? true;
+        
+        var vanish = rPr.GetFirstChild<Vanish>();
+        if (vanish != null)
+            effective.Hidden = vanish.Val?.Value ?? true;
+        
+        var spacing = rPr.GetFirstChild<Spacing>();
+        if (spacing?.Val?.Value != null)
+            effective.Spacing = spacing.Val.Value;
+    }
+    
+    // Overload for RunPropertiesBaseStyle (from docDefaults)
+    private void MergeRunProperties(EffectiveRunProperties effective, RunPropertiesBaseStyle rPr, string source)
+    {
+        effective.ResolvedFromStyle = source;
+        
+        var fonts = rPr.GetFirstChild<RunFonts>();
+        if (fonts != null)
+        {
+            if (fonts.Ascii?.Value != null) effective.FontAscii = fonts.Ascii.Value;
+            if (fonts.HighAnsi?.Value != null) effective.FontHighAnsi = fonts.HighAnsi.Value;
+            if (fonts.EastAsia?.Value != null) effective.FontEastAsia = fonts.EastAsia.Value;
+            if (fonts.ComplexScript?.Value != null) effective.FontComplexScript = fonts.ComplexScript.Value;
+        }
+        
+        var fontSize = rPr.GetFirstChild<FontSize>();
+        if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
+            effective.FontSize = sz;
+        
+        var fontSizeCs = rPr.GetFirstChild<FontSizeComplexScript>();
+        if (fontSizeCs?.Val?.Value != null && int.TryParse(fontSizeCs.Val.Value, out int szCs))
+            effective.FontSizeCs = szCs;
+    }
+    
+    // ========================================================================
+    // MERGE METHODS - ParagraphProperties
+    // ========================================================================
+    
+    /// <summary>
+    /// Merge ParagraphProperties into EffectiveParagraphProperties
+    /// </summary>
+    private void MergeParagraphProperties(EffectiveParagraphProperties effective, ParagraphProperties pPr)
+    {
+        // Justification
+        var jc = pPr.GetFirstChild<Justification>();
+        if (jc?.Val?.Value != null)
+            effective.Justification = StyleResolverHelpers.ConvertJustification(jc.Val.Value);
+            
+        // Text Alignment
+        var textAlignment = pPr.GetFirstChild<TextAlignment>();
+        if (textAlignment?.Val?.Value != null)
+            effective.TextAlignment = StyleResolverHelpers.ConvertTextAlignment(textAlignment.Val.Value);
+        
+        // Indentation
+        var ind = pPr.GetFirstChild<Indentation>();
+        if (ind != null)
+        {
+            if (ind.Left?.Value != null) effective.IndentLeft = int.Parse(ind.Left.Value);
+            if (ind.Right?.Value != null) effective.IndentRight = int.Parse(ind.Right.Value);
+            if (ind.FirstLine?.Value != null) effective.IndentFirstLine = int.Parse(ind.FirstLine.Value);
+            if (ind.Hanging?.Value != null) effective.IndentHanging = int.Parse(ind.Hanging.Value);
+            if (ind.Start?.Value != null) effective.IndentStart = int.Parse(ind.Start.Value);
+            if (ind.End?.Value != null) effective.IndentEnd = int.Parse(ind.End.Value);
+            if (ind.LeftChars?.Value != null) effective.IndentLeftChars = ind.LeftChars.Value;
+            if (ind.RightChars?.Value != null) effective.IndentRightChars = ind.RightChars.Value;
+        }
+        
+        // Spacing
+        var spacing = pPr.GetFirstChild<SpacingBetweenLines>();
+        if (spacing != null)
+        {
+            if (spacing.Before?.Value != null) effective.SpaceBefore = int.Parse(spacing.Before.Value);
+            if (spacing.After?.Value != null) effective.SpaceAfter = int.Parse(spacing.After.Value);
+            if (spacing.Line?.Value != null) effective.LineSpacing = int.Parse(spacing.Line.Value);
+            if (spacing.LineRule?.Value != null) effective.LineRule = StyleResolverHelpers.ConvertLineRule(spacing.LineRule.Value);
+            
+            if (spacing.BeforeAutoSpacing?.Value != null) effective.SpaceBeforeAuto = spacing.BeforeAutoSpacing.Value;
+            if (spacing.AfterAutoSpacing?.Value != null) effective.SpaceAfterAuto = spacing.AfterAutoSpacing.Value;
+            if (spacing.BeforeLines?.Value != null) effective.SpaceBeforeLines = spacing.BeforeLines.Value;
+            if (spacing.AfterLines?.Value != null) effective.SpaceAfterLines = spacing.AfterLines.Value;
+        }
+        
+        // Keep options & Pagination
+        if (pPr.KeepNext != null) effective.KeepNext = StyleResolverHelpers.IsToggleOn(pPr.KeepNext);
+        if (pPr.KeepLines != null) effective.KeepLines = StyleResolverHelpers.IsToggleOn(pPr.KeepLines);
+        if (pPr.PageBreakBefore != null) effective.PageBreakBefore = StyleResolverHelpers.IsToggleOn(pPr.PageBreakBefore);
+        if (pPr.WidowControl != null) effective.WidowControl = !StyleResolverHelpers.IsToggleOff(pPr.WidowControl);
+        if (pPr.SuppressLineNumbers != null) effective.SuppressLineNumbers = StyleResolverHelpers.IsToggleOn(pPr.SuppressLineNumbers);
+        if (pPr.SuppressAutoHyphens != null) effective.SuppressAutoHyphens = StyleResolverHelpers.IsToggleOn(pPr.SuppressAutoHyphens);
+        
+        // Layout / Toggle properties
+        if (pPr.SnapToGrid != null) effective.SnapToGrid = !StyleResolverHelpers.IsToggleOff(pPr.SnapToGrid);
+        if (pPr.AdjustRightIndent != null) effective.AdjustRightIndent = !StyleResolverHelpers.IsToggleOff(pPr.AdjustRightIndent);
+        if (pPr.MirrorIndents != null) effective.MirrorIndents = StyleResolverHelpers.IsToggleOn(pPr.MirrorIndents);
+        if (pPr.SuppressOverlap != null) effective.SuppressOverlap = StyleResolverHelpers.IsToggleOn(pPr.SuppressOverlap);
+        if (pPr.ContextualSpacing != null) effective.ContextualSpacing = StyleResolverHelpers.IsToggleOn(pPr.ContextualSpacing);
+        if (pPr.WordWrap != null) effective.WordWrap = StyleResolverHelpers.IsToggleOn(pPr.WordWrap);
+        
+        // Outline level
+        var outlineLvl = pPr.GetFirstChild<OutlineLevel>();
+        if (outlineLvl?.Val?.Value != null)
+            effective.OutlineLevel = outlineLvl.Val.Value;
+    }
+    
+    // Overload for StyleParagraphProperties
+    private void MergeParagraphProperties(EffectiveParagraphProperties effective, StyleParagraphProperties pPr)
+    {
+        var jc = pPr.GetFirstChild<Justification>();
+        if (jc?.Val?.Value != null)
+            effective.Justification = StyleResolverHelpers.ConvertJustification(jc.Val.Value);
+            
+        var textAlignment = pPr.GetFirstChild<TextAlignment>();
+        if (textAlignment?.Val?.Value != null)
+            effective.TextAlignment = StyleResolverHelpers.ConvertTextAlignment(textAlignment.Val.Value);
+        
+        var ind = pPr.GetFirstChild<Indentation>();
+        if (ind != null)
+        {
+            if (ind.Left?.Value != null) effective.IndentLeft = int.Parse(ind.Left.Value);
+            if (ind.Right?.Value != null) effective.IndentRight = int.Parse(ind.Right.Value);
+            if (ind.FirstLine?.Value != null) effective.IndentFirstLine = int.Parse(ind.FirstLine.Value);
+            if (ind.Hanging?.Value != null) effective.IndentHanging = int.Parse(ind.Hanging.Value);
+            if (ind.Start?.Value != null) effective.IndentStart = int.Parse(ind.Start.Value);
+            if (ind.End?.Value != null) effective.IndentEnd = int.Parse(ind.End.Value);
+            if (ind.LeftChars?.Value != null) effective.IndentLeftChars = ind.LeftChars.Value;
+            if (ind.RightChars?.Value != null) effective.IndentRightChars = ind.RightChars.Value;
+        }
+        
+        var spacing = pPr.GetFirstChild<SpacingBetweenLines>();
+        if (spacing != null)
+        {
+            if (spacing.Before?.Value != null) effective.SpaceBefore = int.Parse(spacing.Before.Value);
+            if (spacing.After?.Value != null) effective.SpaceAfter = int.Parse(spacing.After.Value);
+            if (spacing.Line?.Value != null) effective.LineSpacing = int.Parse(spacing.Line.Value);
+            if (spacing.LineRule?.Value != null) effective.LineRule = StyleResolverHelpers.ConvertLineRule(spacing.LineRule.Value);
+            
+            if (spacing.BeforeAutoSpacing?.Value != null) effective.SpaceBeforeAuto = spacing.BeforeAutoSpacing.Value;
+            if (spacing.AfterAutoSpacing?.Value != null) effective.SpaceAfterAuto = spacing.AfterAutoSpacing.Value;
+            if (spacing.BeforeLines?.Value != null) effective.SpaceBeforeLines = spacing.BeforeLines.Value;
+            if (spacing.AfterLines?.Value != null) effective.SpaceAfterLines = spacing.AfterLines.Value;
+        }
+        
+        if (pPr.KeepNext != null) effective.KeepNext = StyleResolverHelpers.IsToggleOn(pPr.KeepNext);
+        if (pPr.KeepLines != null) effective.KeepLines = StyleResolverHelpers.IsToggleOn(pPr.KeepLines);
+        if (pPr.PageBreakBefore != null) effective.PageBreakBefore = StyleResolverHelpers.IsToggleOn(pPr.PageBreakBefore);
+        if (pPr.WidowControl != null) effective.WidowControl = !StyleResolverHelpers.IsToggleOff(pPr.WidowControl);
+        if (pPr.SuppressLineNumbers != null) effective.SuppressLineNumbers = StyleResolverHelpers.IsToggleOn(pPr.SuppressLineNumbers);
+        if (pPr.SuppressAutoHyphens != null) effective.SuppressAutoHyphens = StyleResolverHelpers.IsToggleOn(pPr.SuppressAutoHyphens);
+        
+        if (pPr.SnapToGrid != null) effective.SnapToGrid = !StyleResolverHelpers.IsToggleOff(pPr.SnapToGrid);
+        if (pPr.AdjustRightIndent != null) effective.AdjustRightIndent = !StyleResolverHelpers.IsToggleOff(pPr.AdjustRightIndent);
+        if (pPr.MirrorIndents != null) effective.MirrorIndents = StyleResolverHelpers.IsToggleOn(pPr.MirrorIndents);
+        if (pPr.SuppressOverlap != null) effective.SuppressOverlap = StyleResolverHelpers.IsToggleOn(pPr.SuppressOverlap);
+        if (pPr.ContextualSpacing != null) effective.ContextualSpacing = StyleResolverHelpers.IsToggleOn(pPr.ContextualSpacing);
+        if (pPr.WordWrap != null) effective.WordWrap = StyleResolverHelpers.IsToggleOn(pPr.WordWrap);
+        
+        var outlineLvl = pPr.GetFirstChild<OutlineLevel>();
+        if (outlineLvl?.Val?.Value != null)
+            effective.OutlineLevel = outlineLvl.Val.Value;
+    }
+    
+    // Overload for ParagraphPropertiesBaseStyle (from docDefaults)
+    private void MergeParagraphProperties(EffectiveParagraphProperties effective, ParagraphPropertiesBaseStyle pPr)
+    {
+        var jc = pPr.GetFirstChild<Justification>();
+        if (jc?.Val?.Value != null)
+            effective.Justification = StyleResolverHelpers.ConvertJustification(jc.Val.Value);
+            
+        var textAlignment = pPr.GetFirstChild<TextAlignment>();
+        if (textAlignment?.Val?.Value != null)
+            effective.TextAlignment = StyleResolverHelpers.ConvertTextAlignment(textAlignment.Val.Value);
+        
+        var ind = pPr.GetFirstChild<Indentation>();
+        if (ind != null)
+        {
+            if (ind.Left?.Value != null) effective.IndentLeft = int.Parse(ind.Left.Value);
+            if (ind.Right?.Value != null) effective.IndentRight = int.Parse(ind.Right.Value);
+            if (ind.FirstLine?.Value != null) effective.IndentFirstLine = int.Parse(ind.FirstLine.Value);
+            if (ind.Hanging?.Value != null) effective.IndentHanging = int.Parse(ind.Hanging.Value);
+            if (ind.Start?.Value != null) effective.IndentStart = int.Parse(ind.Start.Value);
+            if (ind.End?.Value != null) effective.IndentEnd = int.Parse(ind.End.Value);
+            if (ind.LeftChars?.Value != null) effective.IndentLeftChars = ind.LeftChars.Value;
+            if (ind.RightChars?.Value != null) effective.IndentRightChars = ind.RightChars.Value;
+        }
+        
+        var spacing = pPr.GetFirstChild<SpacingBetweenLines>();
+        if (spacing != null)
+        {
+            if (spacing.Before?.Value != null) effective.SpaceBefore = int.Parse(spacing.Before.Value);
+            if (spacing.After?.Value != null) effective.SpaceAfter = int.Parse(spacing.After.Value);
+            if (spacing.Line?.Value != null) effective.LineSpacing = int.Parse(spacing.Line.Value);
+            if (spacing.LineRule?.Value != null) effective.LineRule = StyleResolverHelpers.ConvertLineRule(spacing.LineRule.Value);
+            
+            if (spacing.BeforeAutoSpacing?.Value != null) effective.SpaceBeforeAuto = spacing.BeforeAutoSpacing.Value;
+            if (spacing.AfterAutoSpacing?.Value != null) effective.SpaceAfterAuto = spacing.AfterAutoSpacing.Value;
+            if (spacing.BeforeLines?.Value != null) effective.SpaceBeforeLines = spacing.BeforeLines.Value;
+            if (spacing.AfterLines?.Value != null) effective.SpaceAfterLines = spacing.AfterLines.Value;
+        }
     }
 }

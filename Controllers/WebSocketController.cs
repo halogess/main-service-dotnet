@@ -27,6 +27,8 @@ public class WebSocketController : ControllerBase
                 return;
             }
 
+            // Validate token first, before accepting WebSocket
+            string? username = null;
             try
             {
                 var tokenHandler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
@@ -49,29 +51,31 @@ public class WebSocketController : ControllerBase
                 }, out var validatedToken);
 
                 var jwtToken = (System.IdentityModel.Tokens.Jwt.JwtSecurityToken)validatedToken;
-                var username = jwtToken.Claims.FirstOrDefault(c => c.Type == "username")?.Value;
-
-                if (string.IsNullOrEmpty(username))
-                {
-                    HttpContext.Response.StatusCode = 401;
-                    return;
-                }
-
-                var mahasiswa = await sttsDb.Mahasiswas.FirstOrDefaultAsync(m => m.MhsNrp == username);
-                if (mahasiswa == null)
-                {
-                    HttpContext.Response.StatusCode = 401;
-                    return;
-                }
-
-                var webSocket = await HttpContext.WebSockets.AcceptWebSocketAsync();
-                await _wsService.HandleWebSocketAsync(webSocket, mahasiswa.MhsNrp);
+                username = jwtToken.Claims.FirstOrDefault(c => c.Type == "username")?.Value;
             }
             catch
             {
                 HttpContext.Response.StatusCode = 401;
                 await HttpContext.Response.WriteAsync("{\"message\":\"Invalid token\"}");
+                return;
             }
+
+            if (string.IsNullOrEmpty(username))
+            {
+                HttpContext.Response.StatusCode = 401;
+                return;
+            }
+
+            var mahasiswa = await sttsDb.Mahasiswas.FirstOrDefaultAsync(m => m.MhsNrp == username);
+            if (mahasiswa == null)
+            {
+                HttpContext.Response.StatusCode = 401;
+                return;
+            }
+
+            // Accept WebSocket only after all validation passes
+            var webSocket = await HttpContext.WebSockets.AcceptWebSocketAsync();
+            await _wsService.HandleWebSocketAsync(webSocket, mahasiswa.MhsNrp);
         }
         else
         {

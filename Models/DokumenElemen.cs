@@ -3,29 +3,54 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ValidasiTugasAkhir.MainService.Models;
 
+/// <summary>
+/// Represents a block element within a document (paragraph, table, etc.)
+/// </summary>
 [Table("dokumen_elemen")]
 public class DokumenElemen
 {
     [Key]
-    [Column("dokumen_elemen_id")]
-    public long DokumenElemenId { get; set; }
+    [Column("delemen_id")]
+    public ulong DelemenId { get; set; }
 
+    /// <summary>
+    /// Link to the parent document
+    /// </summary>
     [Column("dokumen_id")]
-    public int? DokumenId { get; set; }
+    public uint? DokumenId { get; set; }
 
-    [Column("dsec_id")]
-    public uint? DsecId { get; set; }
+    /// <summary>
+    /// Order within the document (1-indexed)
+    /// </summary>
+    [Column("delemen_sequence")]
+    public uint? DelemenSequence { get; set; }
 
-    [Column("dokumen_elemen_sequence")]
-    public int? DokumenElemenSequence { get; set; }
-
-    [Column("dokumen_elemen_type")]
+    /// <summary>
+    /// Element type: 'paragraph', 'table', 'image', 'math', 'sdt', etc.
+    /// </summary>
+    [Column("delemen_type")]
     [MaxLength(100)]
-    public string? DokumenElemenType { get; set; }
+    public string? DelemenType { get; set; }
 
-    [Column("dokumen_elemen_json_tree", TypeName = "json")]
-    public string? DokumenElemenJsonTree { get; set; }
+    /// <summary>
+    /// Full structured content as JSON
+    /// </summary>
+    [Column("delemen_json_tree", TypeName = "longtext")]
+    public string? DelemenJsonTree { get; set; }
 
-    [Column("dokumen_elemen_xml", TypeName = "longtext")]
-    public string? DokumenElemenXml { get; set; }
+    /// <summary>
+    /// Raw XML of the element
+    /// </summary>
+    [Column("delemen_xml", TypeName = "longtext")]
+    public string DelemenXml { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Link to the containing part (body, header, footer, etc.)
+    /// </summary>
+    [Column("dpart_id")]
+    public uint? DpartId { get; set; }
+
+    // Navigation properties
+    public virtual DokumenPart? Part { get; set; }
+    public virtual ICollection<DokumenNote> Notes { get; set; } = new List<DokumenNote>();
 }

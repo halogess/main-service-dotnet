@@ -11,6 +11,9 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<DokumenElemen> DokumenElemens { get; set; }
     public DbSet<DokumenMedia> DokumenMedias { get; set; }
     public DbSet<DokumenSection> DokumenSections { get; set; }
+    public DbSet<DokumenPart> DokumenParts { get; set; }
+    public DbSet<DokumenNote> DokumenNotes { get; set; }
+    public DbSet<DokumenFormatParagraf> DokumenFormatParagrafs { get; set; }
 
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
     public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
@@ -45,8 +48,11 @@ public class KorektorBukuDbContext : DbContext
 
         modelBuilder.Entity<DokumenElemen>(entity =>
         {
-            entity.HasKey(e => e.DokumenElemenId);
-            entity.Property(e => e.DokumenElemenJsonTree).HasColumnType("json");
+            entity.HasKey(e => e.DelemenId);
+            entity.Property(e => e.DelemenJsonTree).HasColumnType("longtext");
+            entity.HasOne(e => e.Part)
+                .WithMany(p => p.Elements)
+                .HasForeignKey(e => e.DpartId);
         });
 
         modelBuilder.Entity<DokumenMedia>(entity =>
@@ -59,6 +65,35 @@ public class KorektorBukuDbContext : DbContext
             entity.HasKey(e => e.DsecId);
         });
 
+        modelBuilder.Entity<DokumenPart>(entity =>
+        {
+            entity.HasKey(e => e.DpartId);
+            entity.HasOne(e => e.Section)
+                .WithMany(s => s.Parts)
+                .HasForeignKey(e => e.DsecId);
+        });
+
+        modelBuilder.Entity<DokumenNote>(entity =>
+        {
+            entity.HasKey(e => e.DnoteId);
+            entity.Property(e => e.DnoteJsonTree).HasColumnType("longtext");
+            entity.HasOne(e => e.Elemen)
+                .WithMany(e => e.Notes)
+                .HasForeignKey(e => e.DelemenId);
+        });
+
+        modelBuilder.Entity<DokumenFormatParagraf>(entity =>
+        {
+            entity.HasKey(e => e.DfpId);
+            entity.Property(e => e.DfpNumprJson).HasColumnType("longtext");
+            entity.Property(e => e.DfpPbdrJson).HasColumnType("longtext");
+            entity.Property(e => e.DfpShdJson).HasColumnType("longtext");
+            entity.Property(e => e.DfpTabsJson).HasColumnType("longtext");
+            entity.Property(e => e.DfpCnfStyleJson).HasColumnType("longtext");
+            entity.Property(e => e.DfpParaMarkRprJson).HasColumnType("longtext");
+            entity.Property(e => e.DfpPprChangeJson).HasColumnType("longtext");
+            entity.Property(e => e.DfpRawPprXml).HasColumnType("longtext");
+        });
 
         modelBuilder.Entity<AdobeCredential>(entity =>
         {

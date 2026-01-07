@@ -51,7 +51,7 @@ public class TableFormatExtractor
             if (tblW.Width?.HasValue == true)
             {
                 // TableWidth.Width is StringValue, need to parse
-                if (int.TryParse(tblW.Width.Value.ToString(), out int widthValue))
+                if (int.TryParse(tblW.Width.Value?.ToString() ?? "", out int widthValue))
                 {
                     // Store based on type
                     if (format.DftTblWType == "pct")

@@ -10,7 +10,7 @@ class Program
 {
     static void Main(string[] args)
     {
-        var docxPath = args.Length > 0 ? args[0] : @"e:\main-service-dotnet\bab2.docx";
+        var docxPath = args.Length > 0 ? args[0] : @"e:\main-service-dotnet\BAB II.docx";
         
         if (!File.Exists(docxPath))
         {

@@ -73,8 +73,7 @@ public class BukuService : IBukuService
                     AntrianTipe = "buku",
                     BukuId = (uint)buku.BukuId,
                     BabId = bab.BabId,
-                    AntrianWorker = "convert_pdf",
-                    AntrianConvertStatus = "in_queue",
+                    AntrianExtractionStatus = "in_queue",
                     AntrianCreatedAt = DateTime.Now,
                     AntrianUpdatedAt = DateTime.Now
                 };

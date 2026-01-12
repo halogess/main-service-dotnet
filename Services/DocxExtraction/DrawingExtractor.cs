@@ -26,8 +26,8 @@ public class DrawingExtractor
     {
         var (shapeId, shapeName) = GetShapeIdentity(drawing);
         
-        if (shapeName?.StartsWith("Group ") == true)
-            return null;
+        // Note: Group shapes (Groups) are now processed - they may contain TextBoxContent
+        // with text from flowcharts and diagrams that should be extracted
         
         int sortYPosition = 0;
         
@@ -67,10 +67,32 @@ public class DrawingExtractor
         
         var txbxContents = drawing.Descendants<TextBoxContent>().ToList();
         
-        var txbxContent = drawing.Descendants<TextBoxContent>().FirstOrDefault();
-        if (txbxContent != null)
+        // Handle shapes with textbox content (including Group shapes with multiple textboxes)
+        if (txbxContents.Count > 0)
         {
-            var content = extractTextBoxAsItems(txbxContent, numberingPart, numberingCounters);
+            var content = new JArray();
+            
+            // Add any images in the group
+            foreach (var rId in blips)
+                content.Add(new JObject { ["type"] = "image", ["rId"] = rId });
+            
+            // Add any charts in the group
+            foreach (var rId in chartRefs)
+                content.Add(new JObject { ["type"] = "chart", ["rId"] = rId });
+            
+            // Process ALL textbox contents (critical for Group shapes with multiple shapes)
+            foreach (var txbx in txbxContents)
+            {
+                var textItems = extractTextBoxAsItems(txbx, numberingPart, numberingCounters);
+                if (textItems.Count > 0)
+                {
+                    content.Add(new JObject { 
+                        ["type"] = "textbox", 
+                        ["content"] = textItems 
+                    });
+                }
+            }
+            
             return new JObject { 
                 ["type"] = "shape", 
                 ["content"] = content, 

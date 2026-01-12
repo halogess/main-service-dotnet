@@ -45,6 +45,7 @@ public class DocxExtractionService : IDocxExtractionService
             _logger.LogInformation("Starting extraction for dokumen {DokumenId}, path: {Path}", dokumenId, docxPath);
             
             using var doc = WordprocessingDocument.Open(docxPath, false);
+            var hasEvenAndOddHeaders = IsEvenAndOddHeadersEnabled(doc.MainDocumentPart?.DocumentSettingsPart);
             
             // Initialize StyleResolver for paragraph style chain resolution
             var stylesPart = doc.MainDocumentPart?.StyleDefinitionsPart;
@@ -110,6 +111,7 @@ public class DocxExtractionService : IDocxExtractionService
             foreach (var (upToIndex, sectPr) in sectionInfos)
             {
                 var section = SectionExtractor.ExtractSectionProperties(sectPr, dokumenId, sectionIndex);
+                SectionExtractor.UpdateOddEvenFromSettings(section, hasEvenAndOddHeaders);
                 _db.DokumenSections.Add(section);
                 await _db.SaveChangesAsync();
                 sectionIdMap.Add((upToIndex, section.DsecId, section));
@@ -549,5 +551,18 @@ public class DocxExtractionService : IDocxExtractionService
         }
         
         return new JObject { ["content"] = content };
+    }
+
+    private static bool IsEvenAndOddHeadersEnabled(DocumentSettingsPart? settingsPart)
+    {
+        var evenAndOdd = settingsPart?.Settings?.EvenAndOddHeaders;
+        if (evenAndOdd == null)
+            return false;
+
+        var valAttr = evenAndOdd.GetAttribute("val", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
+        if (string.IsNullOrEmpty(valAttr.Value))
+            return true;
+
+        return valAttr.Value == "1" || valAttr.Value.Equals("true", StringComparison.OrdinalIgnoreCase);
     }
 }

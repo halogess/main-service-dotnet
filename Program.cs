@@ -42,12 +42,14 @@ builder.Services.AddScoped<IBukuService, BukuService>();
 builder.Services.AddScoped<IDocxExtractionService, DocxExtractionService>();
 builder.Services.AddScoped<IAturanService, AturanService>();
 builder.Services.AddScoped<IJurusanService, JurusanService>();
+builder.Services.AddScoped<IValidationService, ValidationService>();
 builder.Services.AddSingleton<IWebSocketService, WebSocketService>();
 
 // Register Background Services
 builder.Services.AddScoped<IPdfConversionService, PdfConversionService>();
 builder.Services.AddHostedService<AdobeQuotaResetService>();
 builder.Services.AddHostedService<PdfQueueBackgroundService>();
+builder.Services.AddHostedService<ValidationQueueBackgroundService>();
 
 var app = builder.Build();
 

@@ -28,7 +28,7 @@ public class PdfQueueBackgroundService : BackgroundService
                 var wsService = scope.ServiceProvider.GetRequiredService<IWebSocketService>();
 
                 var queue = await db.Antrians
-                    .Where(a => a.AntrianWorker == "convert_pdf" && a.AntrianConvertStatus == "in_queue")
+                    .Where(a => a.AntrianExtractionStatus == "in_queue")
                     .OrderBy(a => a.AntrianCreatedAt)
                     .FirstOrDefaultAsync(stoppingToken);
 
@@ -42,7 +42,7 @@ public class PdfQueueBackgroundService : BackgroundService
 
                     _logger.LogInformation("Processing antrian ID: {AntrianId}, File: {FilePath}", queue.AntrianId, filePath);
 
-                    queue.AntrianConvertStatus = "processing";
+                    queue.AntrianExtractionStatus = "processing";
                     queue.AntrianUpdatedAt = DateTime.Now;
 
                     if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
@@ -109,8 +109,8 @@ public class PdfQueueBackgroundService : BackgroundService
                         Directory.CreateDirectory(Path.GetDirectoryName(fullPdfPath)!);
                         await File.WriteAllBytesAsync(fullPdfPath, pdfBytes, stoppingToken);
 
-                        queue.AntrianConvertStatus = "completed";
-                        queue.AntrianVisualStatus = "in_queue";
+                        queue.AntrianExtractionStatus = "completed";
+                        queue.AntrianLabelingStatus = "in_queue";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = null;
                         _logger.LogInformation("Completed antrian ID: {AntrianId}, PDF: {PdfPath}", queue.AntrianId, pdfPath);
@@ -136,9 +136,8 @@ public class PdfQueueBackgroundService : BackgroundService
                                 var allBabsCompleted = !await db.Antrians
                                     .AnyAsync(a => a.BukuId == queue.BukuId && 
                                                    a.AntrianTipe == "buku" && 
-                                                   a.AntrianWorker == "convert_pdf" && 
-                                                   a.AntrianConvertStatus != "completed" && 
-                                                   a.AntrianConvertStatus != "failed", stoppingToken);
+                                                   a.AntrianExtractionStatus != "completed" && 
+                                                   a.AntrianExtractionStatus != "failed", stoppingToken);
 
                                 if (allBabsCompleted && queue.BukuId.HasValue)
                                 {
@@ -155,28 +154,28 @@ public class PdfQueueBackgroundService : BackgroundService
                     }
                     catch (FileNotFoundException ex)
                     {
-                        queue.AntrianConvertStatus = "failed";
+                        queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = $"File tidak ditemukan: {ex.Message}";
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (HttpRequestException ex)
                     {
-                        queue.AntrianConvertStatus = "failed";
+                        queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = $"Adobe API error: {ex.Message}";
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (InvalidOperationException ex)
                     {
-                        queue.AntrianConvertStatus = "failed";
+                        queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = $"Konversi gagal: {ex.Message}";
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (Exception ex)
                     {
-                        queue.AntrianConvertStatus = "failed";
+                        queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = ex.Message.Length > 255 ? ex.Message[..252] + "..." : ex.Message;
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);

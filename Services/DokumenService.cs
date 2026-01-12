@@ -97,8 +97,7 @@ public class DokumenService : IDokumenService
         {
             AntrianTipe = "dokumen",
             DokumenId = (uint)dokumen.DokumenId,
-            AntrianWorker = "convert_pdf",
-            AntrianConvertStatus = "in_queue",
+            AntrianExtractionStatus = "in_queue",
             AntrianCreatedAt = DateTime.Now,
             AntrianUpdatedAt = DateTime.Now
         };

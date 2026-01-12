@@ -1,3 +1,4 @@
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
 using ValidasiTugasAkhir.MainService.Models;
 
@@ -72,8 +73,14 @@ public static class SectionExtractor
         }
         
         // Gutter position
-        var gutterAtTop = sectPr.GetFirstChild<GutterOnRight>();
-        section.DsecGutterPosition = gutterAtTop != null ? "top" : "left";
+        var gutterAtTop = sectPr.GetFirstChild<GutterAtTop>();
+        var gutterOnRight = sectPr.GetFirstChild<GutterOnRight>();
+        if (IsOn(gutterAtTop))
+            section.DsecGutterPosition = "top";
+        else if (IsOn(gutterOnRight))
+            section.DsecGutterPosition = "right";
+        else
+            section.DsecGutterPosition = "left";
         
         // Page Numbering
         var pageNumberType = sectPr.GetFirstChild<PageNumberType>();
@@ -100,6 +107,18 @@ public static class SectionExtractor
         }
         
         return section;
+    }
+
+    private static bool IsOn(OpenXmlElement? element)
+    {
+        if (element == null)
+            return false;
+
+        var valAttr = element.GetAttribute("val", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
+        if (string.IsNullOrEmpty(valAttr.Value))
+            return true;
+
+        return valAttr.Value == "1" || valAttr.Value.Equals("true", StringComparison.OrdinalIgnoreCase);
     }
     
     /// <summary>

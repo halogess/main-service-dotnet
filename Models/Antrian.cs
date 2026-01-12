@@ -22,17 +22,14 @@ public class Antrian
     [Column("dokumen_id")]
     public uint? DokumenId { get; set; }
 
-    [Column("antrian_worker")]
-    public string AntrianWorker { get; set; } = string.Empty; // 'convert_pdf', 'struktur', 'visual'
+    [Column("antrian_extraction_status")]
+    public string? AntrianExtractionStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
 
-    [Column("antrian_convert_status")]
-    public string? AntrianConvertStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
+    [Column("antrian_labeling_status")]
+    public string? AntrianLabelingStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
 
-    [Column("antrian_visual_status")]
-    public string? AntrianVisualStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
-
-    [Column("antrian_struktur_status")]
-    public string? AntrianStrukturStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
+    [Column("antrian_validation_status")]
+    public string? AntrianValidationStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
 
     [Column("antrian_error_message")]
     [MaxLength(255)]

@@ -335,7 +335,7 @@ public class TestingController : ControllerBase
 
                 var updated = await _db.Antrians
                     .Where(a => a.BukuId == id)
-                    .ExecuteUpdateAsync(s => s.SetProperty(a => a.AntrianVisualStatus, "in_queue"));
+                    .ExecuteUpdateAsync(s => s.SetProperty(a => a.AntrianValidationStatus, "in_queue"));
 
                 return Ok(new { message = "Reset visual berhasil", deleted_folders = deletedFolders, updated_antrian = updated });
             }
@@ -373,7 +373,7 @@ public class TestingController : ControllerBase
 
                 var updated = await _db.Antrians
                     .Where(a => a.DokumenId == id)
-                    .ExecuteUpdateAsync(s => s.SetProperty(a => a.AntrianVisualStatus, "in_queue"));
+                    .ExecuteUpdateAsync(s => s.SetProperty(a => a.AntrianValidationStatus, "in_queue"));
 
                 return Ok(new { message = "Reset visual berhasil", deleted_folders = deletedFolders, updated_antrian = updated });
             }

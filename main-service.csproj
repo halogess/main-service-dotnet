@@ -13,6 +13,7 @@
     <Compile Remove="DebugSections\**" />
     <Compile Remove="DebugElementCount\**" />
     <Compile Remove="DebugTableExtraction\**" />
+    <Compile Remove="DebugShapes\**" />
     <Compile Remove="Tests\**" />
     <Content Remove="DbFixer\**" />
     <Content Remove="DocChecker\**" />

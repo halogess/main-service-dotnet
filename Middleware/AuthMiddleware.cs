@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using System.Security.Claims;
 
 namespace ValidasiTugasAkhir.MainService.Middleware;
 
@@ -61,6 +62,9 @@ public class AuthMiddleware
             }, out SecurityToken validatedToken);
 
             var jwtToken = (JwtSecurityToken)validatedToken;
+            var claimsIdentity = new ClaimsIdentity(jwtToken.Claims, "Jwt");
+            context.User = new ClaimsPrincipal(claimsIdentity);
+
             var username = jwtToken.Claims.FirstOrDefault(c => c.Type == "username")?.Value;
             var role = jwtToken.Claims.FirstOrDefault(c => c.Type == "role")?.Value;
 

@@ -98,7 +98,7 @@ public class DokumenSection
     public uint? DsecGutterTwips { get; set; }
 
     /// <summary>
-    /// Gutter position: 'top' or 'left'
+    /// Gutter position: 'left', 'right', or 'top'
     /// </summary>
     [Column("dsec_gutter_position")]
     [MaxLength(10)]

@@ -284,6 +284,18 @@ public class ValidationError
     public string? Expected { get; set; }
     public string? Actual { get; set; }
     public int? SectionIndex { get; set; }
+    public string? DiffType { get; set; }
+    public string? Cause { get; set; }
+    public bool? HasNumbering { get; set; }
+    public string? StyleName { get; set; }
+    public string? StyleId { get; set; }
+    public string? Evidence { get; set; }
+    public string? ToolRequirement { get; set; }
+    public string? FeatureName { get; set; }
+    public List<string>? AllowedActions { get; set; }
+    public List<string>? DisallowedActions { get; set; }
+    public string? ScopeHint { get; set; }
+    public string? PageRange { get; set; }
 }
 
 #endregion

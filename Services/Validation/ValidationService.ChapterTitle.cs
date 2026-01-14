@@ -217,7 +217,7 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "judul_bab",
-                Message = "Nomor bab tidak boleh memiliki spasi tambahan",
+                Message = "Nomor bab tidak boleh memiliki spasi di awal, tab, double space, atau lebih dari 1 spasi di akhir",
                 Actual = numberLine
             });
         }
@@ -649,6 +649,30 @@ public partial class ValidationService
             }
         }
 
+        if (titleParagraphs.Count > 0)
+        {
+            var titleHasNumbering = titleParagraphs.Any(pf => pf != null &&
+                (pf.DfpIsList || !string.IsNullOrWhiteSpace(pf.DfpNumprJson) || (pf.DfpListNumId ?? 0) > 0));
+            var titleStyleId = titleParagraphs
+                .Select(pf => pf?.DfpPStyleId)
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id));
+
+            foreach (var error in result.Errors)
+            {
+                if (!string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!error.HasNumbering.HasValue)
+                    error.HasNumbering = titleHasNumbering;
+
+                if (string.IsNullOrWhiteSpace(error.StyleId) && !string.IsNullOrWhiteSpace(titleStyleId))
+                    error.StyleId = titleStyleId;
+
+                if (string.IsNullOrWhiteSpace(error.StyleName) && !string.IsNullOrWhiteSpace(error.StyleId))
+                    error.StyleName = error.StyleId;
+            }
+        }
+
         return result;
     }
 
@@ -869,13 +893,25 @@ public partial class ValidationService
         if (string.IsNullOrEmpty(input))
             return true;
 
-        if (!string.Equals(input, input.Trim(), StringComparison.Ordinal))
+        // Check for leading whitespace (not allowed)
+        if (input.Length > 0 && char.IsWhiteSpace(input[0]))
             return true;
 
+        // Check for tabs (not allowed)
         if (input.Contains('\t'))
             return true;
 
-        return input.Contains("  ");
+        // Check for double spaces (not allowed)
+        if (input.Contains("  "))
+            return true;
+
+        // Allow single trailing space, but not more
+        var trimmed = input.TrimEnd();
+        var trailingSpaces = input.Length - trimmed.Length;
+        if (trailingSpaces > 1)
+            return true;
+
+        return false;
     }
 
     private static bool MatchesNumberFormat(string numberLine, string template, string? caseRule)

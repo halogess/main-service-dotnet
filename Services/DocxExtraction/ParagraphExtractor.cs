@@ -39,6 +39,7 @@ public class ParagraphExtractor
     
     // Database context for saving formats (optional - set via SetDbContext)
     private KorektorBukuDbContext? _db;
+    private ThemeFontLangResolver? _themeFontLangResolver;
     
     // Table extraction callback (to handle nested tables in textboxes)
     private Func<Table, NumberingDefinitionsPart?, Dictionary<int, Dictionary<int, int>>?, Task<JObject>>? _tableExtractor;
@@ -66,6 +67,14 @@ public class ParagraphExtractor
     public void SetStyleResolver(StyleResolver? styleResolver)
     {
         _styleResolver = styleResolver;
+    }
+
+    /// <summary>
+    /// Sets the ThemeFontLangResolver for script-aware font selection
+    /// </summary>
+    public void SetThemeFontLangResolver(ThemeFontLangResolver? themeFontLangResolver)
+    {
+        _themeFontLangResolver = themeFontLangResolver;
     }
     
     /// <summary>
@@ -216,7 +225,7 @@ public class ParagraphExtractor
             uint? textFormatId = null;
             if (_db != null && currentRun != null && _styleResolver != null)
             {
-                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(currentRun, _styleResolver, paragraphProps);
+                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(currentRun, _styleResolver, paragraphProps, _themeFontLangResolver);
                 _db.DokumenFormatTexts.Add(textFormat);
                 _db.SaveChanges();
                 textFormatId = textFormat.DftxId;
@@ -289,7 +298,7 @@ public class ParagraphExtractor
             // Add result format ID if we captured first result run (save ALL, not just significant)
             if (firstResultRun != null && _db != null && _styleResolver != null)
             {
-                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(firstResultRun, _styleResolver, paragraphProps);
+                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(firstResultRun, _styleResolver, paragraphProps, _themeFontLangResolver);
                 _db.DokumenFormatTexts.Add(textFormat);
                 _db.SaveChanges();
                 fieldItem["result_dftx_id"] = textFormat.DftxId;
@@ -325,7 +334,8 @@ public class ParagraphExtractor
                 {
                     effective = _styleResolver.GetEffectiveRunProperties(run, paragraphProps);
                     // Create format signature from key properties: font|size|bold|italic|underline
-                    formatSignature = $"{effective.FontAscii ?? ""}|{effective.FontSize ?? 0}|{(effective.Bold == true ? "B" : "")}|{(effective.Italic == true ? "I" : "")}|{(effective.Underline == true ? "U" : "")}|{effective.UnderlineStyle ?? ""}";
+                    var fontKey = TextFormatExtractor.ResolvePreferredFont(effective, run, _themeFontLangResolver) ?? "";
+                    formatSignature = $"{fontKey}|{effective.FontSize ?? 0}|{(effective.Bold == true ? "B" : "")}|{(effective.Italic == true ? "I" : "")}|{(effective.Underline == true ? "U" : "")}|{effective.UnderlineStyle ?? ""}";
                 }
                 
                 var runText = new StringBuilder();
@@ -621,7 +631,7 @@ public class ParagraphExtractor
                 var resultRun = simpleField.Descendants<Run>().FirstOrDefault();
                 if (resultRun != null && _db != null && _styleResolver != null)
                 {
-                    var textFormat = _textFormatExtractor.ExtractEffectiveFormat(resultRun, _styleResolver, paragraphProps);
+                    var textFormat = _textFormatExtractor.ExtractEffectiveFormat(resultRun, _styleResolver, paragraphProps, _themeFontLangResolver);
                     _db.DokumenFormatTexts.Add(textFormat);
                     _db.SaveChanges();
                     fieldItem["result_dftx_id"] = textFormat.DftxId;

@@ -10,19 +10,25 @@ namespace ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 public class StyleResolver
 {
     private readonly Dictionary<string, Style> _stylesById = new();
-    private readonly StylesPart? _stylesPart;
+    private readonly ThemeFontResolver? _themeFontResolver;
+    private readonly Styles? _stylesRoot;
     
     // Cached docDefaults
     private RunPropertiesBaseStyle? _docDefaultsRPr;
     private ParagraphPropertiesBaseStyle? _docDefaultsPPr;
     
-    public StyleResolver(StylesPart? stylesPart)
+    public StyleResolver(
+        StylesPart? stylesPart,
+        StylesWithEffectsPart? stylesWithEffectsPart,
+        ThemeFontResolver? themeFontResolver = null)
     {
-        _stylesPart = stylesPart;
-        if (stylesPart?.Styles != null)
+        _themeFontResolver = themeFontResolver;
+
+        _stylesRoot = stylesWithEffectsPart?.Styles ?? stylesPart?.Styles;
+        if (_stylesRoot != null)
         {
             // Cache all styles by ID
-            foreach (var style in stylesPart.Styles.Elements<Style>())
+            foreach (var style in _stylesRoot.Elements<Style>())
             {
                 var styleId = style.StyleId?.Value;
                 if (!string.IsNullOrEmpty(styleId))
@@ -30,7 +36,7 @@ public class StyleResolver
             }
             
             // Cache docDefaults
-            var docDefaults = stylesPart.Styles.DocDefaults;
+            var docDefaults = _stylesRoot.DocDefaults;
             if (docDefaults != null)
             {
                 _docDefaultsRPr = docDefaults.RunPropertiesDefault?.RunPropertiesBaseStyle;
@@ -298,7 +304,7 @@ public class StyleResolver
                 var levelRPr = level.NumberingSymbolRunProperties;
                 if (levelRPr != null)
                 {
-                    NumberingResolver.MergeNumberingLevelRunProperties(effective, levelRPr, $"lvl:{ilvl}");
+                    NumberingResolver.MergeNumberingLevelRunProperties(effective, levelRPr, $"lvl:{ilvl}", _themeFontResolver);
                 }
             }
         }
@@ -320,12 +326,7 @@ public class StyleResolver
         // Font
         var fonts = rPr.GetFirstChild<RunFonts>();
         if (fonts != null)
-        {
-            if (fonts.Ascii?.Value != null) effective.FontAscii = fonts.Ascii.Value;
-            if (fonts.HighAnsi?.Value != null) effective.FontHighAnsi = fonts.HighAnsi.Value;
-            if (fonts.EastAsia?.Value != null) effective.FontEastAsia = fonts.EastAsia.Value;
-            if (fonts.ComplexScript?.Value != null) effective.FontComplexScript = fonts.ComplexScript.Value;
-        }
+            ApplyRunFonts(effective, fonts);
         
         // Font Size
         var fontSize = rPr.GetFirstChild<FontSize>();
@@ -406,12 +407,7 @@ public class StyleResolver
         
         var fonts = rPr.GetFirstChild<RunFonts>();
         if (fonts != null)
-        {
-            if (fonts.Ascii?.Value != null) effective.FontAscii = fonts.Ascii.Value;
-            if (fonts.HighAnsi?.Value != null) effective.FontHighAnsi = fonts.HighAnsi.Value;
-            if (fonts.EastAsia?.Value != null) effective.FontEastAsia = fonts.EastAsia.Value;
-            if (fonts.ComplexScript?.Value != null) effective.FontComplexScript = fonts.ComplexScript.Value;
-        }
+            ApplyRunFonts(effective, fonts);
         
         var fontSize = rPr.GetFirstChild<FontSize>();
         if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
@@ -481,12 +477,7 @@ public class StyleResolver
         
         var fonts = rPr.GetFirstChild<RunFonts>();
         if (fonts != null)
-        {
-            if (fonts.Ascii?.Value != null) effective.FontAscii = fonts.Ascii.Value;
-            if (fonts.HighAnsi?.Value != null) effective.FontHighAnsi = fonts.HighAnsi.Value;
-            if (fonts.EastAsia?.Value != null) effective.FontEastAsia = fonts.EastAsia.Value;
-            if (fonts.ComplexScript?.Value != null) effective.FontComplexScript = fonts.ComplexScript.Value;
-        }
+            ApplyRunFonts(effective, fonts);
         
         var fontSize = rPr.GetFirstChild<FontSize>();
         if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
@@ -661,5 +652,42 @@ public class StyleResolver
             if (spacing.BeforeLines?.Value != null) effective.SpaceBeforeLines = spacing.BeforeLines.Value;
             if (spacing.AfterLines?.Value != null) effective.SpaceAfterLines = spacing.AfterLines.Value;
         }
+    }
+
+    private void ApplyRunFonts(EffectiveRunProperties effective, RunFonts fonts)
+    {
+        var asciiTheme = GetRunFontsAttributeValue(fonts, "asciiTheme");
+        var highAnsiTheme = GetRunFontsAttributeValue(fonts, "hAnsiTheme");
+        var eastAsiaTheme = GetRunFontsAttributeValue(fonts, "eastAsiaTheme");
+        var complexTheme = GetRunFontsAttributeValue(fonts, "cstheme");
+        var hint = GetRunFontsAttributeValue(fonts, "hint");
+
+        effective.FontAscii = ResolveFont(effective.FontAscii, fonts.Ascii?.Value, asciiTheme);
+        effective.FontHighAnsi = ResolveFont(effective.FontHighAnsi, fonts.HighAnsi?.Value, highAnsiTheme);
+        effective.FontEastAsia = ResolveFont(effective.FontEastAsia, fonts.EastAsia?.Value, eastAsiaTheme);
+        effective.FontComplexScript = ResolveFont(effective.FontComplexScript, fonts.ComplexScript?.Value, complexTheme);
+        if (!string.IsNullOrWhiteSpace(hint))
+            effective.FontHint = hint;
+    }
+
+    private string? ResolveFont(string? current, string? explicitFont, string? themeValue)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitFont))
+            return explicitFont.Trim();
+
+        if (!string.IsNullOrWhiteSpace(themeValue))
+        {
+            var resolved = _themeFontResolver?.ResolveThemeFont(themeValue);
+            if (!string.IsNullOrWhiteSpace(resolved))
+                return resolved;
+        }
+
+        return current;
+    }
+
+    private static string? GetRunFontsAttributeValue(RunFonts fonts, string localName)
+    {
+        var attr = fonts.GetAttributes().FirstOrDefault(a => a.LocalName == localName);
+        return string.IsNullOrWhiteSpace(attr.Value) ? null : attr.Value;
     }
 }

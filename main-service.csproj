@@ -14,24 +14,28 @@
     <Compile Remove="DebugElementCount\**" />
     <Compile Remove="DebugTableExtraction\**" />
     <Compile Remove="DebugShapes\**" />
+    <Compile Remove="DebugFontResolution\**" />
     <Compile Remove="Tests\**" />
     <Content Remove="DbFixer\**" />
     <Content Remove="DocChecker\**" />
     <Content Remove="DebugSections\**" />
     <Content Remove="DebugElementCount\**" />
     <Content Remove="DebugTableExtraction\**" />
+    <Content Remove="DebugFontResolution\**" />
     <Content Remove="Tests\**" />
     <EmbeddedResource Remove="DbFixer\**" />
     <EmbeddedResource Remove="DocChecker\**" />
     <EmbeddedResource Remove="DebugSections\**" />
     <EmbeddedResource Remove="DebugElementCount\**" />
     <EmbeddedResource Remove="DebugTableExtraction\**" />
+    <EmbeddedResource Remove="DebugFontResolution\**" />
     <EmbeddedResource Remove="Tests\**" />
     <None Remove="DbFixer\**" />
     <None Remove="DocChecker\**" />
     <None Remove="DebugSections\**" />
     <None Remove="DebugElementCount\**" />
     <None Remove="DebugTableExtraction\**" />
+    <None Remove="DebugFontResolution\**" />
     <None Remove="Tests\**" />
   </ItemGroup>
 

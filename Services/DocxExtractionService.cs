@@ -49,8 +49,12 @@ public class DocxExtractionService : IDocxExtractionService
             
             // Initialize StyleResolver for paragraph style chain resolution
             var stylesPart = doc.MainDocumentPart?.StyleDefinitionsPart;
-            var styleResolver = new StyleResolver(stylesPart);
+            var stylesWithEffectsPart = doc.MainDocumentPart?.StylesWithEffectsPart;
+            var themeResolver = ThemeFontResolver.FromThemePart(doc.MainDocumentPart?.ThemePart);
+            var themeLangResolver = ThemeFontLangResolver.FromSettingsPart(doc.MainDocumentPart?.DocumentSettingsPart);
+            var styleResolver = new StyleResolver(stylesPart, stylesWithEffectsPart, themeResolver);
             _paragraphExtractor.SetStyleResolver(styleResolver);
+            _paragraphExtractor.SetThemeFontLangResolver(themeLangResolver);
             _paragraphExtractor.SetDbContext(_db); // Enable inline format saving
             
             // Initialize TableStyleResolver for table format resolution

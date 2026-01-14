@@ -74,17 +74,26 @@ public class NumberingResolver
     public static void MergeNumberingLevelRunProperties(
         EffectiveRunProperties effective, 
         NumberingSymbolRunProperties rPr, 
-        string source)
+        string source,
+        ThemeFontResolver? themeFontResolver = null)
     {
         effective.ResolvedFromStyle = source;
         
         var fonts = rPr.GetFirstChild<RunFonts>();
         if (fonts != null)
         {
-            if (fonts.Ascii?.Value != null) effective.FontAscii = fonts.Ascii.Value;
-            if (fonts.HighAnsi?.Value != null) effective.FontHighAnsi = fonts.HighAnsi.Value;
-            if (fonts.EastAsia?.Value != null) effective.FontEastAsia = fonts.EastAsia.Value;
-            if (fonts.ComplexScript?.Value != null) effective.FontComplexScript = fonts.ComplexScript.Value;
+            var asciiTheme = GetRunFontsAttributeValue(fonts, "asciiTheme");
+            var highAnsiTheme = GetRunFontsAttributeValue(fonts, "hAnsiTheme");
+            var eastAsiaTheme = GetRunFontsAttributeValue(fonts, "eastAsiaTheme");
+            var complexTheme = GetRunFontsAttributeValue(fonts, "cstheme");
+            var hint = GetRunFontsAttributeValue(fonts, "hint");
+
+            effective.FontAscii = ResolveFont(effective.FontAscii, fonts.Ascii?.Value, asciiTheme, themeFontResolver);
+            effective.FontHighAnsi = ResolveFont(effective.FontHighAnsi, fonts.HighAnsi?.Value, highAnsiTheme, themeFontResolver);
+            effective.FontEastAsia = ResolveFont(effective.FontEastAsia, fonts.EastAsia?.Value, eastAsiaTheme, themeFontResolver);
+            effective.FontComplexScript = ResolveFont(effective.FontComplexScript, fonts.ComplexScript?.Value, complexTheme, themeFontResolver);
+            if (!string.IsNullOrWhiteSpace(hint))
+                effective.FontHint = hint;
         }
         
         var fontSize = rPr.GetFirstChild<FontSize>();
@@ -118,5 +127,26 @@ public class NumberingResolver
         var strike = rPr.GetFirstChild<Strike>();
         if (strike != null)
             effective.Strike = strike.Val?.Value ?? true;
+    }
+
+    private static string? ResolveFont(string? current, string? explicitFont, string? themeValue, ThemeFontResolver? themeFontResolver)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitFont))
+            return explicitFont.Trim();
+
+        if (!string.IsNullOrWhiteSpace(themeValue))
+        {
+            var resolved = themeFontResolver?.ResolveThemeFont(themeValue);
+            if (!string.IsNullOrWhiteSpace(resolved))
+                return resolved;
+        }
+
+        return current;
+    }
+
+    private static string? GetRunFontsAttributeValue(RunFonts fonts, string localName)
+    {
+        var attr = fonts.GetAttributes().FirstOrDefault(a => a.LocalName == localName);
+        return string.IsNullOrWhiteSpace(attr.Value) ? null : attr.Value;
     }
 }

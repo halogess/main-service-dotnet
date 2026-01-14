@@ -12,6 +12,7 @@ public class EffectiveRunProperties
     public string? FontHighAnsi { get; set; }
     public string? FontEastAsia { get; set; }
     public string? FontComplexScript { get; set; }
+    public string? FontHint { get; set; } // default, eastAsia, cs
     
     // Size (in half-points, divide by 2 for pt)
     public int? FontSize { get; set; }

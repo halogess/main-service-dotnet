@@ -52,8 +52,14 @@ public class ValidationQueueBackgroundService : BackgroundService
                             var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
                             if (dokumen != null)
                             {
+                                // Notify: Validation started
+                                await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "started", 0);
+
                                 // Perform validation on dokumen
                                 validationResult = await validationService.ValidateDokumenAsync((int)queue.DokumenId.Value, stoppingToken);
+                                
+                                // Notify: Validation complete, processing results
+                                await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "processing_results", 70);
                                 
                                 // Update dokumen with validation results
                                 dokumen.DokumenSkor = (int)Math.Round(validationResult.Score);
@@ -65,6 +71,9 @@ public class ValidationQueueBackgroundService : BackgroundService
 
                                 if (validationResult.Errors.Count > 0)
                                 {
+                                    // Notify: Enriching errors with AI
+                                    await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "enriching", 85);
+
                                     await EnrichAndStoreErrorsAsync(
                                         db,
                                         geminiService,
@@ -72,6 +81,9 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         validationResult.Errors,
                                         stoppingToken);
                                 }
+
+                                // Notify: Completed
+                                await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "completed", 100);
                             }
                         }
                         else if (queue.AntrianTipe == "buku" && queue.BabId.HasValue)
@@ -240,7 +252,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                 KesalahanJudul = title,
                 KesalahanPenjelasan = explanation,
                 KesalahanLokasi = BuildKesalahanLokasi(error),
-                KesalahanBboxVisual = null,
+                KesalahanBboxVisual = error.BboxVisual,
                 KesalahanSteps = stepsJson
             });
         }
@@ -251,18 +263,18 @@ public class ValidationQueueBackgroundService : BackgroundService
 
     private static string? BuildKesalahanLokasi(ValidationError error)
     {
-        var parts = new List<string>();
+        var location = new Dictionary<string, object>();
 
         if (error.PageNumber.HasValue)
-            parts.Add($"halaman={error.PageNumber.Value}");
+            location["halaman_ke"] = error.PageNumber.Value;
 
         if (error.SectionIndex.HasValue)
-            parts.Add($"section={error.SectionIndex.Value}");
+            location["section"] = error.SectionIndex.Value;
 
         if (!string.IsNullOrWhiteSpace(error.Field))
-            parts.Add($"field={error.Field}");
+            location["field"] = error.Field;
 
-        return parts.Count > 0 ? string.Join("; ", parts) : null;
+        return location.Count > 0 ? JsonSerializer.Serialize(location) : null;
     }
 
     private static string BuildFallbackExplanation(ValidationError error)

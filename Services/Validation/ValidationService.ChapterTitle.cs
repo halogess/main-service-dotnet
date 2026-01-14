@@ -673,6 +673,36 @@ public partial class ValidationService
             }
         }
 
+        // Load page numbers from dokumen_elemen_visual and assign to errors
+        if (result.Errors.Count > 0 && titleIds.Count > 0)
+        {
+            var pageNumbers = await LoadPageNumbersAsync(titleIds, cancellationToken);
+            if (pageNumbers.Count > 0)
+            {
+                var firstPageNumber = pageNumbers.Values.Min();
+                foreach (var error in result.Errors)
+                {
+                    if (string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase) && !error.PageNumber.HasValue)
+                    {
+                        error.PageNumber = firstPageNumber;
+                    }
+                }
+            }
+
+            // Load merged bbox from dokumen_elemen_visual
+            var mergedBbox = await LoadMergedBboxAsync(titleIds, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(mergedBbox))
+            {
+                foreach (var error in result.Errors)
+                {
+                    if (string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(error.BboxVisual))
+                    {
+                        error.BboxVisual = mergedBbox;
+                    }
+                }
+            }
+        }
+
         return result;
     }
 
@@ -884,6 +914,71 @@ public partial class ValidationService
         }
 
         return pageNumbers;
+    }
+
+    private async Task<string?> LoadMergedBboxAsync(
+        IEnumerable<ulong> delemenIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = delemenIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return null;
+
+        var (idColumn, _) = await ResolveVisualColumnsAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(idColumn))
+            return null;
+
+        var connection = _db.Database.GetDbConnection();
+        var shouldClose = connection.State != ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+
+        double? minX0 = null, minY0 = null, maxX1 = null, maxY1 = null;
+
+        try
+        {
+            foreach (var chunk in ids.Chunk(500))
+            {
+                var idList = string.Join(",", chunk);
+                var sql = $"SELECT `dev_bbox_x0`, `dev_bbox_y0`, `dev_bbox_x1`, `dev_bbox_y1` " +
+                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList})";
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = sql;
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    double? x0 = reader["dev_bbox_x0"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_x0"]) : null;
+                    double? y0 = reader["dev_bbox_y0"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y0"]) : null;
+                    double? x1 = reader["dev_bbox_x1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_x1"]) : null;
+                    double? y1 = reader["dev_bbox_y1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y1"]) : null;
+
+                    if (x0.HasValue && y0.HasValue && x1.HasValue && y1.HasValue)
+                    {
+                        minX0 = minX0.HasValue ? Math.Min(minX0.Value, x0.Value) : x0.Value;
+                        minY0 = minY0.HasValue ? Math.Min(minY0.Value, y0.Value) : y0.Value;
+                        maxX1 = maxX1.HasValue ? Math.Max(maxX1.Value, x1.Value) : x1.Value;
+                        maxY1 = maxY1.HasValue ? Math.Max(maxY1.Value, y1.Value) : y1.Value;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load bbox from dokumen_elemen_visual");
+            return null;
+        }
+        finally
+        {
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+        }
+
+        if (!minX0.HasValue || !minY0.HasValue || !maxX1.HasValue || !maxY1.HasValue)
+            return null;
+
+        var bbox = new { x0 = minX0.Value, y0 = minY0.Value, x1 = maxX1.Value, y1 = maxY1.Value };
+        return JsonSerializer.Serialize(bbox);
     }
 
     private async Task<(string? IdColumn, string? LabelColumn)> ResolveVisualColumnsAsync(CancellationToken cancellationToken)

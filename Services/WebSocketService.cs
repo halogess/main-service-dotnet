@@ -13,6 +13,7 @@ public interface IWebSocketService
     Task NotifyQueuePositionChanged(string nrp, int position);
     Task NotifyBukuStatusChanged(string nrp, int bukuId, string status);
     Task NotifyBukuCancelled(string nrp, int bukuId);
+    Task NotifyValidationProgress(string nrp, int dokumenId, string stage, int progress);
 }
 
 public class WebSocketService : IWebSocketService
@@ -91,6 +92,18 @@ public class WebSocketService : IWebSocketService
         {
             type = "buku_cancelled",
             buku_id = bukuId,
+            timestamp = DateTime.Now
+        });
+    }
+
+    public async Task NotifyValidationProgress(string nrp, int dokumenId, string stage, int progress)
+    {
+        await SendMessage(nrp, new
+        {
+            type = "validation_progress",
+            dokumen_id = dokumenId,
+            stage = stage,
+            progress = progress,
             timestamp = DateTime.Now
         });
     }

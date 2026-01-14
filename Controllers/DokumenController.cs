@@ -180,11 +180,11 @@ public class DokumenController : ControllerBase
         return Ok(response);
     }
 
-    [HttpGet("{dokumenId}/image/{urutanImage}")]
-    public async Task<IActionResult> GetDokumenImage(int dokumenId, int urutanImage)
+    [HttpGet("{dokumenId}/image/{page}")]
+    public async Task<IActionResult> GetDokumenImage(int dokumenId, int page)
     {
-        if (urutanImage <= 0)
-            return BadRequest(new { message = "Urutan image harus lebih dari 0" });
+        if (page <= 0)
+            return BadRequest(new { message = "Page harus lebih dari 0" });
 
         var currentNrp = HttpContext.Items["Nrp"]?.ToString();
         var role = HttpContext.Items["Role"]?.ToString();
@@ -196,12 +196,11 @@ public class DokumenController : ControllerBase
         if (role != "admin" && dokumen.MhsNrp != currentNrp)
             return Forbid();
 
-        if (string.IsNullOrWhiteSpace(dokumen.DokumenImagesPath))
-            return NotFound(new { message = "Path image tidak ditemukan" });
-
         var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
         var fullStoragePath = Path.GetFullPath(storagePath);
-        var imagesDir = Path.GetFullPath(Path.Combine(storagePath, dokumen.DokumenImagesPath));
+        
+        // Path: storage/dokumen/{nrp}/{dokumenId}/images/{page}.jpg
+        var imagesDir = Path.GetFullPath(Path.Combine(storagePath, "dokumen", dokumen.MhsNrp!, dokumenId.ToString(), "images"));
 
         if (!imagesDir.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { message = "Path image tidak valid" });
@@ -209,19 +208,21 @@ public class DokumenController : ControllerBase
         if (!Directory.Exists(imagesDir))
             return NotFound(new { message = "Folder image tidak ditemukan" });
 
-        var imageFiles = Directory.EnumerateFiles(imagesDir)
-            .Where(path => AllowedImageExtensions.Contains(Path.GetExtension(path)))
-            .Select(path => new { Path = path, SortKey = GetImageSortKey(path) })
-            .OrderBy(item => item.SortKey.HasNumber ? 0 : 1)
-            .ThenBy(item => item.SortKey.Number)
-            .ThenBy(item => item.SortKey.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(item => item.Path)
-            .ToList();
+        // Try different extensions in order of preference
+        string? filePath = null;
+        foreach (var ext in new[] { ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff" })
+        {
+            var candidate = Path.Combine(imagesDir, $"{page}{ext}");
+            if (System.IO.File.Exists(candidate))
+            {
+                filePath = candidate;
+                break;
+            }
+        }
 
-        if (urutanImage > imageFiles.Count)
-            return NotFound(new { message = "Image tidak ditemukan" });
+        if (filePath == null)
+            return NotFound(new { message = $"Image halaman {page} tidak ditemukan" });
 
-        var filePath = imageFiles[urutanImage - 1];
         var contentType = GetImageContentType(filePath);
         return PhysicalFile(filePath, contentType);
     }

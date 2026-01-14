@@ -146,6 +146,11 @@ public class TextFormatExtractor
         if (normalizedHint == "cs" || normalizedHint == "bidi")
             return PickComplexScript(effective);
 
+        if (!string.IsNullOrWhiteSpace(effective.LangBidi))
+            return PickComplexScript(effective);
+        if (!string.IsNullOrWhiteSpace(effective.LangEastAsia))
+            return PickEastAsia(effective);
+
         if (!string.IsNullOrEmpty(text))
         {
             if (ContainsComplexScript(text))

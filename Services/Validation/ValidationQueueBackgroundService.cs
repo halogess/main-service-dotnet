@@ -235,9 +235,11 @@ public class ValidationQueueBackgroundService : BackgroundService
             kesalahanItems.Add(new Kesalahan
             {
                 KesalahanKategori = category,
+                KesalahanRefTipe = KesalahanRefTipe.dokumen,
+                KesalahanRefId = dokumenId,
                 KesalahanJudul = title,
                 KesalahanPenjelasan = explanation,
-                KesalahanLocation = BuildKesalahanLocation(dokumenId, error),
+                KesalahanLokasi = BuildKesalahanLokasi(error),
                 KesalahanBboxVisual = null,
                 KesalahanSteps = stepsJson
             });
@@ -247,9 +249,12 @@ public class ValidationQueueBackgroundService : BackgroundService
             db.Kesalahans.AddRange(kesalahanItems);
     }
 
-    private static string BuildKesalahanLocation(uint dokumenId, ValidationError error)
+    private static string? BuildKesalahanLokasi(ValidationError error)
     {
-        var parts = new List<string> { $"dokumen_id={dokumenId}" };
+        var parts = new List<string>();
+
+        if (error.PageNumber.HasValue)
+            parts.Add($"halaman={error.PageNumber.Value}");
 
         if (error.SectionIndex.HasValue)
             parts.Add($"section={error.SectionIndex.Value}");
@@ -257,7 +262,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         if (!string.IsNullOrWhiteSpace(error.Field))
             parts.Add($"field={error.Field}");
 
-        return string.Join("; ", parts);
+        return parts.Count > 0 ? string.Join("; ", parts) : null;
     }
 
     private static string BuildFallbackExplanation(ValidationError error)

@@ -101,6 +101,8 @@ public class TableFormatExtractor
         var tblpPr = effectiveTblPr.GetFirstChild<TablePositionProperties>();
         if (tblpPr != null)
             format.DftTblpprJson = SerializeTablePositionToJson(tblpPr);
+
+        ApplyFallbackDefaults(format);
         
         return format;
     }
@@ -240,5 +242,25 @@ public class TableFormatExtractor
             obj["positionYAlignment"] = tblpPr.TablePositionYAlignment.Value.ToString();
         
         return obj.ToString(Formatting.None);
+    }
+
+    private static void ApplyFallbackDefaults(DokumenFormatTable format)
+    {
+        if (string.IsNullOrWhiteSpace(format.DftTblWType))
+            format.DftTblWType = "auto";
+
+        if (string.IsNullOrWhiteSpace(format.DftTblLayoutType))
+            format.DftTblLayoutType = "autofit";
+
+        if (string.IsNullOrWhiteSpace(format.DftJc))
+            format.DftJc = "left";
+
+        if (string.IsNullOrWhiteSpace(format.DftTblIndType) &&
+            !format.DftTblIndTwips.HasValue &&
+            !format.DftTblIndPct50.HasValue)
+        {
+            format.DftTblIndType = "dxa";
+            format.DftTblIndTwips = 0;
+        }
     }
 }

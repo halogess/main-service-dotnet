@@ -832,6 +832,60 @@ public partial class ValidationService
         return labels;
     }
 
+    private async Task<Dictionary<ulong, int>> LoadPageNumbersAsync(
+        IEnumerable<ulong> delemenIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = delemenIds.Distinct().ToList();
+        var pageNumbers = new Dictionary<ulong, int>();
+
+        if (ids.Count == 0)
+            return pageNumbers;
+
+        var (idColumn, _) = await ResolveVisualColumnsAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(idColumn))
+            return pageNumbers;
+
+        var connection = _db.Database.GetDbConnection();
+        var shouldClose = connection.State != ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+
+        try
+        {
+            foreach (var chunk in ids.Chunk(500))
+            {
+                var idList = string.Join(",", chunk);
+                var sql = $"SELECT `{idColumn}` AS delemen_id, `dev_page` " +
+                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList}) AND `dev_page` IS NOT NULL";
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = sql;
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    if (reader["delemen_id"] == DBNull.Value || reader["dev_page"] == DBNull.Value)
+                        continue;
+
+                    var id = Convert.ToUInt64(reader["delemen_id"]);
+                    var page = Convert.ToInt32(reader["dev_page"]);
+                    pageNumbers[id] = page;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load page numbers from dokumen_elemen_visual");
+        }
+        finally
+        {
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+        }
+
+        return pageNumbers;
+    }
+
     private async Task<(string? IdColumn, string? LabelColumn)> ResolveVisualColumnsAsync(CancellationToken cancellationToken)
     {
         try

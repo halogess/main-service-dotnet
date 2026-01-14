@@ -33,4 +33,12 @@ public class GeminiErrorDetail
     public string Title { get; set; } = string.Empty;
     public string Explanation { get; set; } = string.Empty;
     public List<string> Steps { get; set; } = new();
+    public GeminiErrorLocation? Location { get; set; }
 }
+
+public class GeminiErrorLocation
+{
+    public int? HalamanKe { get; set; }
+    public string? Section { get; set; }
+}
+

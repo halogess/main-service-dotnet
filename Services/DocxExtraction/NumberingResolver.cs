@@ -1,3 +1,4 @@
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 
@@ -95,6 +96,8 @@ public class NumberingResolver
             if (!string.IsNullOrWhiteSpace(hint))
                 effective.FontHint = hint;
         }
+
+        ApplyLanguages(effective, rPr.GetFirstChild<Languages>());
         
         var fontSize = rPr.GetFirstChild<FontSize>();
         if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
@@ -142,6 +145,29 @@ public class NumberingResolver
         }
 
         return current;
+    }
+
+    private static void ApplyLanguages(EffectiveRunProperties effective, Languages? languages)
+    {
+        if (languages == null)
+            return;
+
+        var latin = GetAttributeValue(languages, "val");
+        var eastAsia = GetAttributeValue(languages, "eastAsia");
+        var bidi = GetAttributeValue(languages, "bidi");
+
+        if (!string.IsNullOrWhiteSpace(latin))
+            effective.LangLatin = latin;
+        if (!string.IsNullOrWhiteSpace(eastAsia))
+            effective.LangEastAsia = eastAsia;
+        if (!string.IsNullOrWhiteSpace(bidi))
+            effective.LangBidi = bidi;
+    }
+
+    private static string? GetAttributeValue(OpenXmlElement element, string localName)
+    {
+        var attr = element.GetAttributes().FirstOrDefault(a => a.LocalName == localName);
+        return string.IsNullOrWhiteSpace(attr.Value) ? null : attr.Value;
     }
 
     private static string? GetRunFontsAttributeValue(RunFonts fonts, string localName)

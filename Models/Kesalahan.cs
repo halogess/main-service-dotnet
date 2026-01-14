@@ -3,6 +3,12 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ValidasiTugasAkhir.MainService.Models;
 
+public enum KesalahanRefTipe
+{
+    buku,
+    dokumen
+}
+
 [Table("kesalahan")]
 public class Kesalahan
 {
@@ -16,6 +22,14 @@ public class Kesalahan
     public string KesalahanKategori { get; set; } = string.Empty;
 
     [Required]
+    [Column("kesalahan_ref_tipe")]
+    public KesalahanRefTipe KesalahanRefTipe { get; set; }
+
+    [Required]
+    [Column("kesalahan_ref_id")]
+    public uint KesalahanRefId { get; set; }
+
+    [Required]
     [Column("kesalahan_judul")]
     [MaxLength(255)]
     public string KesalahanJudul { get; set; } = string.Empty;
@@ -24,9 +38,9 @@ public class Kesalahan
     [Column("kesalahan_penjelasan", TypeName = "text")]
     public string KesalahanPenjelasan { get; set; } = string.Empty;
 
-    [Column("kesalahan_location")]
+    [Column("kesalahan_lokasi")]
     [MaxLength(255)]
-    public string? KesalahanLocation { get; set; }
+    public string? KesalahanLokasi { get; set; }
 
     [Column("kesalahan_bbox_visual", TypeName = "json")]
     public string? KesalahanBboxVisual { get; set; }

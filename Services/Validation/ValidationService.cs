@@ -284,6 +284,7 @@ public class ValidationError
     public string? Expected { get; set; }
     public string? Actual { get; set; }
     public int? SectionIndex { get; set; }
+    public int? PageNumber { get; set; }
     public string? DiffType { get; set; }
     public string? Cause { get; set; }
     public bool? HasNumbering { get; set; }

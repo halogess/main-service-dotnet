@@ -48,6 +48,14 @@ public static class TablePropertyMerger
         
         if (overlay.TableLook != null)
             SetOrReplace(result, overlay.TableLook.CloneNode(true));
+
+        var rowBandSize = overlay.GetFirstChild<TableStyleRowBandSize>();
+        if (rowBandSize != null)
+            SetOrReplace(result, rowBandSize.CloneNode(true));
+
+        var colBandSize = overlay.GetFirstChild<TableStyleColumnBandSize>();
+        if (colBandSize != null)
+            SetOrReplace(result, colBandSize.CloneNode(true));
         
         // Complex properties - per-side merging
         if (overlay.TableBorders != null)

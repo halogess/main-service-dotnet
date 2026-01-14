@@ -58,7 +58,7 @@ public class DocxExtractionService : IDocxExtractionService
             _paragraphExtractor.SetDbContext(_db); // Enable inline format saving
             
             // Initialize TableStyleResolver for table format resolution
-            var tableStyleResolver = new TableStyleResolver(stylesPart);
+            var tableStyleResolver = new TableStyleResolver(stylesPart, stylesWithEffectsPart);
             var tableFormatExtractor = new TableFormatExtractor(tableStyleResolver);
             var rowFormatExtractor = new TableRowFormatExtractor(tableStyleResolver);
             var cellFormatExtractor = new TableCellFormatExtractor(tableStyleResolver);

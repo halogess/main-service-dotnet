@@ -11,20 +11,25 @@ public class TableStyleResolver
 {
     private readonly Dictionary<string, Style> _stylesById = new();
     private readonly Dictionary<string, TableStyleDefinition> _tableStylesCache = new();
-    private readonly StylesPart? _stylesPart;
+    private readonly Styles? _stylesRoot;
+    private readonly string? _defaultTableStyleId;
     
-    public TableStyleResolver(StylesPart? stylesPart)
+    public TableStyleResolver(StylesPart? stylesPart, StylesWithEffectsPart? stylesWithEffectsPart = null)
     {
-        _stylesPart = stylesPart;
-        if (stylesPart?.Styles != null)
+        _stylesRoot = stylesWithEffectsPart?.Styles ?? stylesPart?.Styles;
+        if (_stylesRoot != null)
         {
             // Cache all styles by ID
-            foreach (var style in stylesPart.Styles.Elements<Style>())
+            foreach (var style in _stylesRoot.Elements<Style>())
             {
                 var styleId = style.StyleId?.Value;
                 if (!string.IsNullOrEmpty(styleId))
                     _stylesById[styleId] = style;
             }
+
+            _defaultTableStyleId = _stylesRoot.Elements<Style>()
+                .FirstOrDefault(s => s.Type?.Value == StyleValues.Table && (s.Default?.Value ?? false))
+                ?.StyleId?.Value;
         }
     }
     
@@ -41,9 +46,11 @@ public class TableStyleResolver
         var effective = new TableProperties();
         
         var tblPr = table.GetFirstChild<TableProperties>();
-        
-        // 1. Get table style ID
+
+        // 1. Get table style ID (fallback to default table style if missing)
         var styleId = tblPr?.TableStyle?.Val?.Value;
+        if (string.IsNullOrWhiteSpace(styleId))
+            styleId = _defaultTableStyleId;
         
         // 2. Apply style chain (wholeTable only for table-level properties)
         if (!string.IsNullOrEmpty(styleId))
@@ -74,11 +81,12 @@ public class TableStyleResolver
         Table table)
     {
         var effective = new TableRowProperties();
-        
-        var tblPr = table.GetFirstChild<TableProperties>();
-        var styleId = tblPr?.TableStyle?.Val?.Value;
-        var tableLook = TableLookFlags.FromTableLook(tblPr?.TableLook);
-        var rowBandSize = tblPr?.GetFirstChild<TableStyleRowBandSize>()?.Val?.Value ?? 1;
+        var effectiveTblPr = ResolveEffectiveTableProperties(table);
+        var styleId = effectiveTblPr.TableStyle?.Val?.Value;
+        if (string.IsNullOrWhiteSpace(styleId))
+            styleId = _defaultTableStyleId;
+        var tableLook = TableLookFlags.FromTableLook(effectiveTblPr.TableLook);
+        var rowBandSize = effectiveTblPr.GetFirstChild<TableStyleRowBandSize>()?.Val?.Value ?? 1;
         
         // 1. Apply style chain with conditional formatting
         if (!string.IsNullOrEmpty(styleId))
@@ -130,12 +138,13 @@ public class TableStyleResolver
         Table table)
     {
         var effective = new TableCellProperties();
-        
-        var tblPr = table.GetFirstChild<TableProperties>();
-        var styleId = tblPr?.TableStyle?.Val?.Value;
-        var tableLook = TableLookFlags.FromTableLook(tblPr?.TableLook);
-        var rowBandSize = tblPr?.GetFirstChild<TableStyleRowBandSize>()?.Val?.Value ?? 1;
-        var colBandSize = tblPr?.GetFirstChild<TableStyleColumnBandSize>()?.Val?.Value ?? 1;
+        var effectiveTblPr = ResolveEffectiveTableProperties(table);
+        var styleId = effectiveTblPr.TableStyle?.Val?.Value;
+        if (string.IsNullOrWhiteSpace(styleId))
+            styleId = _defaultTableStyleId;
+        var tableLook = TableLookFlags.FromTableLook(effectiveTblPr.TableLook);
+        var rowBandSize = effectiveTblPr.GetFirstChild<TableStyleRowBandSize>()?.Val?.Value ?? 1;
+        var colBandSize = effectiveTblPr.GetFirstChild<TableStyleColumnBandSize>()?.Val?.Value ?? 1;
         
         // 1. Apply style chain with conditional formatting
         if (!string.IsNullOrEmpty(styleId))

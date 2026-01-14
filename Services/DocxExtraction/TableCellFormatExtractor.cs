@@ -65,6 +65,8 @@ public class TableCellFormatExtractor
         // Vertical Alignment (w:vAlign)
         if (effectiveTcPr.TableCellVerticalAlignment?.Val?.HasValue == true)
             format.DftcVAlign = ConvertVerticalAlignment(effectiveTcPr.TableCellVerticalAlignment.Val.Value);
+
+        ApplyFallbackDefaults(format);
         
         return format;
     }
@@ -94,5 +96,14 @@ public class TableCellFormatExtractor
         
         // Default fallback
         return "top";
+    }
+
+    private static void ApplyFallbackDefaults(DokumenFormatTableCell format)
+    {
+        if (!format.DftcGridSpan.HasValue)
+            format.DftcGridSpan = 1;
+
+        if (string.IsNullOrWhiteSpace(format.DftcVAlign))
+            format.DftcVAlign = "top";
     }
 }

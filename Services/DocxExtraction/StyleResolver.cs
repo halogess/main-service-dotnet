@@ -1,3 +1,4 @@
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 
@@ -12,6 +13,8 @@ public class StyleResolver
     private readonly Dictionary<string, Style> _stylesById = new();
     private readonly ThemeFontResolver? _themeFontResolver;
     private readonly Styles? _stylesRoot;
+    private readonly string? _defaultParagraphStyleId;
+    private readonly string? _defaultCharacterStyleId;
     
     // Cached docDefaults
     private RunPropertiesBaseStyle? _docDefaultsRPr;
@@ -42,6 +45,14 @@ public class StyleResolver
                 _docDefaultsRPr = docDefaults.RunPropertiesDefault?.RunPropertiesBaseStyle;
                 _docDefaultsPPr = docDefaults.ParagraphPropertiesDefault?.ParagraphPropertiesBaseStyle;
             }
+
+            _defaultParagraphStyleId = _stylesRoot.Elements<Style>()
+                .FirstOrDefault(s => s.Type?.Value == StyleValues.Paragraph && (s.Default?.Value ?? false))
+                ?.StyleId?.Value;
+
+            _defaultCharacterStyleId = _stylesRoot.Elements<Style>()
+                .FirstOrDefault(s => s.Type?.Value == StyleValues.Character && (s.Default?.Value ?? false))
+                ?.StyleId?.Value;
         }
     }
     
@@ -88,9 +99,25 @@ public class StyleResolver
         {
             MergeRunProperties(effective, _docDefaultsRPr, "docDefaults");
         }
+
+        // 2. Apply default character style (if any)
+        if (!string.IsNullOrEmpty(_defaultCharacterStyleId))
+        {
+            var defaultCharChain = GetStyleChain(_defaultCharacterStyleId);
+            foreach (var style in defaultCharChain)
+            {
+                var styleRPr = style.StyleRunProperties;
+                if (styleRPr != null)
+                {
+                    MergeRunProperties(effective, styleRPr, $"defaultCharStyle:{style.StyleId?.Value}");
+                }
+            }
+        }
         
-        // 2. Apply paragraph style's rPr (from basedOn chain)
-        var paragraphStyleId = paragraphProps?.ParagraphStyleId?.Val?.Value;
+        // 3. Apply paragraph style's rPr (from basedOn chain)
+        var paragraphStyleId = paragraphProps?.ParagraphStyleId?.Val?.Value
+            ?? _defaultParagraphStyleId
+            ?? "Normal";
         if (!string.IsNullOrEmpty(paragraphStyleId))
         {
             var paragraphStyleChain = GetStyleChain(paragraphStyleId);
@@ -106,7 +133,7 @@ public class StyleResolver
             }
         }
         
-        // 3. Apply character style (rStyle) from basedOn chain
+        // 4. Apply character style (rStyle) from basedOn chain
         var runProps = run.RunProperties;
         var charStyleId = runProps?.RunStyle?.Val?.Value;
         if (!string.IsNullOrEmpty(charStyleId))
@@ -122,7 +149,7 @@ public class StyleResolver
             }
         }
         
-        // 4. Apply direct formatting (highest priority)
+        // 5. Apply direct formatting (highest priority)
         if (runProps != null)
         {
             MergeRunProperties(effective, runProps, "direct");
@@ -150,7 +177,9 @@ public class StyleResolver
         
         // 2. Get paragraph style and apply basedOn chain
         var directPPr = paragraph.ParagraphProperties;
-        var styleId = directPPr?.ParagraphStyleId?.Val?.Value ?? "Normal";
+        var styleId = directPPr?.ParagraphStyleId?.Val?.Value
+            ?? _defaultParagraphStyleId
+            ?? "Normal";
         effective.StyleId = styleId;
         
         var styleChain = GetStyleChain(styleId);
@@ -187,7 +216,8 @@ public class StyleResolver
         }
         
         // 2. Check style chain for numPr
-        var styleId = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        var styleId = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value
+            ?? _defaultParagraphStyleId;
         var styleChain = GetStyleChain(styleId);
         
         // Walk from child to parent (reverse order) - child overrides parent
@@ -240,7 +270,9 @@ public class StyleResolver
         
         // 2. Get paragraph style and apply basedOn chain
         var directPPr = paragraph.ParagraphProperties;
-        var styleId = directPPr?.ParagraphStyleId?.Val?.Value ?? "Normal";
+        var styleId = directPPr?.ParagraphStyleId?.Val?.Value
+            ?? _defaultParagraphStyleId
+            ?? "Normal";
         effective.StyleId = styleId;
         
         var styleChain = GetStyleChain(styleId);
@@ -328,6 +360,8 @@ public class StyleResolver
         if (fonts != null)
             ApplyRunFonts(effective, fonts);
         
+        ApplyLanguages(effective, rPr.GetFirstChild<Languages>());
+        
         // Font Size
         var fontSize = rPr.GetFirstChild<FontSize>();
         if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
@@ -408,6 +442,8 @@ public class StyleResolver
         var fonts = rPr.GetFirstChild<RunFonts>();
         if (fonts != null)
             ApplyRunFonts(effective, fonts);
+
+        ApplyLanguages(effective, rPr.GetFirstChild<Languages>());
         
         var fontSize = rPr.GetFirstChild<FontSize>();
         if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
@@ -478,6 +514,8 @@ public class StyleResolver
         var fonts = rPr.GetFirstChild<RunFonts>();
         if (fonts != null)
             ApplyRunFonts(effective, fonts);
+
+        ApplyLanguages(effective, rPr.GetFirstChild<Languages>());
         
         var fontSize = rPr.GetFirstChild<FontSize>();
         if (fontSize?.Val?.Value != null && int.TryParse(fontSize.Val.Value, out int sz))
@@ -683,6 +721,29 @@ public class StyleResolver
         }
 
         return current;
+    }
+
+    private void ApplyLanguages(EffectiveRunProperties effective, Languages? languages)
+    {
+        if (languages == null)
+            return;
+
+        var latin = GetLanguageAttributeValue(languages, "val");
+        var eastAsia = GetLanguageAttributeValue(languages, "eastAsia");
+        var bidi = GetLanguageAttributeValue(languages, "bidi");
+
+        if (!string.IsNullOrWhiteSpace(latin))
+            effective.LangLatin = latin;
+        if (!string.IsNullOrWhiteSpace(eastAsia))
+            effective.LangEastAsia = eastAsia;
+        if (!string.IsNullOrWhiteSpace(bidi))
+            effective.LangBidi = bidi;
+    }
+
+    private static string? GetLanguageAttributeValue(OpenXmlElement element, string localName)
+    {
+        var attr = element.GetAttributes().FirstOrDefault(a => a.LocalName == localName);
+        return string.IsNullOrWhiteSpace(attr.Value) ? null : attr.Value;
     }
 
     private static string? GetRunFontsAttributeValue(RunFonts fonts, string localName)

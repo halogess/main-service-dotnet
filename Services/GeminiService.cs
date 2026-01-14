@@ -54,14 +54,22 @@ public class GeminiService : IGeminiService
             ""items"": { ""type"": ""string"", ""maxLength"": 200 },
             ""minItems"": 1,
             ""maxItems"": 6
+          },
+          ""location"": {
+            ""type"": ""object"",
+            ""properties"": {
+              ""halaman_ke"": { ""type"": ""integer"" },
+              ""section"": { ""type"": ""string"" }
+            }
           }
         },
-        ""required"": [""index"", ""title"", ""explanation"", ""steps""]
+        ""required"": [""index"", ""title"", ""explanation"", ""steps"", ""location""]
       }
     }
   },
   ""required"": [""errors""]
 }")!;
+
 
     public GeminiService(
         HttpClient httpClient,
@@ -244,7 +252,7 @@ public class GeminiService : IGeminiService
             {
                 return await GenerateContentAsync(prompt, systemInstruction, generationConfig, cancellationToken, currentModel);
             }
-            catch (HttpRequestException ex) when (ex.Message.Contains("429") || ex.Message.Contains("503"))
+            catch (HttpRequestException ex) when (ex.Message.Contains("429") || ex.Message.Contains("503") || ex.Message.Contains("ServiceUnavailable") || ex.Message.Contains("TooManyRequests"))
             {
                 lastException = ex;
                 _logger.LogWarning("Gemini API rate limited or unavailable (attempt {Attempt}/{Max}), retrying in {Delay}s", 
@@ -661,14 +669,15 @@ public class GeminiService : IGeminiService
         sb.AppendLine();
         sb.AppendLine("B) Buat output yang membantu user:");
         sb.AppendLine("   - title: singkat, jelas, tidak menyalahkan.");
-        sb.AppendLine("   - explanation: jelaskan dengan bahasa sederhana + sertakan evidence singkat.");
+        sb.AppendLine("   - explanation: jelaskan dengan bahasa natural perbedaan kondisi saat ini vs yang diharapkan (contoh: 'Font yang digunakan adalah Aptos Display, seharusnya Times New Roman'). DILARANG menggunakan format teknis seperti expected='...' atau actual='...'.");
         sb.AppendLine("   - steps: 3-6 langkah di Microsoft Word, menu/tab jelas. Jika 'Perlu verifikasi', steps berisi cara mengecek.");
+        sb.AppendLine("   - location: isi berdasarkan data input. halaman_ke = nomor halaman (integer, contoh: 1, 5, 10). section = nama bagian dokumen jika tersedia (contoh: 'BAB I', 'Pendahuluan', 'Daftar Isi'). Jika tidak diketahui, isi halaman_ke dengan 0 dan section dengan '-'.");
         sb.AppendLine("   - Jangan memprioritaskan penggunaan Styles; gunakan Styles hanya jika relevan atau disebut di aturan/llm_context.");
         sb.AppendLine();
         sb.AppendLine("BATASAN OUTPUT (WAJIB):");
         sb.AppendLine("- Jawab HANYA JSON valid, tanpa markdown, tanpa teks tambahan.");
         sb.AppendLine("- Struktur JSON HARUS persis:");
-        sb.AppendLine(@"  {""errors"":[{""index"":0,""title"":""..."",""explanation"":""..."",""steps"":[""...""]}]}");
+        sb.AppendLine(@"  {""errors"":[{""index"":0,""title"":""..."",""explanation"":""..."",""steps"":[""...""],""location"":{""halaman_ke"":1,""section"":""...""}}]}");
         sb.AppendLine("- Urutan output harus sama dengan urutan item pada KESALAHAN_JSON.");
         sb.AppendLine("- Jangan menambahkan field lain.");
         sb.AppendLine();
@@ -1267,6 +1276,19 @@ private sealed class RuleDefinitionPayload
                         if (step.ValueKind == JsonValueKind.String)
                             detail.Steps.Add(step.GetString() ?? string.Empty);
                     }
+                }
+
+                if (item.TryGetProperty("location", out var locEl) && locEl.ValueKind == JsonValueKind.Object)
+                {
+                    detail.Location = new GeminiErrorLocation
+                    {
+                        HalamanKe = locEl.TryGetProperty("halaman_ke", out var halamanEl) && halamanEl.TryGetInt32(out var halamanInt)
+                            ? halamanInt
+                            : null,
+                        Section = locEl.TryGetProperty("section", out var sectionEl) && sectionEl.ValueKind == JsonValueKind.String
+                            ? sectionEl.GetString()
+                            : null
+                    };
                 }
 
                 results.Add(detail);

@@ -15,6 +15,7 @@ public class ParagraphFormatExtractor
 {
     private readonly StyleResolver? _styleResolver;
     private readonly NumberingDefinitionsPart? _numberingPart;
+    private const uint DefaultLineSpacingTwips = 240; // Single line (auto) in WordprocessingML.
     
     public ParagraphFormatExtractor(StyleResolver? styleResolver, NumberingDefinitionsPart? numberingPart)
     {
@@ -116,6 +117,8 @@ public class ParagraphFormatExtractor
             if (pPrChange != null)
                 format.DfpPprChangeJson = SerializeElementToJson(pPrChange);
         }
+
+        ApplyFallbackDefaults(format);
         
         return format;
     }
@@ -339,6 +342,47 @@ public class ParagraphFormatExtractor
         if (value == LineSpacingRuleValues.AtLeast) return "atLeast";
         if (value == LineSpacingRuleValues.Exact) return "exact";
         return value.ToString();
+    }
+
+    private static void ApplyFallbackDefaults(DokumenFormatParagraf format)
+    {
+        // WordprocessingML defaults when explicit values are absent (ISO/IEC 29500).
+        if (string.IsNullOrWhiteSpace(format.DfpJc))
+            format.DfpJc = "left";
+        if (string.IsNullOrWhiteSpace(format.DfpTextAlignment))
+            format.DfpTextAlignment = "auto";
+
+        if (!format.DfpSpacingBeforeTwips.HasValue && !format.DfpSpacingBeforeAutospacing)
+            format.DfpSpacingBeforeTwips = 0;
+        if (!format.DfpSpacingAfterTwips.HasValue && !format.DfpSpacingAfterAutospacing)
+            format.DfpSpacingAfterTwips = 0;
+        if (!format.DfpSpacingBeforeLines.HasValue)
+            format.DfpSpacingBeforeLines = 0;
+        if (!format.DfpSpacingAfterLines.HasValue)
+            format.DfpSpacingAfterLines = 0;
+
+        if (string.IsNullOrWhiteSpace(format.DfpSpacingLineRule))
+            format.DfpSpacingLineRule = "auto";
+        if (!format.DfpSpacingLineTwips.HasValue &&
+            string.Equals(format.DfpSpacingLineRule, "auto", StringComparison.OrdinalIgnoreCase))
+            format.DfpSpacingLineTwips = DefaultLineSpacingTwips;
+
+        if (!format.DfpIndLeftTwips.HasValue)
+            format.DfpIndLeftTwips = 0;
+        if (!format.DfpIndRightTwips.HasValue)
+            format.DfpIndRightTwips = 0;
+        if (!format.DfpIndFirstLineTwips.HasValue)
+            format.DfpIndFirstLineTwips = 0;
+        if (!format.DfpIndHangingTwips.HasValue)
+            format.DfpIndHangingTwips = 0;
+        if (!format.DfpIndStartTwips.HasValue)
+            format.DfpIndStartTwips = 0;
+        if (!format.DfpIndEndTwips.HasValue)
+            format.DfpIndEndTwips = 0;
+        if (!format.DfpIndLeftChars.HasValue)
+            format.DfpIndLeftChars = 0;
+        if (!format.DfpIndRightChars.HasValue)
+            format.DfpIndRightChars = 0;
     }
 
     /// <summary>

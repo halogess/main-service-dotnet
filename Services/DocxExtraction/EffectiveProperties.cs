@@ -14,6 +14,11 @@ public class EffectiveRunProperties
     public string? FontComplexScript { get; set; }
     public string? FontHint { get; set; } // default, eastAsia, cs
     
+    // Language hints (from w:lang)
+    public string? LangLatin { get; set; }
+    public string? LangEastAsia { get; set; }
+    public string? LangBidi { get; set; }
+    
     // Size (in half-points, divide by 2 for pt)
     public int? FontSize { get; set; }
     public int? FontSizeCs { get; set; }

@@ -26,5 +26,5 @@ Pembatasan aksi:
 - Jangan memprioritaskan penggunaan Styles; gunakan Styles hanya jika relevan atau dinyatakan di aturan/llm_context.
 
 Kualitas jawaban:
-- explanation wajib menyebut evidence singkat (expected/actual).
+- explanation harus menjelaskan perbedaan antara kondisi saat ini dan yang diharapkan menggunakan bahasa natural (contoh: "Font yang digunakan adalah Aptos Display, seharusnya Times New Roman"). DILARANG menggunakan format teknis seperti expected='...' atau actual='...'.
 - steps 3-6 langkah, menu/tab jelas, satu langkah = satu aksi.

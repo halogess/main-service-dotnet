@@ -425,7 +425,8 @@ public class DocxExtractionService : IDocxExtractionService
         TableExtractor tableExtractor)
     {
         int seq = 1;
-        foreach (var elem in partContent.Elements())
+        
+        async Task ProcessPartElement(OpenXmlElement elem)
         {
             if (elem is Paragraph para)
             {
@@ -457,8 +458,10 @@ public class DocxExtractionService : IDocxExtractionService
                         DelemenXml = elem.OuterXml
                     });
                 }
+                return;
             }
-            else if (elem is Table)
+            
+            if (elem is Table)
             {
                 foreach (var (type, json) in await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
                 {
@@ -471,8 +474,23 @@ public class DocxExtractionService : IDocxExtractionService
                         DelemenXml = elem.OuterXml
                     });
                 }
+                return;
+            }
+            
+            if (elem is SdtBlock sdtBlock)
+            {
+                var content = sdtBlock.SdtContentBlock;
+                if (content != null)
+                {
+                    foreach (var child in content.Elements())
+                        await ProcessPartElement(child);
+                }
             }
         }
+        
+        foreach (var elem in partContent.Elements())
+            await ProcessPartElement(elem);
+
         await _db.SaveChangesAsync();
     }
 
@@ -555,7 +573,7 @@ public class DocxExtractionService : IDocxExtractionService
 
     private static bool IsEvenAndOddHeadersEnabled(DocumentSettingsPart? settingsPart)
     {
-        var evenAndOdd = settingsPart?.Settings?.EvenAndOddHeaders;
+        var evenAndOdd = settingsPart?.Settings?.GetFirstChild<DocumentFormat.OpenXml.Wordprocessing.EvenAndOddHeaders>();
         if (evenAndOdd == null)
             return false;
 

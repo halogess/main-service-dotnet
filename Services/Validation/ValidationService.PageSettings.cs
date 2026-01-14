@@ -1,210 +1,11 @@
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
 
 namespace ValidasiTugasAkhir.MainService.Services;
 
-#region DTOs for Aturan JSON Values
-
-// Paper Size Rule
-public class PaperSectionRule
+public partial class ValidationService
 {
-    [JsonPropertyName("section")]
-    public SectionRules? Section { get; set; }
-}
-
-public class SectionRules
-{
-    [JsonPropertyName("awal")]
-    public List<PaperSpec>? Awal { get; set; }
-
-    [JsonPropertyName("isi")]
-    public List<PaperSpec>? Isi { get; set; }
-
-    [JsonPropertyName("akhir")]
-    public List<PaperSpec>? Akhir { get; set; }
-
-    [JsonPropertyName("lampiran")]
-    public List<PaperSpec>? Lampiran { get; set; }
-}
-
-public class PaperSpec
-{
-    [JsonPropertyName("size")]
-    public string? Size { get; set; } // "A4", "A3"
-
-    [JsonPropertyName("orientation")]
-    public string? Orientation { get; set; } // "PORTRAIT", "LANDSCAPE"
-}
-
-// Margin Rule
-public class MarginRule
-{
-    [JsonPropertyName("paper")]
-    public PaperMargins? Paper { get; set; }
-}
-
-public class PaperMargins
-{
-    [JsonPropertyName("a4_portrait")]
-    public MarginSpec? A4Portrait { get; set; }
-
-    [JsonPropertyName("a4_landscape")]
-    public MarginSpec? A4Landscape { get; set; }
-
-    [JsonPropertyName("a3_landscape")]
-    public MarginSpec? A3Landscape { get; set; }
-}
-
-public class MarginSpec
-{
-    [JsonPropertyName("top")]
-    public decimal Top { get; set; }
-
-    [JsonPropertyName("bottom")]
-    public decimal Bottom { get; set; }
-
-    [JsonPropertyName("left")]
-    public decimal Left { get; set; }
-
-    [JsonPropertyName("right")]
-    public decimal Right { get; set; }
-}
-
-// Header Footer Rule
-public class HeaderFooterRule
-{
-    [JsonPropertyName("header_from_top")]
-    public decimal HeaderFromTop { get; set; }
-
-    [JsonPropertyName("footer_from_bottom")]
-    public decimal FooterFromBottom { get; set; }
-}
-
-// Gutter Rule (for binding margin)
-public class GutterRule
-{
-    [JsonPropertyName("gutter")]
-    public decimal Gutter { get; set; } // in cm
-
-    [JsonPropertyName("position")]
-    public string? Position { get; set; } // "left" or "top"
-}
-
-// Column Rule
-public class ColumnRule
-{
-    [JsonPropertyName("count")]
-    public int Count { get; set; } = 1;
-}
-
-// Page Numbering Rule
-public class PageNumberingRule
-{
-    [JsonPropertyName("section")]
-    public PageNumberingSectionRules? Section { get; set; }
-}
-
-public class PageNumberingSectionRules
-{
-    [JsonPropertyName("awal")]
-    public PageNumberingSpec? Awal { get; set; }
-
-    [JsonPropertyName("isi")]
-    public PageNumberingSpec? Isi { get; set; }
-
-    [JsonPropertyName("akhir")]
-    public PageNumberingSpec? Akhir { get; set; }
-
-    [JsonPropertyName("lampiran")]
-    public PageNumberingSpec? Lampiran { get; set; }
-}
-
-public class PageNumberingSpec
-{
-    [JsonPropertyName("format")]
-    public string? Format { get; set; } // "decimal", "lowerRoman", "upperRoman", "lowerLetter", "upperLetter"
-
-    [JsonPropertyName("start")]
-    public int? Start { get; set; } // Starting page number (null means continue)
-}
-
-#endregion
-
-#region Validation Result DTOs
-
-public class ValidationResult
-{
-    public bool IsValid => Errors.Count == 0;
-    public List<ValidationError> Errors { get; set; } = new();
-    public int TotalChecks { get; set; }
-    public int PassedChecks { get; set; }
-    public decimal Score => TotalChecks > 0 ? (decimal)PassedChecks / TotalChecks * 100 : 100;
-}
-
-public class ValidationError
-{
-    public string Category { get; set; } = string.Empty;
-    public string Field { get; set; } = string.Empty;
-    public string Message { get; set; } = string.Empty;
-    public string? Expected { get; set; }
-    public string? Actual { get; set; }
-    public int? SectionIndex { get; set; }
-}
-
-#endregion
-
-public interface IValidationService
-{
-    Task<ValidationResult> ValidateDokumenAsync(int dokumenId, CancellationToken cancellationToken = default);
-    Task<ValidationResult> ValidatePageSettingsAsync(int dokumenId, CancellationToken cancellationToken = default);
-}
-
-public class ValidationService : IValidationService
-{
-    private readonly KorektorBukuDbContext _db;
-    private readonly ILogger<ValidationService> _logger;
-
-    // Conversion constants
-    private const decimal TwipsPerCm = 566.929m; // 1 cm = 566.929 twips
-    private const decimal TwipsTolerance = 28.35m; // ~0.5mm tolerance
-
-    // Standard paper sizes in twips (width x height for portrait)
-    private static readonly Dictionary<string, (uint Width, uint Height)> PaperSizes = new()
-    {
-        { "A4", (11906, 16838) },  // 210mm x 297mm
-        { "A3", (16838, 23811) },  // 297mm x 420mm
-        { "LETTER", (12240, 15840) }, // 8.5" x 11"
-        { "LEGAL", (12240, 20160) }  // 8.5" x 14"
-    };
-
-    public ValidationService(KorektorBukuDbContext db, ILogger<ValidationService> logger)
-    {
-        _db = db;
-        _logger = logger;
-    }
-
-    public async Task<ValidationResult> ValidateDokumenAsync(int dokumenId, CancellationToken cancellationToken = default)
-    {
-        var result = new ValidationResult();
-
-        // Validate page settings
-        var pageResult = await ValidatePageSettingsAsync(dokumenId, cancellationToken);
-        result.Errors.AddRange(pageResult.Errors);
-        result.TotalChecks += pageResult.TotalChecks;
-        result.PassedChecks += pageResult.PassedChecks;
-
-        // TODO: Add more validation categories here
-        // - Font validation
-        // - Paragraph formatting validation
-        // - Table validation
-        // - Image validation
-        // etc.
-
-        return result;
-    }
-
     public async Task<ValidationResult> ValidatePageSettingsAsync(int dokumenId, CancellationToken cancellationToken = default)
     {
         var result = new ValidationResult();
@@ -306,7 +107,7 @@ public class ValidationService : IValidationService
             return result;
         }
 
-        _logger.LogInformation("Validating {Count} sections for dokumen ID: {DokumenId}, tipe: {DokumenTipe}", 
+        _logger.LogInformation("Validating {Count} sections for dokumen ID: {DokumenId}, tipe: {DokumenTipe}",
             sections.Count, dokumenId, dokumen.DokumenTipe);
 
         // Validate each section
@@ -416,11 +217,11 @@ public class ValidationService : IValidationService
     {
         return sectionType.ToLower() switch
         {
-            "awal" => rules.Awal ?? new List<PaperSpec>(),
-            "isi" => rules.Isi ?? new List<PaperSpec>(),
-            "akhir" => rules.Akhir ?? new List<PaperSpec>(),
-            "lampiran" => rules.Lampiran ?? new List<PaperSpec>(),
-            _ => rules.Isi ?? new List<PaperSpec>()
+            "awal" => rules.Awal?.Value ?? new List<PaperSpec>(),
+            "isi" => rules.Isi?.Value ?? new List<PaperSpec>(),
+            "akhir" => rules.Akhir?.Value ?? new List<PaperSpec>(),
+            "lampiran" => rules.Lampiran?.Value ?? new List<PaperSpec>(),
+            _ => rules.Isi?.Value ?? new List<PaperSpec>()
         };
     }
 
@@ -467,10 +268,10 @@ public class ValidationService : IValidationService
 
         MarginSpec? expectedMargins = (paperSize, orientation) switch
         {
-            ("A4", "PORTRAIT") => margins.A4Portrait,
-            ("A4", "LANDSCAPE") => margins.A4Landscape,
-            ("A3", "LANDSCAPE") => margins.A3Landscape,
-            _ => margins.A4Portrait // Default
+            ("A4", "PORTRAIT") => margins.A4Portrait?.Value,
+            ("A4", "LANDSCAPE") => margins.A4Landscape?.Value,
+            ("A3", "LANDSCAPE") => margins.A3Landscape?.Value,
+            _ => margins.A4Portrait?.Value // Default
         };
 
         if (expectedMargins == null)
@@ -483,11 +284,14 @@ public class ValidationService : IValidationService
         ValidateSingleMargin(result, "right", section.DsecMarginRightTwips, expectedMargins.Right, sectionNumber, sectionType);
     }
 
-    private void ValidateSingleMargin(ValidationResult result, string marginName, uint? actualTwips, decimal expectedCm, int sectionNumber, string sectionType)
+    private void ValidateSingleMargin(ValidationResult result, string marginName, uint? actualTwips, decimal? expectedCm, int sectionNumber, string sectionType)
     {
+        if (!expectedCm.HasValue)
+            return;
+
         result.TotalChecks++;
 
-        var expectedTwips = expectedCm * TwipsPerCm;
+        var expectedTwips = expectedCm.Value * TwipsPerCm;
         var actualCm = actualTwips.HasValue ? actualTwips.Value / TwipsPerCm : 0;
 
         if (actualTwips.HasValue && Math.Abs(actualTwips.Value - expectedTwips) <= TwipsTolerance * 2)
@@ -501,7 +305,7 @@ public class ValidationService : IValidationService
                 Category = "Pengaturan Halaman",
                 Field = $"margin_{marginName}",
                 Message = $"Margin {marginName} section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-                Expected = $"{expectedCm} cm",
+                Expected = $"{expectedCm.Value} cm",
                 Actual = $"{actualCm:F2} cm",
                 SectionIndex = sectionNumber
             });
@@ -511,53 +315,61 @@ public class ValidationService : IValidationService
     private void ValidateHeaderFooter(ValidationResult result, DokumenSection section, HeaderFooterRule rule, int sectionNumber, string sectionType)
     {
         // Validate header distance from top
-        result.TotalChecks++;
-        var expectedHeaderTwips = rule.HeaderFromTop * TwipsPerCm;
-        var actualHeaderCm = section.DsecHeaderMarginTwips.HasValue 
-            ? section.DsecHeaderMarginTwips.Value / TwipsPerCm 
-            : 0;
+        var expectedHeaderCm = rule.HeaderFromTop?.Value;
+        if (expectedHeaderCm.HasValue)
+        {
+            result.TotalChecks++;
+            var expectedHeaderTwips = expectedHeaderCm.Value * TwipsPerCm;
+            var actualHeaderCm = section.DsecHeaderMarginTwips.HasValue
+                ? section.DsecHeaderMarginTwips.Value / TwipsPerCm
+                : 0;
 
-        if (section.DsecHeaderMarginTwips.HasValue && 
-            Math.Abs(section.DsecHeaderMarginTwips.Value - expectedHeaderTwips) <= TwipsTolerance * 2)
-        {
-            result.PassedChecks++;
-        }
-        else
-        {
-            result.Errors.Add(new ValidationError
+            if (section.DsecHeaderMarginTwips.HasValue &&
+                Math.Abs(section.DsecHeaderMarginTwips.Value - expectedHeaderTwips) <= TwipsTolerance * 2)
             {
-                Category = "Pengaturan Halaman",
-                Field = "header_from_top",
-                Message = $"Jarak header dari atas section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-                Expected = $"{rule.HeaderFromTop} cm",
-                Actual = $"{actualHeaderCm:F2} cm",
-                SectionIndex = sectionNumber
-            });
+                result.PassedChecks++;
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Pengaturan Halaman",
+                    Field = "header_from_top",
+                    Message = $"Jarak header dari atas section {sectionNumber} (bagian {sectionType}) tidak sesuai",
+                    Expected = $"{expectedHeaderCm.Value} cm",
+                    Actual = $"{actualHeaderCm:F2} cm",
+                    SectionIndex = sectionNumber
+                });
+            }
         }
 
         // Validate footer distance from bottom
-        result.TotalChecks++;
-        var expectedFooterTwips = rule.FooterFromBottom * TwipsPerCm;
-        var actualFooterCm = section.DsecFooterMarginTwips.HasValue 
-            ? section.DsecFooterMarginTwips.Value / TwipsPerCm 
-            : 0;
+        var expectedFooterCm = rule.FooterFromBottom?.Value;
+        if (expectedFooterCm.HasValue)
+        {
+            result.TotalChecks++;
+            var expectedFooterTwips = expectedFooterCm.Value * TwipsPerCm;
+            var actualFooterCm = section.DsecFooterMarginTwips.HasValue
+                ? section.DsecFooterMarginTwips.Value / TwipsPerCm
+                : 0;
 
-        if (section.DsecFooterMarginTwips.HasValue && 
-            Math.Abs(section.DsecFooterMarginTwips.Value - expectedFooterTwips) <= TwipsTolerance * 2)
-        {
-            result.PassedChecks++;
-        }
-        else
-        {
-            result.Errors.Add(new ValidationError
+            if (section.DsecFooterMarginTwips.HasValue &&
+                Math.Abs(section.DsecFooterMarginTwips.Value - expectedFooterTwips) <= TwipsTolerance * 2)
             {
-                Category = "Pengaturan Halaman",
-                Field = "footer_from_bottom",
-                Message = $"Jarak footer dari bawah section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-                Expected = $"{rule.FooterFromBottom} cm",
-                Actual = $"{actualFooterCm:F2} cm",
-                SectionIndex = sectionNumber
-            });
+                result.PassedChecks++;
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Pengaturan Halaman",
+                    Field = "footer_from_bottom",
+                    Message = $"Jarak footer dari bawah section {sectionNumber} (bagian {sectionType}) tidak sesuai",
+                    Expected = $"{expectedFooterCm.Value} cm",
+                    Actual = $"{actualFooterCm:F2} cm",
+                    SectionIndex = sectionNumber
+                });
+            }
         }
     }
 

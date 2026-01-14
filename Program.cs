@@ -51,6 +51,9 @@ builder.Services.AddHostedService<AdobeQuotaResetService>();
 builder.Services.AddHostedService<PdfQueueBackgroundService>();
 builder.Services.AddHostedService<ValidationQueueBackgroundService>();
 
+// Register Gemini Service
+builder.Services.AddHttpClient<IGeminiService, GeminiService>();
+
 var app = builder.Build();
 
 // Ensure storage directory exists

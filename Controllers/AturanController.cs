@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
 using ValidasiTugasAkhir.MainService.Services;
 
@@ -9,10 +10,12 @@ namespace ValidasiTugasAkhir.MainService.Controllers;
 public class AturanController : ControllerBase
 {
     private readonly IAturanService _aturanService;
+    private readonly KorektorBukuDbContext _db;
 
-    public AturanController(IAturanService aturanService)
+    public AturanController(IAturanService aturanService, KorektorBukuDbContext db)
     {
         _aturanService = aturanService;
+        _db = db;
     }
 
     // GET: api/aturan (Admin only)
@@ -104,10 +107,10 @@ public class AturanController : ControllerBase
         try
         {
             var aturan = await _aturanService.CreateAsync(
-                request.Versi,
-                request.Status ?? 1,
-                request.SkorMinimum ?? 80,
-                request.TemplateFilePath
+                request.versi,
+                request.status ?? 1,
+                request.skor_minimum ?? 80,
+                request.template_file_path
             );
 
             return Ok(new
@@ -127,8 +130,8 @@ public class AturanController : ControllerBase
         }
     }
 
-    // PUT: api/aturan/{id} (Admin only)
-    [HttpPut("{id}")]
+    // PATCH: api/aturan/{id} (Admin only)
+    [HttpPatch("{id}")]
     public async Task<IActionResult> UpdateAturan(uint id, [FromBody] UpdateAturanRequest request)
     {
         if (HttpContext.Items["Role"]?.ToString() != "admin")
@@ -138,10 +141,10 @@ public class AturanController : ControllerBase
         {
             var aturan = await _aturanService.UpdateAsync(
                 id,
-                request.Versi,
-                request.Status,
-                request.SkorMinimum,
-                request.TemplateFilePath
+                request.versi,
+                request.status,
+                request.skor_minimum,
+                request.template_file_path
             );
 
             return Ok(new
@@ -156,21 +159,92 @@ public class AturanController : ControllerBase
             return NotFound(new { message = ex.Message });
         }
     }
+
+    // PATCH: api/aturan/{id}/detail (Admin only)
+    [HttpPatch("{id}/detail")]
+    public async Task<IActionResult> PatchAturanDetail(uint id, [FromBody] AturanDetailPatchRequest request)
+    {
+        if (HttpContext.Items["Role"]?.ToString() != "admin")
+            return Forbid();
+
+        if (request.details == null || request.details.Count == 0)
+            return BadRequest(new { message = "details tidak boleh kosong" });
+
+        var rawDetailIds = request.details
+            .Select(d => d.aturan_detail_id)
+            .ToList();
+
+        if (rawDetailIds.Any(idValue => !idValue.HasValue || idValue.Value <= 0))
+            return BadRequest(new { message = "aturan_detail_id wajib diisi untuk setiap detail" });
+
+        var detailIds = rawDetailIds
+            .Select(idValue => idValue!.Value)
+            .Distinct()
+            .ToList();
+
+        if (detailIds.Count != rawDetailIds.Count)
+            return BadRequest(new { message = "aturan_detail_id harus unik untuk setiap detail" });
+
+        var existingDetails = await _db.AturanDetails
+            .Where(d => d.AturanId == id && detailIds.Contains(d.AturanDetailId))
+            .ToListAsync();
+
+        if (existingDetails.Count != detailIds.Count)
+        {
+            var missingIds = detailIds.Except(existingDetails.Select(d => d.AturanDetailId)).ToList();
+            return NotFound(new { message = "Detail tidak ditemukan", missing_ids = missingIds });
+        }
+
+        var existingById = existingDetails.ToDictionary(d => d.AturanDetailId);
+        foreach (var d in request.details)
+        {
+            var existing = existingById[d.aturan_detail_id!.Value];
+            if (d.kategori != null)
+                existing.AturanDetailKategori = d.kategori;
+            if (d.key != null)
+                existing.AturanDetailKey = d.key;
+            if (d.json_value != null)
+                existing.AturanDetailJsonValue = d.json_value;
+            if (d.status.HasValue)
+                existing.AturanDetailStatus = d.status.Value;
+            if (d.catatan != null)
+                existing.AturanDetailCatatan = d.catatan;
+        }
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new { message = "Detail berhasil diupdate", updated = existingDetails.Count });
+    }
 }
 
 // Request DTOs
 public class CreateAturanRequest
 {
-    public string Versi { get; set; } = string.Empty;
-    public sbyte? Status { get; set; }
-    public uint? SkorMinimum { get; set; }
-    public string? TemplateFilePath { get; set; }
+    public string versi { get; set; } = string.Empty;
+    public sbyte? status { get; set; }
+    public uint? skor_minimum { get; set; }
+    public string? template_file_path { get; set; }
 }
 
 public class UpdateAturanRequest
 {
-    public string? Versi { get; set; }
-    public sbyte? Status { get; set; }
-    public uint? SkorMinimum { get; set; }
-    public string? TemplateFilePath { get; set; }
+    public string? versi { get; set; }
+    public sbyte? status { get; set; }
+    public uint? skor_minimum { get; set; }
+    public string? template_file_path { get; set; }
+}
+
+public class AturanDetailPatchRequest
+{
+    public List<AturanDetailPatchItem> details { get; set; } = new();
+}
+
+public class AturanDetailPatchItem
+{
+    public uint? aturan_detail_id { get; set; }
+    public string? kategori { get; set; }
+    public string? key { get; set; }
+    public string? json_value { get; set; }
+    public sbyte? status { get; set; }
+    public string? catatan { get; set; }
 }

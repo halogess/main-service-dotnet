@@ -3,7 +3,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace ValidasiTugasAkhir.MainService.Models;
 
-[Table("adobe_credentials")]
+[Table("credential_adobe")]
 public class AdobeCredential
 {
     [Key]

@@ -257,7 +257,6 @@ public class ParagraphExtractor
         var fieldResultBuilder = new System.Text.StringBuilder();
         bool fieldIsLocked = false;
         bool fieldIsDirty = false;
-        ulong? currentFieldFormatId = null;
         Run? firstResultRun = null; // To capture formatting of result
         
         void FlushComplexField()
@@ -309,7 +308,6 @@ public class ParagraphExtractor
             fieldResultBuilder.Clear();
             fieldIsLocked = false;
             fieldIsDirty = false;
-            currentFieldFormatId = null;
             firstResultRun = null;
         }
         
@@ -330,42 +328,21 @@ public class ParagraphExtractor
                     formatSignature = $"{effective.FontAscii ?? ""}|{effective.FontSize ?? 0}|{(effective.Bold == true ? "B" : "")}|{(effective.Italic == true ? "I" : "")}|{(effective.Underline == true ? "U" : "")}|{effective.UnderlineStyle ?? ""}";
                 }
                 
-                // Process run children to get text content
                 var runText = new StringBuilder();
-                foreach (var child in run.ChildElements)
+
+                void FlushRunTextSegment()
                 {
-                    if (child is Text t)
-                        runText.Append(t.Text);
-                    else if (child is TabChar)
-                        runText.Append('\t');
-                    else if (child is Break)
-                        runText.Append('\n');
-                    else if (child is Drawing || child is Picture)
-                    {
-                        // Before processing drawing/picture, flush any accumulated text
-                        FlushAccumulatedRun();
-                        ProcessElement(child, skipTextBox);
-                    }
-                    else if (child is DocumentFormat.OpenXml.AlternateContent altContent)
-                    {
-                        // Handle mc:AlternateContent inside Run (contains Drawing in mc:Choice)
-                        FlushAccumulatedRun();
-                        ProcessElement(child, skipTextBox);
-                    }
-                }
-                
-                var textContent = runText.ToString();
-                if (!string.IsNullOrEmpty(textContent))
-                {
-                    // Check if format is same as current accumulation
+                    if (runText.Length == 0) return;
+
+                    var textContent = runText.ToString();
+                    runText.Clear();
+
                     if (formatSignature == currentFormatSignature && !string.IsNullOrEmpty(currentFormatSignature))
                     {
-                        // Same format - append to current accumulation
                         accumulatedRunText.Append(textContent);
                     }
                     else
                     {
-                        // Different format - flush previous and start new accumulation
                         FlushAccumulatedRun();
                         currentFormatSignature = formatSignature;
                         currentEffectiveProps = effective;
@@ -373,6 +350,116 @@ public class ParagraphExtractor
                         accumulatedRunText.Append(textContent);
                     }
                 }
+                
+                foreach (var child in run.ChildElements)
+                {
+                    if (child is FieldChar fldChar)
+                    {
+                        FlushRunTextSegment();
+                        FlushAccumulatedRun();
+                        FlushText();
+                        
+                        var fldType = fldChar.FieldCharType?.Value;
+                        
+                        if (fldType == FieldCharValues.Begin)
+                        {
+                            inComplexField = true;
+                            inFieldInstr = true;
+                            inFieldResult = false;
+                            fieldIsLocked = fldChar.FieldLock?.Value ?? false;
+                            fieldIsDirty = fldChar.Dirty?.Value ?? false;
+                            fieldInstrBuilder.Clear();
+                            fieldResultBuilder.Clear();
+                            firstResultRun = null;
+                        }
+                        else if (fldType == FieldCharValues.Separate)
+                        {
+                            inFieldInstr = false;
+                            inFieldResult = true;
+                        }
+                        else if (fldType == FieldCharValues.End)
+                        {
+                            FlushComplexField();
+                        }
+                        continue;
+                    }
+
+                    if (child is FieldCode fieldCode)
+                    {
+                        if (inFieldInstr)
+                            fieldInstrBuilder.Append(fieldCode.Text);
+                        continue;
+                    }
+
+                    if (child is Text t)
+                    {
+                        if (inFieldResult)
+                        {
+                            if (firstResultRun == null)
+                                firstResultRun = run;
+                            fieldResultBuilder.Append(t.Text);
+                        }
+                        else if (!inComplexField)
+                        {
+                            runText.Append(t.Text);
+                        }
+                        continue;
+                    }
+
+                    if (child is TabChar)
+                    {
+                        if (inFieldResult)
+                        {
+                            if (firstResultRun == null)
+                                firstResultRun = run;
+                            fieldResultBuilder.Append('\t');
+                        }
+                        else if (!inComplexField)
+                        {
+                            runText.Append('\t');
+                        }
+                        continue;
+                    }
+
+                    if (child is Break)
+                    {
+                        if (inFieldResult)
+                        {
+                            if (firstResultRun == null)
+                                firstResultRun = run;
+                            fieldResultBuilder.Append('\n');
+                        }
+                        else if (!inComplexField)
+                        {
+                            runText.Append('\n');
+                        }
+                        continue;
+                    }
+
+                    if (child is Drawing || child is Picture)
+                    {
+                        FlushRunTextSegment();
+                        FlushAccumulatedRun();
+                        ProcessElement(child, skipTextBox);
+                        continue;
+                    }
+
+                    if (child is DocumentFormat.OpenXml.AlternateContent altContent)
+                    {
+                        FlushRunTextSegment();
+                        FlushAccumulatedRun();
+                        ProcessElement(child, skipTextBox);
+                        continue;
+                    }
+
+                    if (!inComplexField)
+                    {
+                        FlushRunTextSegment();
+                        ProcessElement(child, skipTextBox);
+                    }
+                }
+
+                FlushRunTextSegment();
             }
             else if (elem is DocumentFormat.OpenXml.Math.Run mathRun)
             {

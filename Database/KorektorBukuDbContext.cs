@@ -26,6 +26,8 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<Antrian> Antrians { get; set; }
     public DbSet<Aturan> Aturans { get; set; }
     public DbSet<AturanDetail> AturanDetails { get; set; }
+    public DbSet<Kesalahan> Kesalahans { get; set; }
+    public DbSet<GeminiApiKey> GeminiApiKeys { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -187,6 +189,25 @@ public class KorektorBukuDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(e => e.AturanId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Kesalahan>(entity =>
+        {
+            entity.HasKey(e => e.KesalahanId);
+            entity.Property(e => e.KesalahanPenjelasan).HasColumnType("text");
+            entity.Property(e => e.KesalahanBboxVisual).HasColumnType("json");
+            entity.Property(e => e.KesalahanSteps)
+                .HasColumnType("json")
+                .HasDefaultValueSql("(JSON_ARRAY())");
+        });
+
+        modelBuilder.Entity<GeminiApiKey>(entity =>
+        {
+            entity.HasKey(e => e.GeminiApiKeyId);
+            entity.Property(e => e.GeminiApiKeyCreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
+            entity.Property(e => e.GeminiApiKeyUpdatedAt)
+                .ValueGeneratedOnAddOrUpdate();
         });
     }
 }

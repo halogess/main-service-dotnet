@@ -83,7 +83,6 @@ public class FieldFormatExtractor
     {
         var instrBuilder = new StringBuilder();
         var resultBuilder = new StringBuilder();
-        bool inField = false;
         bool inInstr = false;
         bool inResult = false;
         bool isLocked = false;
@@ -103,7 +102,6 @@ public class FieldFormatExtractor
                     
                     if (fldType == FieldCharValues.Begin)
                     {
-                        inField = true;
                         inInstr = true;
                         isLocked = fldChar.FieldLock?.Value ?? false;
                         isDirty = fldChar.Dirty?.Value ?? false;

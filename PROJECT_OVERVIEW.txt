@@ -445,7 +445,7 @@ db_korektor_buku:
    - antrian_created_at
    - antrian_updated_at
 
-5. adobe_credentials
+5. credential_adobe
    - adobe_credentials_id (PK)
    - adobe_client_id
    - adobe_client_secret

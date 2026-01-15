@@ -94,7 +94,7 @@ public partial class ValidationService
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
             where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
-            select new { e.DelemenId, e.DelemenType, e.DelemenJsonTree })
+            select new BodyElementInfo { DelemenId = e.DelemenId, DelemenType = e.DelemenType, DelemenJsonTree = e.DelemenJsonTree })
             .ToListAsync(cancellationToken);
 
         if (bodyElements.Count == 0)
@@ -111,6 +111,11 @@ public partial class ValidationService
         var labelMap = await LoadVisualLabelsAsync(
             bodyElements.Select(e => e.DelemenId),
             cancellationToken);
+
+        var orderedElementIds = bodyElements.Select(e => e.DelemenId).ToList();
+        var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => e.DelemenJsonTree);
+        var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
+        var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
 
         var elementsById = bodyElements.ToDictionary(e => e.DelemenId);
         var sectionHeaderIds = labelMap
@@ -287,23 +292,45 @@ public partial class ValidationService
             }
         }
 
+        // Check for empty line after title (based on struktur_konten rule)
+        var requireEmptyLineAfter = rule?.StrukturKonten?.SatuBarisKosongSetelah?.Value ?? true;
         var nextElementIndex = titleBlock.Count;
-        result.TotalChecks++;
-        if (nextElementIndex < bodyElements.Count)
+        
+        if (requireEmptyLineAfter)
         {
-            var emptyContent = ParseElementContent(bodyElements[nextElementIndex].DelemenJsonTree);
-            if (IsEmptyElement(emptyContent))
+            result.TotalChecks++;
+            if (nextElementIndex < bodyElements.Count)
             {
-                result.PassedChecks++;
-
-                result.TotalChecks++;
-                var afterEmptyIndex = nextElementIndex + 1;
-                if (afterEmptyIndex < bodyElements.Count)
+                var emptyContent = ParseElementContent(bodyElements[nextElementIndex].DelemenJsonTree);
+                if (IsEmptyElement(emptyContent))
                 {
-                    var afterEmptyContent = ParseElementContent(bodyElements[afterEmptyIndex].DelemenJsonTree);
-                    if (!IsEmptyElement(afterEmptyContent))
+                    result.PassedChecks++;
+
+                    // Check if empty paragraph has same font size as title (non-required check)
+                    await ValidateEmptyParagraphFontSizeAsync(
+                        result,
+                        rule,
+                        bodyElements[nextElementIndex].DelemenId,
+                        cancellationToken);
+
+                    result.TotalChecks++;
+                    var afterEmptyIndex = nextElementIndex + 1;
+                    if (afterEmptyIndex < bodyElements.Count)
                     {
-                        result.PassedChecks++;
+                        var afterEmptyContent = ParseElementContent(bodyElements[afterEmptyIndex].DelemenJsonTree);
+                        if (!IsEmptyElement(afterEmptyContent))
+                        {
+                            result.PassedChecks++;
+                        }
+                        else
+                        {
+                            result.Errors.Add(new ValidationError
+                            {
+                                Category = "Isi Buku",
+                                Field = "judul_bab",
+                                Message = "Hanya boleh ada 1 paragraf kosong setelah judul bab"
+                            });
+                        }
                     }
                     else
                     {
@@ -311,7 +338,7 @@ public partial class ValidationService
                         {
                             Category = "Isi Buku",
                             Field = "judul_bab",
-                            Message = "Hanya boleh ada 1 paragraf kosong setelah judul bab"
+                            Message = "Paragraf setelah paragraf kosong judul bab tidak ditemukan"
                         });
                     }
                 }
@@ -321,7 +348,7 @@ public partial class ValidationService
                     {
                         Category = "Isi Buku",
                         Field = "judul_bab",
-                        Message = "Paragraf setelah paragraf kosong judul bab tidak ditemukan"
+                        Message = "Setelah judul bab harus ada 1 paragraf kosong"
                     });
                 }
             }
@@ -331,18 +358,9 @@ public partial class ValidationService
                 {
                     Category = "Isi Buku",
                     Field = "judul_bab",
-                    Message = "Setelah judul bab harus ada 1 paragraf kosong"
+                    Message = "Paragraf kosong setelah judul bab tidak ditemukan"
                 });
             }
-        }
-        else
-        {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "judul_bab",
-                Message = "Paragraf kosong setelah judul bab tidak ditemukan"
-            });
         }
 
         var paragraphIds = titleBlock
@@ -406,11 +424,14 @@ public partial class ValidationService
             }
             else
             {
+                var indentationDetails = GetIndentationDetails(titleParagraphs!);
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
                     Field = "judul_bab",
-                    Message = "Indentasi judul bab harus none"
+                    Message = "Indentasi judul bab harus none (left, right, special harus 0)",
+                    Expected = "Left: 0, Right: 0, Special: 0",
+                    Actual = indentationDetails
                 });
             }
         }
@@ -677,33 +698,123 @@ public partial class ValidationService
         if (result.Errors.Count > 0 && titleIds.Count > 0)
         {
             var pageNumbers = await LoadPageNumbersAsync(titleIds, cancellationToken);
+            var mergedBbox = await LoadMergedBboxAsync(titleIds, cancellationToken);
+            
             if (pageNumbers.Count > 0)
             {
                 var firstPageNumber = pageNumbers.Values.Min();
+                var locations = CreateLocations(firstPageNumber, mergedBbox);
+                
                 foreach (var error in result.Errors)
                 {
-                    if (string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase) && !error.PageNumber.HasValue)
+                    if (string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase) && error.Locations.Count == 0)
                     {
-                        error.PageNumber = firstPageNumber;
-                    }
-                }
-            }
-
-            // Load merged bbox from dokumen_elemen_visual
-            var mergedBbox = await LoadMergedBboxAsync(titleIds, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(mergedBbox))
-            {
-                foreach (var error in result.Errors)
-                {
-                    if (string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(error.BboxVisual))
-                    {
-                        error.BboxVisual = mergedBbox;
+                        error.Locations.AddRange(locations);
                     }
                 }
             }
         }
 
+        // Validate: min satu paragraf sebelum subbab (struktur_konten rule)
+        var requireParagraphBeforeSubchapter = rule?.StrukturKonten?.MinSatuParagrafSebelumSubbab?.Value ?? true;
+        if (requireParagraphBeforeSubchapter)
+        {
+            await ValidateParagraphBeforeSubchapterAsync(result, bodyElements, labelMap, titleIds, cancellationToken);
+        }
+
+        ElementNeighborContext? titleContext = null;
+        if (titleIds.Count > 0)
+        {
+            var firstTitleId = bodyElements.Select(e => e.DelemenId).FirstOrDefault(id => titleIds.Contains(id));
+            if (firstTitleId != 0 && neighborContexts.TryGetValue(firstTitleId, out var found))
+                titleContext = found;
+        }
+        else if (bodyElements.Count > 0 && neighborContexts.TryGetValue(bodyElements[0].DelemenId, out var fallback))
+        {
+            titleContext = fallback;
+        }
+
+        if (titleContext != null)
+        {
+            foreach (var error in result.Errors)
+            {
+                if (string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase))
+                    ApplyContext(error, titleContext);
+            }
+        }
+
         return result;
+    }
+
+    private async Task ValidateEmptyParagraphFontSizeAsync(
+        ValidationResult result,
+        ChapterTitleRule? rule,
+        ulong emptyElementId,
+        CancellationToken cancellationToken)
+    {
+        var expectedFontSize = rule?.Font?.FontSize?.Value;
+        if (!expectedFontSize.HasValue)
+            return; // No font size rule to validate
+
+        // Load text format for the empty paragraph's paragraph mark
+        var emptyElement = await _db.DokumenElemens
+            .Where(e => e.DelemenId == emptyElementId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (emptyElement == null)
+            return;
+
+        var content = ParseElementContent(emptyElement.DelemenJsonTree);
+
+        // Get paragraph format to check for paragraph mark formatting
+        if (!content.ParagraphFormatId.HasValue)
+            return;
+
+        var paragraphFormat = await _db.DokumenFormatParagrafs
+            .Where(p => p.DfpId == content.ParagraphFormatId.Value)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (paragraphFormat == null)
+            return;
+
+        // Check rPr (run properties) for the paragraph mark - stored in paragraph format
+        // The font size for empty paragraph is typically inherited from the paragraph mark style
+        // We need to check the text format associated with the paragraph mark
+
+        // If there are any text formats in the empty paragraph, check them
+        if (content.TextFormatIds.Count > 0)
+        {
+            var textFormats = await _db.DokumenFormatTexts
+                .Where(t => content.TextFormatIds.Contains(t.DftxId))
+                .ToListAsync(cancellationToken);
+
+            if (textFormats.Count > 0)
+            {
+                result.TotalChecks++;
+                var expectedHalfPt = expectedFontSize.Value * 2m;
+                var actuals = textFormats
+                    .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
+                    .Where(a => a.HasValue)
+                    .ToList();
+
+                if (actuals.Count > 0 && actuals.All(a => Math.Abs(a!.Value - expectedHalfPt) <= 0.5m))
+                {
+                    result.PassedChecks++;
+                }
+                else if (actuals.Count > 0)
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_bab",
+                        Message = "Ukuran font paragraf kosong setelah judul bab tidak sesuai dengan judul",
+                        Expected = expectedFontSize.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) + " pt",
+                        Actual = string.Join(", ", actuals.Select(a => (a!.Value / 2m).ToString(System.Globalization.CultureInfo.InvariantCulture) + " pt")),
+                        IsRequired = false // Non-required check
+                    });
+                }
+            }
+        }
     }
 
     private sealed class ElementContentInfo
@@ -712,6 +823,13 @@ public partial class ValidationService
         public string PlainText { get; set; } = string.Empty;
         public List<uint> TextFormatIds { get; } = new();
         public bool HasNonTextContent { get; set; }
+    }
+
+    private sealed class BodyElementInfo
+    {
+        public ulong DelemenId { get; set; }
+        public string? DelemenType { get; set; }
+        public string? DelemenJsonTree { get; set; }
     }
 
     private static ElementContentInfo ParseElementContent(string? json)
@@ -805,6 +923,111 @@ public partial class ValidationService
     private static bool IsEmptyElement(ElementContentInfo content)
     {
         return string.IsNullOrWhiteSpace(content.PlainText) && !content.HasNonTextContent;
+    }
+
+    /// <summary>
+    /// Validates that there is at least one paragraph (text) between chapter title and first subchapter.
+    /// </summary>
+    private async Task ValidateParagraphBeforeSubchapterAsync(
+        ValidationResult result,
+        List<BodyElementInfo> bodyElements,
+        Dictionary<ulong, string> labelMap,
+        HashSet<ulong> titleIds,
+        CancellationToken cancellationToken)
+    {
+        // Find the end of chapter title block (after title elements and empty line)
+        int titleEndIndex = 0;
+        for (int i = 0; i < bodyElements.Count; i++)
+        {
+            if (titleIds.Contains(bodyElements[i].DelemenId))
+            {
+                titleEndIndex = i + 1;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // Skip empty paragraph after title if exists
+        if (titleEndIndex < bodyElements.Count)
+        {
+            var content = ParseElementContent(bodyElements[titleEndIndex].DelemenJsonTree);
+            if (IsEmptyElement(content))
+            {
+                titleEndIndex++;
+            }
+        }
+
+        // Find first subchapter (element with section_header label that matches X.X pattern)
+        var subchapterPattern = new System.Text.RegularExpressions.Regex(@"^\d+\.\d+", System.Text.RegularExpressions.RegexOptions.Compiled);
+        int? firstSubchapterIndex = null;
+        
+        for (int i = titleEndIndex; i < bodyElements.Count; i++)
+        {
+            var elemId = bodyElements[i].DelemenId;
+            if (labelMap.TryGetValue(elemId, out var label) && 
+                label.Equals("section_header", StringComparison.OrdinalIgnoreCase))
+            {
+                var content = ParseElementContent(bodyElements[i].DelemenJsonTree);
+                var plainText = content.PlainText?.Trim() ?? string.Empty;
+                
+                if (subchapterPattern.IsMatch(plainText))
+                {
+                    firstSubchapterIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (!firstSubchapterIndex.HasValue)
+        {
+            // No subchapter found, no need to validate
+            return;
+        }
+
+        // Check if there's at least one paragraph (text) between title and first subchapter
+        result.TotalChecks++;
+        bool hasParagraphBefore = false;
+        
+        for (int i = titleEndIndex; i < firstSubchapterIndex.Value; i++)
+        {
+            var elemId = bodyElements[i].DelemenId;
+            if (labelMap.TryGetValue(elemId, out var label) && 
+                label.Equals("text", StringComparison.OrdinalIgnoreCase))
+            {
+                var content = ParseElementContent(bodyElements[i].DelemenJsonTree);
+                if (!IsEmptyElement(content))
+                {
+                    hasParagraphBefore = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasParagraphBefore)
+        {
+            result.PassedChecks++;
+        }
+        else
+        {
+            // Load location for error
+            var firstSubchapterId = bodyElements[firstSubchapterIndex.Value].DelemenId;
+            var pageNumbers = await LoadPageNumbersAsync(new[] { firstSubchapterId }, cancellationToken);
+            var mergedBbox = await LoadMergedBboxAsync(new[] { firstSubchapterId }, cancellationToken);
+            var pageNumber = pageNumbers.Values.FirstOrDefault();
+            var locations = CreateLocations(pageNumber, mergedBbox);
+
+            result.Errors.Add(new ValidationError
+            {
+                Category = "Isi Buku",
+                Field = "judul_bab",
+                Message = "Harus ada minimal 1 paragraf setelah judul bab sebelum judul subbab",
+                Expected = "Minimal 1 paragraf",
+                Actual = "Langsung ke judul subbab",
+                Locations = locations
+            });
+        }
     }
 
     private async Task<Dictionary<ulong, string>> LoadVisualLabelsAsync(
@@ -1109,6 +1332,36 @@ public partial class ValidationService
                (format.DfpIndEndTwips ?? 0) != 0 ||
                (format.DfpIndLeftChars ?? 0) != 0 ||
                (format.DfpIndRightChars ?? 0) != 0;
+    }
+
+    private static string GetIndentationDetails(List<DokumenFormatParagraf?> paragraphs)
+    {
+        var details = new List<string>();
+
+        foreach (var pf in paragraphs.Where(p => p != null))
+        {
+            var leftTwips = pf!.DfpIndLeftTwips ?? pf.DfpIndStartTwips ?? 0;
+            var rightTwips = pf.DfpIndRightTwips ?? pf.DfpIndEndTwips ?? 0;
+            var firstLineTwips = pf.DfpIndFirstLineTwips ?? 0;
+            var hangingTwips = pf.DfpIndHangingTwips ?? 0;
+
+            // Convert twips to cm (1 twip = 1/1440 inch, 1 inch = 2.54 cm)
+            var leftCm = leftTwips / 1440.0 * 2.54;
+            var rightCm = rightTwips / 1440.0 * 2.54;
+
+            // Special indent: positive = first line, negative = hanging
+            var specialCm = firstLineTwips > 0
+                ? firstLineTwips / 1440.0 * 2.54
+                : hangingTwips > 0
+                    ? -(hangingTwips / 1440.0 * 2.54)
+                    : 0;
+
+            var specialType = firstLineTwips > 0 ? "first line" : hangingTwips > 0 ? "hanging" : "none";
+
+            details.Add($"Left: {leftCm:F2} cm, Right: {rightCm:F2} cm, Special: {specialCm:F2} cm ({specialType})");
+        }
+
+        return details.Count > 0 ? string.Join("; ", details.Distinct()) : "unknown";
     }
 
     private static decimal? GetLineSpacing(DokumenFormatParagraf format)

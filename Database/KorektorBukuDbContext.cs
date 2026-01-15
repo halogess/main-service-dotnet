@@ -195,7 +195,7 @@ public class KorektorBukuDbContext : DbContext
         {
             entity.HasKey(e => e.KesalahanId);
             entity.Property(e => e.KesalahanPenjelasan).HasColumnType("text");
-            entity.Property(e => e.KesalahanBboxVisual).HasColumnType("json");
+            entity.Property(e => e.KesalahanLokasi).HasColumnType("json");
             entity.Property(e => e.KesalahanSteps)
                 .HasColumnType("json")
                 .HasDefaultValueSql("(JSON_ARRAY())");

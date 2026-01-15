@@ -202,6 +202,7 @@ public partial class GeminiService : IGeminiService
         
         var results = ParseErrorGuidance(response);
         ApplyGuardrails(enhancedErrors, results);
+        LogGuidanceDiagnostics(results, response);
         
         // Validate output indices match input
         ValidateErrorIndices(errors, results);
@@ -212,12 +213,47 @@ public partial class GeminiService : IGeminiService
         return results;
     }
 
+    private void LogGuidanceDiagnostics(List<GeminiErrorDetail> results, string response)
+    {
+        if (results.Count == 0)
+        {
+            _logger.LogWarning(
+                "Gemini guidance parse returned 0 items. Response length: {Length}. Response preview: {Preview}",
+                response.Length,
+                BuildResponsePreview(response, 2000));
+            return;
+        }
+
+        var missingExplanation = results.Count(r => string.IsNullOrWhiteSpace(r.Explanation));
+        var missingSteps = results.Count(r => r.Steps == null || r.Steps.Count == 0);
+        if (missingExplanation > 0 || missingSteps > 0)
+        {
+            _logger.LogWarning(
+                "Gemini guidance missing fields. Items: {Count}, missing explanation: {MissingExplanation}, missing steps: {MissingSteps}",
+                results.Count,
+                missingExplanation,
+                missingSteps);
+        }
+    }
+
     private static string GenerateCacheKey(IReadOnlyList<ValidationError> errors)
     {
         // Create a signature based on error category, field, and message
         var signature = string.Join("|", errors.Select(e => $"{e.Category}:{e.Field}:{e.Message}"));
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(signature));
         return Convert.ToHexString(bytes);
+    }
+
+    private static string BuildResponsePreview(string? response, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return "(empty)";
+
+        var compact = response.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (compact.Length <= maxLength)
+            return compact;
+
+        return compact[..maxLength] + "...";
     }
 
     private void ValidateErrorIndices(IReadOnlyList<ValidationError> errors, List<GeminiErrorDetail> results)

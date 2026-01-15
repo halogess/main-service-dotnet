@@ -8,12 +8,17 @@ public class ValidationQueueBackgroundService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<ValidationQueueBackgroundService> _logger;
+    private readonly bool _enableGeminiGuidance;
     private const int GeminiErrorLimit = 20;
 
-    public ValidationQueueBackgroundService(IServiceProvider serviceProvider, ILogger<ValidationQueueBackgroundService> logger)
+    public ValidationQueueBackgroundService(
+        IServiceProvider serviceProvider,
+        ILogger<ValidationQueueBackgroundService> logger,
+        IConfiguration configuration)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _enableGeminiGuidance = configuration.GetValue("Gemini:EnableErrorGuidance", false);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -28,7 +33,9 @@ public class ValidationQueueBackgroundService : BackgroundService
                 var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
                 var wsService = scope.ServiceProvider.GetRequiredService<IWebSocketService>();
                 var validationService = scope.ServiceProvider.GetRequiredService<IValidationService>();
-                var geminiService = scope.ServiceProvider.GetRequiredService<IGeminiService>();
+                IGeminiService? geminiService = null;
+                if (_enableGeminiGuidance)
+                    geminiService = scope.ServiceProvider.GetRequiredService<IGeminiService>();
 
                 var queue = await db.Antrians
                     .Where(a => a.AntrianValidationStatus == "in_queue")
@@ -183,7 +190,7 @@ public class ValidationQueueBackgroundService : BackgroundService
 
     private async Task EnrichAndStoreErrorsAsync(
         KorektorBukuDbContext db,
-        IGeminiService geminiService,
+        IGeminiService? geminiService,
         uint dokumenId,
         IReadOnlyList<ValidationError> errors,
         CancellationToken cancellationToken)
@@ -206,16 +213,23 @@ public class ValidationQueueBackgroundService : BackgroundService
 
         var errorsForGemini = errors.Take(GeminiErrorLimit).ToList();
         List<GeminiErrorDetail> geminiDetails = new();
-        try
+        if (_enableGeminiGuidance && geminiService != null)
         {
-            geminiDetails = await geminiService.GenerateErrorGuidanceAsync(
-                errorsForGemini,
-                aturanDetails,
-                cancellationToken);
+            try
+            {
+                geminiDetails = await geminiService.GenerateErrorGuidanceAsync(
+                    errorsForGemini,
+                    aturanDetails,
+                    cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to generate Gemini guidance for dokumen ID: {DokumenId}", dokumenId);
+            }
         }
-        catch (Exception ex)
+        else
         {
-            _logger.LogWarning(ex, "Failed to generate Gemini guidance for dokumen ID: {DokumenId}", dokumenId);
+            _logger.LogInformation("Gemini guidance disabled; using fallback explanations for dokumen ID: {DokumenId}", dokumenId);
         }
 
         var detailByIndex = geminiDetails
@@ -252,7 +266,6 @@ public class ValidationQueueBackgroundService : BackgroundService
                 KesalahanJudul = title,
                 KesalahanPenjelasan = explanation,
                 KesalahanLokasi = BuildKesalahanLokasi(error),
-                KesalahanBboxVisual = error.BboxVisual,
                 KesalahanSteps = stepsJson
             });
         }
@@ -263,18 +276,27 @@ public class ValidationQueueBackgroundService : BackgroundService
 
     private static string? BuildKesalahanLokasi(ValidationError error)
     {
-        var location = new Dictionary<string, object>();
+        if (error.Locations.Count == 0)
+            return null;
 
-        if (error.PageNumber.HasValue)
-            location["halaman_ke"] = error.PageNumber.Value;
+        var jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+        };
 
-        if (error.SectionIndex.HasValue)
-            location["section"] = error.SectionIndex.Value;
+        var locations = error.Locations.Select(loc => new Dictionary<string, object?>
+        {
+            ["halaman_ke"] = loc.HalamanKe,
+            ["bbox"] = loc.Bbox != null ? new
+            {
+                x0 = loc.Bbox.X0,
+                y0 = loc.Bbox.Y0,
+                x1 = loc.Bbox.X1,
+                y1 = loc.Bbox.Y1
+            } : null
+        }).ToList();
 
-        if (!string.IsNullOrWhiteSpace(error.Field))
-            location["field"] = error.Field;
-
-        return location.Count > 0 ? JsonSerializer.Serialize(location) : null;
+        return JsonSerializer.Serialize(locations);
     }
 
     private static string BuildFallbackExplanation(ValidationError error)

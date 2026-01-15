@@ -39,12 +39,12 @@ public class Kesalahan
     public string KesalahanPenjelasan { get; set; } = string.Empty;
 
     [Column("kesalahan_lokasi")]
-    [MaxLength(255)]
     public string? KesalahanLokasi { get; set; }
-
-    [Column("kesalahan_bbox_visual", TypeName = "json")]
-    public string? KesalahanBboxVisual { get; set; }
 
     [Column("kesalahan_steps", TypeName = "json")]
     public string KesalahanSteps { get; set; } = "[]";
+
+    [Required]
+    [Column("kesalahan_is_required")]
+    public bool KesalahanIsRequired { get; set; } = true;
 }

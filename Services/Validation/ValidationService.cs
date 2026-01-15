@@ -201,6 +201,9 @@ public class ChapterTitleRule
 
     [JsonPropertyName("numbering")]
     public TitleNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public ChapterContentStructureRule? StrukturKonten { get; set; }
 }
 
 public class TitleFontRule
@@ -263,6 +266,89 @@ public class TitleNumberingRule
     public RuleValue<bool>? EnterAfterNumber { get; set; }
 }
 
+public class ChapterContentStructureRule
+{
+    [JsonPropertyName("satu_baris_kosong_setelah")]
+    public RuleValue<bool>? SatuBarisKosongSetelah { get; set; }
+
+    [JsonPropertyName("min_satu_paragraf_sebelum_subbab")]
+    public RuleValue<bool>? MinSatuParagrafSebelumSubbab { get; set; }
+}
+
+// Subchapter Title Rule (judul_subbab)
+public class SubchapterTitleRule
+{
+    [JsonPropertyName("font")]
+    public TitleFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public SubchapterParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("numbering")]
+    public TitleNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public SubchapterContentStructureRule? StrukturKonten { get; set; }
+}
+
+public class SubchapterParagraphRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("hanging_min_cm")]
+    public DecimalRuleValue? HangingMinCm { get; set; }
+
+    [JsonPropertyName("hanging_max_cm")]
+    public DecimalRuleValue? HangingMaxCm { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class SubchapterContentStructureRule
+{
+    [JsonPropertyName("minimal_satu_paragraf_setelah")]
+    public RuleValue<bool>? MinimalSatuParagrafSetelah { get; set; }
+
+    [JsonPropertyName("cegah_posisi_paling_bawah")]
+    public RuleValue<bool>? CegahPosisiPalingBawah { get; set; }
+
+    [JsonPropertyName("cegah_subbab_tunggal")]
+    public RuleValue<bool>? CegahSubbabTunggal { get; set; }
+}
+
+// Paragraph Rule (paragraf)
+public class ParagraphRule
+{
+    [JsonPropertyName("font")]
+    public ParagraphFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public ParagraphFormatRule? Paragraph { get; set; }
+}
+
+public class ParagraphFontRule
+{
+    [JsonPropertyName("font_name")]
+    public RuleValue<string>? FontName { get; set; }
+
+    [JsonPropertyName("font_size")]
+    public DecimalRuleValue? FontSize { get; set; }
+}
+
+public class ParagraphFormatRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("first_line_indent")]
+    public DecimalRuleValue? FirstLineIndent { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
 #endregion
 
 #region Validation Result DTOs
@@ -276,6 +362,20 @@ public class ValidationResult
     public decimal Score => TotalChecks > 0 ? (decimal)PassedChecks / TotalChecks * 100 : 100;
 }
 
+public class ErrorLocation
+{
+    public int HalamanKe { get; set; }
+    public ErrorBbox? Bbox { get; set; }
+}
+
+public class ErrorBbox
+{
+    public decimal X0 { get; set; }
+    public decimal Y0 { get; set; }
+    public decimal X1 { get; set; }
+    public decimal Y1 { get; set; }
+}
+
 public class ValidationError
 {
     public string Category { get; set; } = string.Empty;
@@ -284,8 +384,7 @@ public class ValidationError
     public string? Expected { get; set; }
     public string? Actual { get; set; }
     public int? SectionIndex { get; set; }
-    public int? PageNumber { get; set; }
-    public string? BboxVisual { get; set; }
+    public List<ErrorLocation> Locations { get; set; } = new();
     public string? DiffType { get; set; }
     public string? Cause { get; set; }
     public bool? HasNumbering { get; set; }
@@ -298,6 +397,15 @@ public class ValidationError
     public List<string>? DisallowedActions { get; set; }
     public string? ScopeHint { get; set; }
     public string? PageRange { get; set; }
+    public string? PrevElementText { get; set; }
+    public string? PrevElementLabel { get; set; }
+    public string? NextElementText { get; set; }
+    public string? NextElementLabel { get; set; }
+    public decimal? PageMarginTopCm { get; set; }
+    public decimal? PageMarginBottomCm { get; set; }
+    public decimal? PageMarginLeftCm { get; set; }
+    public decimal? PageMarginRightCm { get; set; }
+    public bool IsRequired { get; set; } = true;
 }
 
 #endregion
@@ -348,14 +456,220 @@ public partial class ValidationService : IValidationService
         result.TotalChecks += titleResult.TotalChecks;
         result.PassedChecks += titleResult.PassedChecks;
 
+        // Validate subchapter title
+        var subchapterResult = await ValidateSubchapterTitleAsync(dokumenId, cancellationToken);
+        result.Errors.AddRange(subchapterResult.Errors);
+        result.TotalChecks += subchapterResult.TotalChecks;
+        result.PassedChecks += subchapterResult.PassedChecks;
+
+        // Validate paragraphs
+        var paragraphResult = await ValidateParagraphAsync(dokumenId, cancellationToken);
+        result.Errors.AddRange(paragraphResult.Errors);
+        result.TotalChecks += paragraphResult.TotalChecks;
+        result.PassedChecks += paragraphResult.PassedChecks;
+
         // TODO: Add more validation categories here
-        // - Font validation
-        // - Paragraph formatting validation
         // - Table validation
         // - Image validation
         // etc.
 
         return result;
+    }
+
+    /// <summary>
+    /// Creates a list of ErrorLocation from a page number and merged bbox string.
+    /// </summary>
+    protected static List<ErrorLocation> CreateLocations(int? pageNumber, string? mergedBbox)
+    {
+        var locations = new List<ErrorLocation>();
+        
+        if (!pageNumber.HasValue)
+            return locations;
+
+        var loc = new ErrorLocation { HalamanKe = pageNumber.Value };
+
+        if (!string.IsNullOrWhiteSpace(mergedBbox))
+        {
+            try
+            {
+                var doc = System.Text.Json.JsonDocument.Parse(mergedBbox);
+                var root = doc.RootElement;
+                
+                loc.Bbox = new ErrorBbox
+                {
+                    X0 = root.TryGetProperty("x0", out var x0) ? x0.GetDecimal() : 0,
+                    Y0 = root.TryGetProperty("y0", out var y0) ? y0.GetDecimal() : 0,
+                    X1 = root.TryGetProperty("x1", out var x1) ? x1.GetDecimal() : 0,
+                    Y1 = root.TryGetProperty("y1", out var y1) ? y1.GetDecimal() : 0
+                };
+            }
+            catch
+            {
+                // Ignore parsing errors, add location without bbox
+            }
+        }
+
+        locations.Add(loc);
+        return locations;
+    }
+
+    private sealed class ElementNeighborContext
+    {
+        public string? PrevText { get; init; }
+        public string? PrevLabel { get; init; }
+        public string? NextText { get; init; }
+        public string? NextLabel { get; init; }
+        public decimal? MarginTopCm { get; init; }
+        public decimal? MarginBottomCm { get; init; }
+        public decimal? MarginLeftCm { get; init; }
+        public decimal? MarginRightCm { get; init; }
+    }
+
+    private sealed class PageMarginSnapshot
+    {
+        public decimal? TopCm { get; init; }
+        public decimal? BottomCm { get; init; }
+        public decimal? LeftCm { get; init; }
+        public decimal? RightCm { get; init; }
+    }
+
+    private static void ApplyContextToErrors(List<ValidationError> errors, int startIndex, ElementNeighborContext? context)
+    {
+        if (context == null)
+            return;
+
+        for (var i = startIndex; i < errors.Count; i++)
+            ApplyContext(errors[i], context);
+    }
+
+    private static void ApplyContext(ValidationError error, ElementNeighborContext context)
+    {
+        if (string.IsNullOrWhiteSpace(error.PrevElementText))
+            error.PrevElementText = context.PrevText;
+        if (string.IsNullOrWhiteSpace(error.PrevElementLabel))
+            error.PrevElementLabel = context.PrevLabel;
+        if (string.IsNullOrWhiteSpace(error.NextElementText))
+            error.NextElementText = context.NextText;
+        if (string.IsNullOrWhiteSpace(error.NextElementLabel))
+            error.NextElementLabel = context.NextLabel;
+
+        if (!error.PageMarginTopCm.HasValue)
+            error.PageMarginTopCm = context.MarginTopCm;
+        if (!error.PageMarginBottomCm.HasValue)
+            error.PageMarginBottomCm = context.MarginBottomCm;
+        if (!error.PageMarginLeftCm.HasValue)
+            error.PageMarginLeftCm = context.MarginLeftCm;
+        if (!error.PageMarginRightCm.HasValue)
+            error.PageMarginRightCm = context.MarginRightCm;
+    }
+
+    private static Dictionary<ulong, ElementNeighborContext> BuildNeighborContexts(
+        IReadOnlyList<ulong> orderedElementIds,
+        Dictionary<ulong, string?> elementJsonById,
+        Dictionary<ulong, string> labelMap,
+        Dictionary<ulong, PageMarginSnapshot> marginsById)
+    {
+        var contexts = new Dictionary<ulong, ElementNeighborContext>(orderedElementIds.Count);
+        var contentCache = new Dictionary<ulong, ElementContentInfo>();
+
+        string? GetText(ulong id)
+        {
+            if (!elementJsonById.TryGetValue(id, out var json))
+                return null;
+
+            if (!contentCache.TryGetValue(id, out var content))
+            {
+                content = ParseElementContent(json);
+                contentCache[id] = content;
+            }
+
+            return NormalizeContextText(content.PlainText);
+        }
+
+        for (var i = 0; i < orderedElementIds.Count; i++)
+        {
+            var id = orderedElementIds[i];
+            var prevId = i > 0 ? orderedElementIds[i - 1] : (ulong?)null;
+            var nextId = i + 1 < orderedElementIds.Count ? orderedElementIds[i + 1] : (ulong?)null;
+
+            string? prevLabel = null;
+            string? nextLabel = null;
+            if (prevId.HasValue)
+                labelMap.TryGetValue(prevId.Value, out prevLabel);
+            if (nextId.HasValue)
+                labelMap.TryGetValue(nextId.Value, out nextLabel);
+
+            var margin = marginsById.TryGetValue(id, out var found) ? found : null;
+
+            contexts[id] = new ElementNeighborContext
+            {
+                PrevText = prevId.HasValue ? GetText(prevId.Value) : null,
+                PrevLabel = prevLabel,
+                NextText = nextId.HasValue ? GetText(nextId.Value) : null,
+                NextLabel = nextLabel,
+                MarginTopCm = margin?.TopCm,
+                MarginBottomCm = margin?.BottomCm,
+                MarginLeftCm = margin?.LeftCm,
+                MarginRightCm = margin?.RightCm
+            };
+        }
+
+        return contexts;
+    }
+
+    private static string? NormalizeContextText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var normalized = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        const int maxLength = 160;
+        if (normalized.Length <= maxLength)
+            return normalized;
+
+        return normalized[..maxLength] + "...";
+    }
+
+    private async Task<Dictionary<ulong, PageMarginSnapshot>> LoadPageMarginsAsync(
+        IEnumerable<ulong> elementIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = elementIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new Dictionary<ulong, PageMarginSnapshot>();
+
+        var margins = await (from e in _db.DokumenElemens
+            join p in _db.DokumenParts on e.DpartId equals p.DpartId
+            join s in _db.DokumenSections on p.DsecId equals s.DsecId
+            where ids.Contains(e.DelemenId)
+            select new
+            {
+                e.DelemenId,
+                s.DsecMarginTopTwips,
+                s.DsecMarginBottomTwips,
+                s.DsecMarginLeftTwips,
+                s.DsecMarginRightTwips
+            }).ToListAsync(cancellationToken);
+
+        return margins
+            .GroupBy(m => m.DelemenId)
+            .ToDictionary(
+                g => g.Key,
+                g => new PageMarginSnapshot
+                {
+                    TopCm = TwipsToCm(g.First().DsecMarginTopTwips),
+                    BottomCm = TwipsToCm(g.First().DsecMarginBottomTwips),
+                    LeftCm = TwipsToCm(g.First().DsecMarginLeftTwips),
+                    RightCm = TwipsToCm(g.First().DsecMarginRightTwips)
+                });
+    }
+
+    private static decimal? TwipsToCm(uint? twips)
+    {
+        if (!twips.HasValue)
+            return null;
+
+        return Math.Round(twips.Value / TwipsPerCm, 2);
     }
 
 }

@@ -125,7 +125,21 @@ public partial class GeminiService
                 disallowed_actions = err.DisallowedActions,
                 scope_hint = err.ScopeHint,
                 page_range = err.PageRange,
+                prev_text = err.Error.PrevElementText,
+                prev_label = err.Error.PrevElementLabel,
+                next_text = err.Error.NextElementText,
+                next_label = err.Error.NextElementLabel,
+                page_margins_cm = err.Error.PageMarginTopCm.HasValue || err.Error.PageMarginBottomCm.HasValue || err.Error.PageMarginLeftCm.HasValue || err.Error.PageMarginRightCm.HasValue
+                    ? new
+                    {
+                        top = err.Error.PageMarginTopCm,
+                        bottom = err.Error.PageMarginBottomCm,
+                        left = err.Error.PageMarginLeftCm,
+                        right = err.Error.PageMarginRightCm
+                    }
+                    : null,
                 rule_key = err.RuleKey,
+                is_required = err.Error.IsRequired,
                 rule_context = err.RuleDefinition == null
                     ? null
                     : new
@@ -151,6 +165,7 @@ public partial class GeminiService
         sb.AppendLine("- ATURAN_AKTIF_JSON adalah satu-satunya aturan yang berlaku saat ini (nilainya bisa berubah).");
         sb.AppendLine("- KESALAHAN_JSON adalah temuan dari validator; bisa saja ada false positive.");
         sb.AppendLine("- ATURAN_AKTIF_JSON dan rule_context bisa memuat llm_context per-rule.");
+        sb.AppendLine("- KESALAHAN_JSON dapat berisi prev_text/next_text dan page_margins_cm sebagai konteks posisi.");
         sb.AppendLine();
         sb.AppendLine("Decision Ladder (Minimal Fix First):");
         sb.AppendLine("Level 1: edit teks/karakter (hapus spasi, kapitalisasi)." );
@@ -177,6 +192,12 @@ public partial class GeminiService
         sb.AppendLine("   - title: singkat, jelas, tidak menyalahkan.");
         sb.AppendLine("   - explanation: jelaskan dengan bahasa natural perbedaan kondisi saat ini vs yang diharapkan (contoh: 'Font yang digunakan adalah Aptos Display, seharusnya Times New Roman'). DILARANG menggunakan format teknis seperti expected='...' atau actual='...'.");
         sb.AppendLine("   - steps: 3-6 langkah di Microsoft Word, menu/tab jelas. Jika 'Perlu verifikasi', steps berisi cara mengecek.");
+        sb.AppendLine("     PENTING untuk langkah pertama (seleksi teks):");
+        sb.AppendLine("     - WAJIB sebutkan teks spesifik yang perlu dipilih berdasarkan evidence/actual/field.");
+        sb.AppendLine("     - Contoh BENAR: 'Pilih teks \"BAB I PENDAHULUAN\" yang ingin diperbaiki.'");
+        sb.AppendLine("     - Contoh BENAR: 'Blok seluruh teks judul bab \"BAB II TINJAUAN PUSTAKA\".'");
+        sb.AppendLine("     - Contoh SALAH: 'Pilih teks judul bab yang ingin diperbaiki.' (terlalu generik)");
+        sb.AppendLine("     - Jika evidence/actual tidak mengandung teks spesifik, gunakan deskripsi lokasi yang jelas seperti 'Pilih teks pada judul bab di halaman X'.");
         sb.AppendLine("   - location: isi berdasarkan data input. halaman_ke = nomor halaman (integer, contoh: 1, 5, 10). section = nama bagian dokumen jika tersedia (contoh: 'BAB I', 'Pendahuluan', 'Daftar Isi'). Jika tidak diketahui, isi halaman_ke dengan 0 dan section dengan '-'.");
         sb.AppendLine("   - Jangan memprioritaskan penggunaan Styles; gunakan Styles hanya jika relevan atau disebut di aturan/llm_context.");
         sb.AppendLine();

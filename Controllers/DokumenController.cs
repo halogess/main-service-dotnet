@@ -157,7 +157,6 @@ public class DokumenController : ControllerBase
                     judul = k.KesalahanJudul,
                     penjelasan = k.KesalahanPenjelasan,
                     lokasi = k.KesalahanLokasi,
-                    bbox_visual = k.KesalahanBboxVisual,
                     steps = k.KesalahanSteps
                 })
                 .ToList();

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
@@ -117,6 +118,85 @@ public class DokumenController : ControllerBase
         });
     }
 
+    [HttpGet("{id}/401")]
+    public async Task<IActionResult> GetDokumenErrors401(int id)
+    {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
+
+        var dokumen = await _db.Dokumens.FindAsync(id);
+        if (dokumen == null)
+            return NotFound(new { message = "Dokumen tidak ditemukan" });
+
+        // Check authorization: admin can access all, user can only access their own
+        if (role != "admin" && dokumen.MhsNrp != nrp)
+            return Forbid();
+
+        // Fetch all kesalahan for this dokumen (no details needed here)
+        var kesalahanList = await _db.Kesalahans
+            .Where(k => k.KesalahanRefTipe == Models.KesalahanRefTipe.dokumen && k.KesalahanRefId == (uint)id)
+            .ToListAsync();
+
+        // Group by halaman_ke (each Kesalahan = 1 elemen)
+        // Use -1 to represent null/unknown halaman
+        var pageGroups = new Dictionary<int, List<object>>();
+
+        foreach (var kesalahan in kesalahanList)
+        {
+            // Parse lokasi to extract halaman_ke
+            int halamanKe = -1; // -1 means unknown page
+            if (!string.IsNullOrEmpty(kesalahan.KesalahanLokasi))
+            {
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(kesalahan.KesalahanLokasi);
+                    if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0)
+                    {
+                        var firstLoc = doc.RootElement[0];
+                        if (firstLoc.TryGetProperty("halaman_ke", out var halamanEl) && halamanEl.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        {
+                            halamanKe = halamanEl.GetInt32();
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore JSON parsing errors
+                }
+            }
+
+            if (!pageGroups.ContainsKey(halamanKe))
+            {
+                pageGroups[halamanKe] = new List<object>();
+            }
+
+            // Each Kesalahan represents 1 elemen (details via separate endpoint)
+            pageGroups[halamanKe].Add(new
+            {
+                kesalahan_id = kesalahan.KesalahanId,
+                kategori = kesalahan.KesalahanKategori,
+                lokasi = kesalahan.KesalahanLokasi
+            });
+        }
+
+        // Convert to response format, ordered by halaman_ke (-1 means unknown, sort last)
+        var response = pageGroups
+            .OrderBy(g => g.Key == -1 ? int.MaxValue : g.Key)
+            .Select(g => new
+            {
+                halaman_ke = g.Key == -1 ? (int?)null : g.Key,
+                elemen = g.Value  // list of Kesalahan, each represents 1 elemen
+            })
+            .ToList();
+
+        return Ok(new
+        {
+            dokumen_id = id,
+            total_halaman = response.Count,
+            data = response
+        });
+    }
+
     [HttpGet("{id}")]
     public async Task<IActionResult> GetDokumenById(int id)
     {
@@ -149,15 +229,21 @@ public class DokumenController : ControllerBase
         if (dokumen.DokumenStatus == "lolos" || dokumen.DokumenStatus == "tidak_lolos")
         {
             var kesalahanList = _db.Kesalahans
+                .Include(k => k.Details)
                 .Where(k => k.KesalahanRefTipe == Models.KesalahanRefTipe.dokumen && k.KesalahanRefId == (uint)id)
                 .Select(k => new
                 {
                     id = k.KesalahanId,
                     kategori = k.KesalahanKategori,
-                    judul = k.KesalahanJudul,
-                    penjelasan = k.KesalahanPenjelasan,
                     lokasi = k.KesalahanLokasi,
-                    steps = k.KesalahanSteps
+                    details = k.Details.Select(d => new
+                    {
+                        id = d.KesalahanDetailId,
+                        judul = d.KesalahanDetailJudul,
+                        penjelasan = d.KesalahanDetailPenjelasan,
+                        steps = d.KesalahanDetailSteps,
+                        is_required = d.KesalahanIsRequired
+                    }).ToList()
                 })
                 .ToList();
 

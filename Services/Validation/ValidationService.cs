@@ -405,6 +405,7 @@ public class ValidationError
     public decimal? PageMarginBottomCm { get; set; }
     public decimal? PageMarginLeftCm { get; set; }
     public decimal? PageMarginRightCm { get; set; }
+    public ulong? DokumenElemenId { get; set; }
     public bool IsRequired { get; set; } = true;
 }
 
@@ -478,6 +479,7 @@ public partial class ValidationService : IValidationService
 
     /// <summary>
     /// Creates a list of ErrorLocation from a page number and merged bbox string.
+    /// This is the legacy overload - prefer using the Dictionary overload for multi-page support.
     /// </summary>
     protected static List<ErrorLocation> CreateLocations(int? pageNumber, string? mergedBbox)
     {
@@ -513,6 +515,30 @@ public partial class ValidationService : IValidationService
         return locations;
     }
 
+    /// <summary>
+    /// Creates a list of ErrorLocation from a dictionary of page numbers to bounding boxes.
+    /// Supports elements that span multiple pages.
+    /// </summary>
+    /// <param name="pageBboxMap">Dictionary where key is page number and value is the merged bbox for that page</param>
+    protected static List<ErrorLocation> CreateLocations(Dictionary<int, ErrorBbox> pageBboxMap)
+    {
+        var locations = new List<ErrorLocation>();
+        
+        if (pageBboxMap == null || pageBboxMap.Count == 0)
+            return locations;
+
+        foreach (var (pageNumber, bbox) in pageBboxMap.OrderBy(kv => kv.Key))
+        {
+            locations.Add(new ErrorLocation
+            {
+                HalamanKe = pageNumber,
+                Bbox = bbox
+            });
+        }
+
+        return locations;
+    }
+
     private sealed class ElementNeighborContext
     {
         public string? PrevText { get; init; }
@@ -540,6 +566,15 @@ public partial class ValidationService : IValidationService
 
         for (var i = startIndex; i < errors.Count; i++)
             ApplyContext(errors[i], context);
+    }
+
+    private static void ApplyElementIdToErrors(List<ValidationError> errors, int startIndex, ulong elementId)
+    {
+        for (var i = startIndex; i < errors.Count; i++)
+        {
+            if (!errors[i].DokumenElemenId.HasValue)
+                errors[i].DokumenElemenId = elementId;
+        }
     }
 
     private static void ApplyContext(ValidationError error, ElementNeighborContext context)

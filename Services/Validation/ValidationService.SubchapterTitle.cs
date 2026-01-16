@@ -242,6 +242,8 @@ public partial class ValidationService
 
             if (neighborContexts.TryGetValue(elementId, out var context))
                 ApplyContextToErrors(result.Errors, errorStart, context);
+
+            ApplyElementIdToErrors(result.Errors, errorStart, elementId);
         }
 
         return result;
@@ -718,7 +720,8 @@ public partial class ValidationService
                             Expected = "Paragraf (text)",
                             Actual = nextLabel ?? "unknown",
                             Evidence = plainText,
-                            Locations = locations
+                            Locations = locations,
+                            DokumenElemenId = subchapterId
                         };
                         if (context != null)
                             ApplyContext(error, context);
@@ -736,7 +739,8 @@ public partial class ValidationService
                         Expected = "Paragraf (text)",
                         Actual = "Tidak ada elemen setelah subbab",
                         Evidence = plainText,
-                        Locations = locations
+                        Locations = locations,
+                        DokumenElemenId = subchapterId
                     };
                     if (context != null)
                         ApplyContext(error, context);
@@ -836,7 +840,8 @@ public partial class ValidationService
                 Expected = "Judul subbab tidak di paling bawah halaman",
                 Actual = "Judul subbab terlalu dekat dengan batas bawah halaman",
                 Evidence = evidence,
-                Locations = locations
+                Locations = locations,
+                DokumenElemenId = subchapterId
             };
             if (context != null)
                 ApplyContext(error, context);
@@ -909,7 +914,8 @@ public partial class ValidationService
                             Message = $"Subbab {number} tidak memiliki parent {parentNumber}",
                             Expected = parentNumber,
                             Actual = number,
-                            Evidence = evidence
+                            Evidence = evidence,
+                            DokumenElemenId = id
                         };
                         if (context != null)
                             ApplyContext(error, context);
@@ -935,7 +941,8 @@ public partial class ValidationService
                             Message = $"Subbab {prevNumber} tidak ditemukan sebelum {number}",
                             Expected = prevNumber,
                             Actual = $"Loncat ke {number}",
-                            Evidence = evidence
+                            Evidence = evidence,
+                            DokumenElemenId = id
                         };
                         if (context != null)
                             ApplyContext(error, context);
@@ -973,7 +980,8 @@ public partial class ValidationService
                             Message = $"Subbab {singleSubchapter.Number} tidak boleh berdiri sendiri, harus ada minimal {nextNumberStr}",
                             Expected = $"Minimal 2 subbab pada level yang sama",
                             Actual = $"Hanya {singleSubchapter.Number} yang ditemukan",
-                            Evidence = singleSubchapter.Evidence
+                            Evidence = singleSubchapter.Evidence,
+                            DokumenElemenId = singleSubchapter.Id
                         };
                         if (context != null)
                             ApplyContext(error, context);

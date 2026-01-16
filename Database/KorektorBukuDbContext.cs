@@ -23,11 +23,15 @@ public class KorektorBukuDbContext : DbContext
 
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
     public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
+    public DbSet<LlmApiLog> LlmApiLogs { get; set; }
     public DbSet<Antrian> Antrians { get; set; }
     public DbSet<Aturan> Aturans { get; set; }
     public DbSet<AturanDetail> AturanDetails { get; set; }
     public DbSet<Kesalahan> Kesalahans { get; set; }
+    public DbSet<KesalahanDetail> KesalahanDetails { get; set; }
     public DbSet<GeminiApiKey> GeminiApiKeys { get; set; }
+    public DbSet<Template> Templates { get; set; }
+    public DbSet<TemplateField> TemplateFields { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -161,6 +165,11 @@ public class KorektorBukuDbContext : DbContext
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
 
+        modelBuilder.Entity<LlmApiLog>(entity =>
+        {
+            entity.HasKey(e => e.LogId);
+        });
+
         modelBuilder.Entity<Antrian>(entity =>
         {
             entity.HasKey(e => e.AntrianId);
@@ -194,11 +203,17 @@ public class KorektorBukuDbContext : DbContext
         modelBuilder.Entity<Kesalahan>(entity =>
         {
             entity.HasKey(e => e.KesalahanId);
-            entity.Property(e => e.KesalahanPenjelasan).HasColumnType("text");
-            entity.Property(e => e.KesalahanLokasi).HasColumnType("json");
-            entity.Property(e => e.KesalahanSteps)
-                .HasColumnType("json")
-                .HasDefaultValueSql("(JSON_ARRAY())");
+            entity.Property(e => e.KesalahanLokasi).HasColumnType("varchar(255)");
+            entity.HasMany(e => e.Details)
+                .WithOne(d => d.Kesalahan)
+                .HasForeignKey(d => d.KesalahanId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<KesalahanDetail>(entity =>
+        {
+            entity.HasKey(e => e.KesalahanDetailId);
+            entity.Property(e => e.KesalahanDetailSteps).HasColumnType("longtext");
         });
 
         modelBuilder.Entity<GeminiApiKey>(entity =>

@@ -7,32 +7,26 @@ namespace ValidasiTugasAkhir.MainService.Services;
 /// </summary>
 public partial class GeminiService
 {
-    private static List<GeminiSuggestion> ParseSuggestions(string response)
+    private static bool TryParseErrorGuidance(string response, out List<GeminiErrorDetail> results)
     {
-        // Simple parsing - in production, consider structured output from Gemini
-        var suggestions = new List<GeminiSuggestion>();
-        
-        // For now, return the full response as a single suggestion
-        if (!string.IsNullOrEmpty(response))
-        {
-            suggestions.Add(new GeminiSuggestion
-            {
-                Category = "Analisis",
-                Issue = "Hasil analisis dokumen",
-                Recommendation = response
-            });
-        }
+        results = new List<GeminiErrorDetail>();
+        if (string.IsNullOrWhiteSpace(response))
+            return false;
 
-        return suggestions;
-    }
-
-    private static List<GeminiErrorDetail> ParseErrorGuidance(string response)
-    {
         try
         {
-            var structured = JsonSerializer.Deserialize<GeminiErrorGuidancePayload>(response, JsonReadOptions);
-            if (structured?.Errors != null)
-                return structured.Errors;
+            using var doc = JsonDocument.Parse(response);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                TryGetPropertyCaseInsensitive(doc.RootElement, "errors", out var errorsProp) &&
+                errorsProp.ValueKind == JsonValueKind.Array)
+            {
+                var structured = JsonSerializer.Deserialize<GeminiErrorGuidancePayload>(response, JsonReadOptions);
+                if (structured?.Errors != null)
+                {
+                    results = structured.Errors;
+                    return true;
+                }
+            }
         }
         catch (JsonException)
         {
@@ -40,8 +34,31 @@ public partial class GeminiService
         }
 
         var payload = ExtractJsonPayload(response);
+        var parsed = ParseErrorGuidanceJson(payload);
+        if (parsed != null)
+        {
+            results = parsed;
+            return true;
+        }
+
+        var repaired = TryRepairErrorGuidancePayload(payload ?? response);
+        if (!string.IsNullOrWhiteSpace(repaired))
+        {
+            parsed = ParseErrorGuidanceJson(repaired);
+            if (parsed != null)
+            {
+                results = parsed;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static List<GeminiErrorDetail>? ParseErrorGuidanceJson(string? payload)
+    {
         if (string.IsNullOrWhiteSpace(payload))
-            return new List<GeminiErrorDetail>();
+            return null;
 
         try
         {
@@ -54,14 +71,14 @@ public partial class GeminiService
                 errorsElement = root;
             }
             else if (root.ValueKind == JsonValueKind.Object &&
-                     root.TryGetProperty("errors", out var errorsProp) &&
+                     TryGetPropertyCaseInsensitive(root, "errors", out var errorsProp) &&
                      errorsProp.ValueKind == JsonValueKind.Array)
             {
                 errorsElement = errorsProp;
             }
             else
             {
-                return new List<GeminiErrorDetail>();
+                return null;
             }
 
             var results = new List<GeminiErrorDetail>();
@@ -72,7 +89,7 @@ public partial class GeminiService
 
                 var detail = new GeminiErrorDetail
                 {
-                    Index = item.TryGetProperty("index", out var idxEl) && idxEl.TryGetInt32(out var idx) ? idx : -1,
+                    Index = ReadIndexValue(item),
                     Title = item.TryGetProperty("title", out var titleEl) && titleEl.ValueKind == JsonValueKind.String
                         ? titleEl.GetString() ?? string.Empty
                         : string.Empty,
@@ -110,8 +127,22 @@ public partial class GeminiService
         }
         catch (JsonException)
         {
-            return new List<GeminiErrorDetail>();
+            return null;
         }
+    }
+
+    private static int ReadIndexValue(JsonElement item)
+    {
+        if (!item.TryGetProperty("index", out var idxEl))
+            return -1;
+
+        if (idxEl.ValueKind == JsonValueKind.Number && idxEl.TryGetInt32(out var idx))
+            return idx;
+
+        if (idxEl.ValueKind == JsonValueKind.String && int.TryParse(idxEl.GetString(), out var parsed))
+            return parsed;
+
+        return -1;
     }
 
     private static string? ExtractJsonPayload(string response)
@@ -131,5 +162,94 @@ public partial class GeminiService
             return null;
 
         return trimmed.Substring(start, end - start + 1);
+    }
+
+    private static string? TryRepairErrorGuidancePayload(string response)
+    {
+        if (string.IsNullOrWhiteSpace(response))
+            return null;
+
+        var errorsIndex = response.IndexOf("\"errors\"", StringComparison.OrdinalIgnoreCase);
+        if (errorsIndex < 0)
+            return null;
+
+        var arrayStart = response.IndexOf('[', errorsIndex);
+        if (arrayStart < 0)
+            return null;
+
+        var inString = false;
+        var escape = false;
+        var braceDepth = 0;
+        int? lastObjectEnd = null;
+
+        for (var i = arrayStart + 1; i < response.Length; i++)
+        {
+            var ch = response[i];
+
+            if (inString)
+            {
+                if (escape)
+                {
+                    escape = false;
+                }
+                else if (ch == '\\')
+                {
+                    escape = true;
+                }
+                else if (ch == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (ch == '{')
+            {
+                braceDepth++;
+                continue;
+            }
+
+            if (ch == '}')
+            {
+                if (braceDepth > 0)
+                    braceDepth--;
+                if (braceDepth == 0)
+                    lastObjectEnd = i;
+            }
+        }
+
+        if (!lastObjectEnd.HasValue)
+            return null;
+
+        var objectsSegment = response.Substring(arrayStart + 1, lastObjectEnd.Value - arrayStart);
+        if (string.IsNullOrWhiteSpace(objectsSegment))
+            return null;
+
+        return "{\"errors\":[" + objectsSegment.Trim() + "]}";
+    }
+
+    private static bool TryGetPropertyCaseInsensitive(JsonElement element, string name, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
     }
 }

@@ -24,6 +24,26 @@ services:
       - InternalApiKey=${InternalApiKey}
       - Logging__LogLevel__Default=${Logging__LogLevel__Default}
       - Logging__LogLevel__Microsoft__AspNetCore=${Logging__LogLevel__MicrosoftAspNetCore}
+      - Gemini__Model=${Gemini__Model}
+      - Gemini__StructuredModel=${Gemini__StructuredModel}
+      - Gemini__FallbackModel=${Gemini__FallbackModel}
+      - Gemini__ApiBaseUrl=${Gemini__ApiBaseUrl}
+      - Gemini__Temperature=${Gemini__Temperature}
+      - Gemini__TopP=${Gemini__TopP}
+      - Gemini__TopK=${Gemini__TopK}
+      - Gemini__MaxOutputTokens=${Gemini__MaxOutputTokens}
+      - Gemini__MaxRetries=${Gemini__MaxRetries}
+      - Gemini__RetryDelaySeconds=${Gemini__RetryDelaySeconds}
+      - Gemini__DefaultRateLimitDelaySeconds=${Gemini__DefaultRateLimitDelaySeconds}
+      - Gemini__TokensPerMinutePerKeyLimit=${Gemini__TokensPerMinutePerKeyLimit}
+      - Gemini__TokenWindowSeconds=${Gemini__TokenWindowSeconds}
+      - Gemini__CacheHours=${Gemini__CacheHours}
+      - Gemini__MaxParseAttempts=${Gemini__MaxParseAttempts}
+      - Gemini__ParseRetryDelaySeconds=${Gemini__ParseRetryDelaySeconds}
+      - Gemini__BatchSize=${Gemini__BatchSize}
+      - Gemini__BatchDelaySeconds=${Gemini__BatchDelaySeconds}
+      - Gemini__MaxParallelBatches=${Gemini__MaxParallelBatches}
+      - Gemini__MaxBatchRetries=${Gemini__MaxBatchRetries}
       - AllowedHosts=${AllowedHosts}
     volumes:
       - ${VOLUME_BASE_PATH}:/app/storage
@@ -44,6 +64,3 @@ services:
 networks:
   validasi-ta-network:
     driver: bridge
-
-
-

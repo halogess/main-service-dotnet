@@ -43,6 +43,7 @@ builder.Services.AddScoped<IDocxExtractionService, DocxExtractionService>();
 builder.Services.AddScoped<IAturanService, AturanService>();
 builder.Services.AddScoped<IJurusanService, JurusanService>();
 builder.Services.AddScoped<IValidationService, ValidationService>();
+builder.Services.AddScoped<IHighlightedTextExtractor, HighlightedTextExtractor>();
 builder.Services.AddSingleton<IWebSocketService, WebSocketService>();
 
 // Register Background Services

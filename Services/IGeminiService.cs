@@ -4,27 +4,13 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public interface IGeminiService
 {
-    Task<string> GenerateRecommendationAsync(string prompt);
-    Task<GeminiAnalysisResult> AnalyzeDocumentAsync(int dokumenId, string documentContent, List<string>? errors = null);
     Task<List<GeminiErrorDetail>> GenerateErrorGuidanceAsync(
         IReadOnlyList<ValidationError> errors,
         IReadOnlyList<AturanDetail> activeRules,
-        CancellationToken cancellationToken = default);
-}
-
-public class GeminiAnalysisResult
-{
-    public bool Success { get; set; }
-    public string? Recommendation { get; set; }
-    public string? ErrorMessage { get; set; }
-    public List<GeminiSuggestion> Suggestions { get; set; } = new();
-}
-
-public class GeminiSuggestion
-{
-    public string Category { get; set; } = string.Empty;
-    public string Issue { get; set; } = string.Empty;
-    public string Recommendation { get; set; } = string.Empty;
+        CancellationToken cancellationToken = default,
+        uint? antrianId = null,
+        int? batchNumber = null,
+        int? totalBatches = null);
 }
 
 public class GeminiErrorDetail
@@ -41,4 +27,3 @@ public class GeminiErrorLocation
     public int? HalamanKe { get; set; }
     public string? Section { get; set; }
 }
-

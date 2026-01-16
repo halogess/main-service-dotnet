@@ -207,6 +207,8 @@ public partial class ValidationService
 
             if (neighborContexts.TryGetValue(elementId, out var context))
                 ApplyContextToErrors(result.Errors, errorStart, context);
+
+            ApplyElementIdToErrors(result.Errors, errorStart, elementId);
         }
 
         return result;

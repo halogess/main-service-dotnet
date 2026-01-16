@@ -140,6 +140,7 @@ public partial class ValidationService
             .Where(p => candidateParagraphIds.Contains(p.DfpId))
             .ToDictionaryAsync(p => p.DfpId, cancellationToken);
 
+        ulong? titleElementId = null;
         var titleIds = new HashSet<ulong>();
         foreach (var id in sectionHeaderIds)
         {
@@ -165,6 +166,7 @@ public partial class ValidationService
             return result;
         }
         result.PassedChecks++;
+        titleElementId = titleIds.First();
 
         var firstElement = bodyElements[0];
         result.TotalChecks++;
@@ -174,7 +176,8 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "judul_bab",
-                Message = "Judul bab harus berada di elemen pertama"
+                Message = "Judul bab harus berada di elemen pertama",
+                DokumenElemenId = firstElement.DelemenId
             });
             return result;
         }
@@ -201,7 +204,8 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "judul_bab",
-                Message = "Judul Tidak ditemukan"
+                Message = "Judul Tidak ditemukan",
+                DokumenElemenId = titleElementId
             });
             return result;
         }
@@ -520,7 +524,8 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "judul_bab",
-                Message = "Format teks judul bab tidak ditemukan"
+                Message = "Format teks judul bab tidak ditemukan",
+                DokumenElemenId = titleElementId
             });
             return result;
         }
@@ -538,7 +543,8 @@ public partial class ValidationService
                 {
                     Category = "Isi Buku",
                     Field = "judul_bab",
-                    Message = "Format teks judul bab tidak ditemukan"
+                    Message = "Format teks judul bab tidak ditemukan",
+                    DokumenElemenId = titleElementId
                 });
                 return result;
             }
@@ -742,6 +748,9 @@ public partial class ValidationService
                     ApplyContext(error, titleContext);
             }
         }
+
+        if (titleElementId.HasValue)
+            ApplyElementIdToErrors(result.Errors, 0, titleElementId.Value);
 
         return result;
     }
@@ -1025,7 +1034,8 @@ public partial class ValidationService
                 Message = "Harus ada minimal 1 paragraf setelah judul bab sebelum judul subbab",
                 Expected = "Minimal 1 paragraf",
                 Actual = "Langsung ke judul subbab",
-                Locations = locations
+                Locations = locations,
+                DokumenElemenId = firstSubchapterId
             });
         }
     }
@@ -1202,6 +1212,99 @@ public partial class ValidationService
 
         var bbox = new { x0 = minX0.Value, y0 = minY0.Value, x1 = maxX1.Value, y1 = maxY1.Value };
         return JsonSerializer.Serialize(bbox);
+    }
+
+    /// <summary>
+    /// Loads bounding boxes grouped by page number for the given element IDs.
+    /// Each page will have its own merged bbox for elements that span multiple pages.
+    /// </summary>
+    private async Task<Dictionary<int, ErrorBbox>> LoadPageBboxMapAsync(
+        IEnumerable<ulong> delemenIds,
+        CancellationToken cancellationToken)
+    {
+        var pageBboxMap = new Dictionary<int, ErrorBbox>();
+        var ids = delemenIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return pageBboxMap;
+
+        var (idColumn, _) = await ResolveVisualColumnsAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(idColumn))
+            return pageBboxMap;
+
+        var connection = _db.Database.GetDbConnection();
+        var shouldClose = connection.State != ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+
+        // Temporary structure to accumulate bbox per page
+        var pageBboxAccumulator = new Dictionary<int, (double minX0, double minY0, double maxX1, double maxY1)>();
+
+        try
+        {
+            foreach (var chunk in ids.Chunk(500))
+            {
+                var idList = string.Join(",", chunk);
+                var sql = $"SELECT `dev_page`, `dev_bbox_x0`, `dev_bbox_y0`, `dev_bbox_x1`, `dev_bbox_y1` " +
+                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList}) AND `dev_page` IS NOT NULL";
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = sql;
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    if (reader["dev_page"] == DBNull.Value)
+                        continue;
+
+                    var page = Convert.ToInt32(reader["dev_page"]);
+                    double? x0 = reader["dev_bbox_x0"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_x0"]) : null;
+                    double? y0 = reader["dev_bbox_y0"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y0"]) : null;
+                    double? x1 = reader["dev_bbox_x1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_x1"]) : null;
+                    double? y1 = reader["dev_bbox_y1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y1"]) : null;
+
+                    if (!x0.HasValue || !y0.HasValue || !x1.HasValue || !y1.HasValue)
+                        continue;
+
+                    if (pageBboxAccumulator.TryGetValue(page, out var existing))
+                    {
+                        // Merge: take min for x0/y0, max for x1/y1
+                        pageBboxAccumulator[page] = (
+                            Math.Min(existing.minX0, x0.Value),
+                            Math.Min(existing.minY0, y0.Value),
+                            Math.Max(existing.maxX1, x1.Value),
+                            Math.Max(existing.maxY1, y1.Value)
+                        );
+                    }
+                    else
+                    {
+                        pageBboxAccumulator[page] = (x0.Value, y0.Value, x1.Value, y1.Value);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load page bbox map from dokumen_elemen_visual");
+            return pageBboxMap;
+        }
+        finally
+        {
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+        }
+
+        // Convert accumulator to ErrorBbox dictionary
+        foreach (var (page, bounds) in pageBboxAccumulator)
+        {
+            pageBboxMap[page] = new ErrorBbox
+            {
+                X0 = (decimal)bounds.minX0,
+                Y0 = (decimal)bounds.minY0,
+                X1 = (decimal)bounds.maxX1,
+                Y1 = (decimal)bounds.maxY1
+            };
+        }
+
+        return pageBboxMap;
     }
 
     private async Task<(string? IdColumn, string? LabelColumn)> ResolveVisualColumnsAsync(CancellationToken cancellationToken)

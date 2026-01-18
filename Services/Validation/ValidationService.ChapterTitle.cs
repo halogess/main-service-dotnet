@@ -10,7 +10,10 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public partial class ValidationService
 {
-    private async Task<ValidationResult> ValidateChapterTitleAsync(int dokumenId, CancellationToken cancellationToken)
+    private async Task<ValidationResult> ValidateChapterTitleAsync(
+        int dokumenId,
+        HashSet<ulong>? chapterIds,
+        CancellationToken cancellationToken)
     {
         var result = new ValidationResult();
 
@@ -148,44 +151,67 @@ public partial class ValidationService
         ulong? titleElementId = null;
         var titleIds = new HashSet<ulong>();
         var titleBlock = new List<ElementContentInfo>();
-        var inTitleBlock = false;
 
-        foreach (var elem in bodyElements)
+        if (chapterIds != null)
         {
-            if (!sectionHeaderIds.Contains(elem.DelemenId))
+            foreach (var elem in bodyElements)
             {
-                if (inTitleBlock)
-                    break;
-                continue;
-            }
-
-            if (!contentById.TryGetValue(elem.DelemenId, out var content))
-            {
-                content = ParseElementContent(elem.DelemenJsonTree);
-                contentById[elem.DelemenId] = content;
-            }
-
-            if (!content.ParagraphFormatId.HasValue ||
-                !paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format) ||
-                !string.Equals(format.DfpJc, "center", StringComparison.OrdinalIgnoreCase))
-            {
-                if (inTitleBlock)
-                    break;
-                continue;
-            }
-
-            if (!inTitleBlock)
-            {
-                var plainText = content.PlainText?.TrimStart() ?? string.Empty;
-                if (!plainText.StartsWith("BAB", StringComparison.OrdinalIgnoreCase))
+                if (!chapterIds.Contains(elem.DelemenId))
                     continue;
 
-                inTitleBlock = true;
-                titleElementId = elem.DelemenId;
-            }
+                if (!contentById.TryGetValue(elem.DelemenId, out var content))
+                {
+                    content = ParseElementContent(elem.DelemenJsonTree);
+                    contentById[elem.DelemenId] = content;
+                }
 
-            titleIds.Add(elem.DelemenId);
-            titleBlock.Add(content);
+                if (!titleElementId.HasValue)
+                    titleElementId = elem.DelemenId;
+
+                titleIds.Add(elem.DelemenId);
+                titleBlock.Add(content);
+            }
+        }
+        else
+        {
+            var inTitleBlock = false;
+            foreach (var elem in bodyElements)
+            {
+                if (!sectionHeaderIds.Contains(elem.DelemenId))
+                {
+                    if (inTitleBlock)
+                        break;
+                    continue;
+                }
+
+                if (!contentById.TryGetValue(elem.DelemenId, out var content))
+                {
+                    content = ParseElementContent(elem.DelemenJsonTree);
+                    contentById[elem.DelemenId] = content;
+                }
+
+                if (!content.ParagraphFormatId.HasValue ||
+                    !paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format) ||
+                    !string.Equals(format.DfpJc, "center", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (inTitleBlock)
+                        break;
+                    continue;
+                }
+
+                if (!inTitleBlock)
+                {
+                    var plainText = content.PlainText?.TrimStart() ?? string.Empty;
+                    if (!plainText.StartsWith("BAB", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    inTitleBlock = true;
+                    titleElementId = elem.DelemenId;
+                }
+
+                titleIds.Add(elem.DelemenId);
+                titleBlock.Add(content);
+            }
         }
 
         result.TotalChecks++;

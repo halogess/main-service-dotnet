@@ -16,7 +16,10 @@ public partial class ValidationService
     // Regex pattern for subchapter numbering: X.X, X.X., X.X.X, X.X.X., etc. (with optional trailing dot)
     private static readonly Regex SubchapterNumberPattern = new(@"^\d+(\.\d+)+\.?", RegexOptions.Compiled);
 
-    private async Task<ValidationResult> ValidateSubchapterTitleAsync(int dokumenId, CancellationToken cancellationToken)
+    private async Task<ValidationResult> ValidateSubchapterTitleAsync(
+        int dokumenId,
+        HashSet<ulong>? subchapterIds,
+        CancellationToken cancellationToken)
     {
         var result = new ValidationResult();
 
@@ -130,18 +133,32 @@ public partial class ValidationService
 
         // Find subchapter titles (section headers starting with X.X pattern)
         var subchapterElements = new List<(ulong Id, ElementContentInfo Content)>();
-        foreach (var elem in bodyElements)
+        if (subchapterIds != null)
         {
-            if (!sectionHeaderIds.Contains(elem.DelemenId))
-                continue;
-
-            var content = ParseElementContent(elem.DelemenJsonTree);
-            var plainText = content.PlainText?.Trim() ?? string.Empty;
-
-            // Check if it matches subchapter pattern (X.X, X.X.X, etc.)
-            if (SubchapterNumberPattern.IsMatch(plainText))
+            foreach (var elem in bodyElements)
             {
+                if (!subchapterIds.Contains(elem.DelemenId))
+                    continue;
+
+                var content = ParseElementContent(elem.DelemenJsonTree);
                 subchapterElements.Add((elem.DelemenId, content));
+            }
+        }
+        else
+        {
+            foreach (var elem in bodyElements)
+            {
+                if (!sectionHeaderIds.Contains(elem.DelemenId))
+                    continue;
+
+                var content = ParseElementContent(elem.DelemenJsonTree);
+                var plainText = content.PlainText?.Trim() ?? string.Empty;
+
+                // Check if it matches subchapter pattern (X.X, X.X.X, etc.)
+                if (SubchapterNumberPattern.IsMatch(plainText))
+                {
+                    subchapterElements.Add((elem.DelemenId, content));
+                }
             }
         }
 

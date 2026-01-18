@@ -10,7 +10,10 @@ namespace ValidasiTugasAkhir.MainService.Services;
 /// </summary>
 public partial class ValidationService
 {
-    private async Task<ValidationResult> ValidateListItemAsync(int dokumenId, CancellationToken cancellationToken)
+    private async Task<ValidationResult> ValidateListItemAsync(
+        int dokumenId,
+        HashSet<ulong>? listItemIds,
+        CancellationToken cancellationToken)
     {
         var result = new ValidationResult();
 
@@ -114,19 +117,30 @@ public partial class ValidationService
         var listItemElements = new List<(ulong Id, string? Type, ElementContentInfo Content)>();
         foreach (var elem in bodyElements)
         {
-            if (!IsListItemElement(elem.DelemenType))
-                continue;
-
-            if (labelMap.TryGetValue(elem.DelemenId, out var label) &&
-                label.Equals("section_header", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
             var content = ParseElementContent(elem.DelemenJsonTree);
             var plainText = content.PlainText?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(plainText))
                 continue;
+
+            var label = labelMap.TryGetValue(elem.DelemenId, out var rawLabel)
+                ? NormalizeLabel(rawLabel)
+                : string.Empty;
+
+            var isListCandidate = listItemIds != null
+                ? listItemIds.Contains(elem.DelemenId)
+                : IsListItemElement(elem.DelemenType) || label == "section_header" || label == "list_item";
+
+            if (!isListCandidate)
+                continue;
+
+            if (listItemIds == null && label == "section_header")
+            {
+                if (plainText.StartsWith("BAB", StringComparison.OrdinalIgnoreCase) ||
+                    SubchapterNumberPattern.IsMatch(plainText))
+                {
+                    continue;
+                }
+            }
 
             listItemElements.Add((elem.DelemenId, elem.DelemenType, content));
         }
@@ -532,12 +546,12 @@ public partial class ValidationService
         var expectedHanging = rule?.Paragraph?.Indentation?.Hanging?.Value;
         var levelValue = level.GetValueOrDefault(0);
 
+        var hangingTwips = format.DfpIndHangingTwips ?? 0;
+        var hangingCm = hangingTwips / 1440.0m * 2.54m;
+
         if (expectedHanging.HasValue)
         {
             result.TotalChecks++;
-            var hangingTwips = format.DfpIndHangingTwips ?? 0;
-            var hangingCm = hangingTwips / 1440.0m * 2.54m;
-
             if (Math.Abs(hangingCm - expectedHanging.Value) <= 0.05m)
             {
                 result.PassedChecks++;
@@ -560,8 +574,11 @@ public partial class ValidationService
         if (expectedLeftIndent.HasValue)
         {
             result.TotalChecks++;
-            var leftTwips = format.DfpIndLeftTwips ?? format.DfpIndStartTwips ?? 0;
+            var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
+                ? format.DfpIndLeftTwips.Value
+                : format.DfpIndStartTwips ?? 0;
             var leftCm = leftTwips / 1440.0m * 2.54m;
+            var alignedLeftCm = expectedHanging.HasValue ? leftCm - hangingCm : leftCm;
 
             var expectedLeftCm = expectedLeftIndent.Value;
             if (expectedHanging.HasValue && levelValue > 0)
@@ -569,7 +586,7 @@ public partial class ValidationService
                 expectedLeftCm += levelValue * expectedHanging.Value;
             }
 
-            if (Math.Abs(leftCm - expectedLeftCm) <= 0.05m)
+            if (Math.Abs(alignedLeftCm - expectedLeftCm) <= 0.05m)
             {
                 result.PassedChecks++;
             }
@@ -582,7 +599,7 @@ public partial class ValidationService
                     Field = "item_daftar",
                     Message = "Left indent item daftar tidak sesuai" + levelSuffix,
                     Expected = expectedLeftCm.ToString(CultureInfo.InvariantCulture) + " cm",
-                    Actual = leftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                    Actual = alignedLeftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                     Evidence = evidence,
                     Locations = locations
                 });

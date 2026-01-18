@@ -482,26 +482,32 @@ public partial class ValidationService : IValidationService
         result.TotalChecks += pageResult.TotalChecks;
         result.PassedChecks += pageResult.PassedChecks;
 
+        var classification = await ClassifyElementsAsync(dokumenId, cancellationToken);
+
         // Validate chapter title
-        var titleResult = await ValidateChapterTitleAsync(dokumenId, cancellationToken);
+        var titleResult = await ValidateChapterTitleAsync(dokumenId, classification.ChapterTitleIds, cancellationToken);
         result.Errors.AddRange(titleResult.Errors);
         result.TotalChecks += titleResult.TotalChecks;
         result.PassedChecks += titleResult.PassedChecks;
 
         // Validate subchapter title
-        var subchapterResult = await ValidateSubchapterTitleAsync(dokumenId, cancellationToken);
+        var subchapterResult = await ValidateSubchapterTitleAsync(dokumenId, classification.SubchapterIds, cancellationToken);
         result.Errors.AddRange(subchapterResult.Errors);
         result.TotalChecks += subchapterResult.TotalChecks;
         result.PassedChecks += subchapterResult.PassedChecks;
 
         // Validate paragraphs
-        var paragraphResult = await ValidateParagraphAsync(dokumenId, cancellationToken);
+        var paragraphResult = await ValidateParagraphAsync(
+            dokumenId,
+            classification.ParagraphIds,
+            classification.ListItemIds,
+            cancellationToken);
         result.Errors.AddRange(paragraphResult.Errors);
         result.TotalChecks += paragraphResult.TotalChecks;
         result.PassedChecks += paragraphResult.PassedChecks;
 
         // Validate list items
-        var listItemResult = await ValidateListItemAsync(dokumenId, cancellationToken);
+        var listItemResult = await ValidateListItemAsync(dokumenId, classification.ListItemIds, cancellationToken);
         result.Errors.AddRange(listItemResult.Errors);
         result.TotalChecks += listItemResult.TotalChecks;
         result.PassedChecks += listItemResult.PassedChecks;
@@ -512,6 +518,152 @@ public partial class ValidationService : IValidationService
         // etc.
 
         return result;
+    }
+
+    private sealed class ElementClassification
+    {
+        public HashSet<ulong> ChapterTitleIds { get; } = new();
+        public HashSet<ulong> SubchapterIds { get; } = new();
+        public HashSet<ulong> ListItemIds { get; } = new();
+        public HashSet<ulong> ParagraphIds { get; } = new();
+    }
+
+    private async Task<ElementClassification> ClassifyElementsAsync(
+        int dokumenId,
+        CancellationToken cancellationToken)
+    {
+        var classification = new ElementClassification();
+
+        var bodyElements = await (from e in _db.DokumenElemens
+            join p in _db.DokumenParts on e.DpartId equals p.DpartId
+            join s in _db.DokumenSections on p.DsecId equals s.DsecId
+            where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
+            orderby s.DsecIndex, e.DelemenSequence
+            select new { e.DelemenId, e.DelemenType, e.DelemenJsonTree })
+            .ToListAsync(cancellationToken);
+
+        if (bodyElements.Count == 0)
+            return classification;
+
+        var labelMap = await LoadVisualLabelsAsync(
+            bodyElements.Select(e => e.DelemenId),
+            cancellationToken);
+
+        var contentById = new Dictionary<ulong, ElementContentInfo>();
+        var paragraphFormatIds = new HashSet<uint>();
+        foreach (var elem in bodyElements)
+        {
+            var content = ParseElementContent(elem.DelemenJsonTree);
+            contentById[elem.DelemenId] = content;
+            if (content.ParagraphFormatId.HasValue)
+                paragraphFormatIds.Add(content.ParagraphFormatId.Value);
+        }
+
+        var paragraphFormats = paragraphFormatIds.Count > 0
+            ? await _db.DokumenFormatParagrafs
+                .Where(p => paragraphFormatIds.Contains(p.DfpId))
+                .ToDictionaryAsync(p => p.DfpId, cancellationToken)
+            : new Dictionary<uint, DokumenFormatParagraf>();
+
+        bool IsLabel(ulong id, string expected)
+        {
+            if (!labelMap.TryGetValue(id, out var label))
+                return false;
+            return string.Equals(NormalizeLabel(label), expected, StringComparison.OrdinalIgnoreCase);
+        }
+
+        bool IsCentered(ulong id)
+        {
+            if (!contentById.TryGetValue(id, out var content) || !content.ParagraphFormatId.HasValue)
+                return false;
+            if (!paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format))
+                return false;
+            return string.Equals(format.DfpJc, "center", StringComparison.OrdinalIgnoreCase);
+        }
+
+        bool StartsWithBab(ulong id)
+        {
+            if (!contentById.TryGetValue(id, out var content))
+                return false;
+            var text = content.PlainText?.TrimStart() ?? string.Empty;
+            return text.StartsWith("BAB", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Chapter title block: section_header + center + starts with "BAB"
+        var inTitleBlock = false;
+        foreach (var elem in bodyElements)
+        {
+            if (!IsLabel(elem.DelemenId, "section_header"))
+            {
+                if (inTitleBlock)
+                    break;
+                continue;
+            }
+
+            if (!IsCentered(elem.DelemenId))
+            {
+                if (inTitleBlock)
+                    break;
+                continue;
+            }
+
+            if (!inTitleBlock && !StartsWithBab(elem.DelemenId))
+                continue;
+
+            inTitleBlock = true;
+            classification.ChapterTitleIds.Add(elem.DelemenId);
+        }
+
+        // Subchapter: section_header + numbering pattern, not chapter title
+        foreach (var elem in bodyElements)
+        {
+            if (classification.ChapterTitleIds.Contains(elem.DelemenId))
+                continue;
+
+            if (!IsLabel(elem.DelemenId, "section_header"))
+                continue;
+
+            var content = contentById[elem.DelemenId];
+            var plainText = content.PlainText?.Trim() ?? string.Empty;
+            if (SubchapterNumberPattern.IsMatch(plainText))
+                classification.SubchapterIds.Add(elem.DelemenId);
+        }
+
+        // List item: label section_header or list_item, or list-item type, not chapter/subchapter
+        foreach (var elem in bodyElements)
+        {
+            if (classification.ChapterTitleIds.Contains(elem.DelemenId) ||
+                classification.SubchapterIds.Contains(elem.DelemenId))
+                continue;
+
+            var label = labelMap.TryGetValue(elem.DelemenId, out var rawLabel)
+                ? NormalizeLabel(rawLabel)
+                : string.Empty;
+
+            if (IsListItemElement(elem.DelemenType) ||
+                label == "section_header" ||
+                label == "list_item")
+            {
+                classification.ListItemIds.Add(elem.DelemenId);
+            }
+        }
+
+        // Paragraph: label text + paragraph type, not already classified
+        foreach (var elem in bodyElements)
+        {
+            if (classification.ChapterTitleIds.Contains(elem.DelemenId) ||
+                classification.SubchapterIds.Contains(elem.DelemenId) ||
+                classification.ListItemIds.Contains(elem.DelemenId))
+                continue;
+
+            if (!IsParagraphElement(elem.DelemenType))
+                continue;
+
+            if (IsLabel(elem.DelemenId, "text"))
+                classification.ParagraphIds.Add(elem.DelemenId);
+        }
+
+        return classification;
     }
 
     /// <summary>
@@ -741,6 +893,14 @@ public partial class ValidationService : IValidationService
             return normalized;
 
         return normalized[..maxLength] + "...";
+    }
+
+    private static string NormalizeLabel(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+            return string.Empty;
+
+        return label.Trim().ToLowerInvariant().Replace('-', '_').Replace(' ', '_');
     }
 
     private async Task<Dictionary<ulong, PageMarginSnapshot>> LoadPageMarginsAsync(

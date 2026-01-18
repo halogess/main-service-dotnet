@@ -79,14 +79,15 @@ public class TemplateController : ControllerBase
             }
         }
 
-        // Get template fields
-        var fields = await _db.TemplateFields
-            .Where(f => f.TemplateId == id)
-            .Select(f => new
+        // Get template details
+        var details = await _db.TemplateDetails
+            .Where(d => d.TemplateId == id)
+            .Select(d => new
             {
-                id = f.TemplateFieldId,
-                text = f.TemplateFieldText,
-                key = f.TemplateFieldKey
+                id = d.TemplateDetailId,
+                text = d.TemplateDetailText,
+                field = d.TemplateDetailField,
+                catatan = d.TemplateDetailCatatan
             })
             .ToListAsync();
 
@@ -97,8 +98,8 @@ public class TemplateController : ControllerBase
             status = template.TemplateStatus,
             created_at = template.TemplateCreatedAt,
             pdf_base64 = pdfBase64,
-            fields = fields,
-            total_fields = fields.Count
+            details = details,
+            total_details = details.Count
         });
     }
 
@@ -195,26 +196,27 @@ public class TemplateController : ControllerBase
             _db.Templates.Add(template);
             await _db.SaveChangesAsync();
 
-            // Save highlighted texts as template fields (with key = null)
-            var savedFields = new List<object>();
+            // Save highlighted texts as template details (with field = null)
+            var savedDetails = new List<object>();
             foreach (var text in highlightedTexts)
             {
                 if (string.IsNullOrWhiteSpace(text))
                     continue;
 
-                var field = new TemplateField
+                var detail = new TemplateDetail
                 {
-                    TemplateFieldText = text.Length > 100 ? text.Substring(0, 100) : text,
-                    TemplateFieldKey = null, // Key is null for now
+                    TemplateDetailText = text.Length > 100 ? text.Substring(0, 100) : text,
+                    TemplateDetailField = null, // Field is null for now
+                    TemplateDetailCatatan = null, // Catatan is null for now
                     TemplateId = template.TemplateId
                 };
-                _db.TemplateFields.Add(field);
+                _db.TemplateDetails.Add(detail);
                 await _db.SaveChangesAsync();
 
-                savedFields.Add(new
+                savedDetails.Add(new
                 {
-                    id = field.TemplateFieldId,
-                    text = field.TemplateFieldText
+                    id = detail.TemplateDetailId,
+                    text = detail.TemplateDetailText
                 });
             }
 
@@ -227,8 +229,8 @@ public class TemplateController : ControllerBase
                 created_at = template.TemplateCreatedAt,
                 pdf_converted = savedPdfPath != null,
                 pdf_base64 = pdfBytes != null ? Convert.ToBase64String(pdfBytes) : null,
-                fields = savedFields,
-                total_fields = savedFields.Count
+                details = savedDetails,
+                total_details = savedDetails.Count
             });
         }
         catch (Exception ex)
@@ -301,9 +303,9 @@ public class TemplateController : ControllerBase
             _logger.LogWarning(ex, "Failed to delete template files");
         }
 
-        // Delete template fields first
-        var fields = await _db.TemplateFields.Where(f => f.TemplateId == id).ToListAsync();
-        _db.TemplateFields.RemoveRange(fields);
+        // Delete template details first
+        var details = await _db.TemplateDetails.Where(d => d.TemplateId == id).ToListAsync();
+        _db.TemplateDetails.RemoveRange(details);
 
         _db.Templates.Remove(template);
         await _db.SaveChangesAsync();
@@ -311,47 +313,48 @@ public class TemplateController : ControllerBase
         return Ok(new { message = "Template berhasil dihapus" });
     }
 
-    // GET: api/template/fields (Admin only) - Get all template fields
-    [HttpGet("fields")]
-    public async Task<IActionResult> GetTemplateFields([FromQuery] uint? templateId = null, [FromQuery] string? key = null)
+    // GET: api/template/details (Admin only) - Get all template details
+    [HttpGet("details")]
+    public async Task<IActionResult> GetTemplateDetails([FromQuery] uint? templateId = null, [FromQuery] string? field = null)
     {
         if (HttpContext.Items["Role"]?.ToString() != "admin")
             return Forbid();
 
-        var query = _db.TemplateFields.AsQueryable();
+        var query = _db.TemplateDetails.AsQueryable();
 
         if (templateId.HasValue)
-            query = query.Where(f => f.TemplateId == templateId.Value);
+            query = query.Where(d => d.TemplateId == templateId.Value);
 
-        if (!string.IsNullOrWhiteSpace(key))
-            query = query.Where(f => f.TemplateFieldKey == key);
+        if (!string.IsNullOrWhiteSpace(field))
+            query = query.Where(d => d.TemplateDetailField == field);
 
-        var fields = await query.Select(f => new
+        var details = await query.Select(d => new
         {
-            id = f.TemplateFieldId,
-            template_id = f.TemplateId,
-            text = f.TemplateFieldText,
-            key = f.TemplateFieldKey
+            id = d.TemplateDetailId,
+            template_id = d.TemplateId,
+            text = d.TemplateDetailText,
+            field = d.TemplateDetailField,
+            catatan = d.TemplateDetailCatatan
         }).ToListAsync();
 
-        return Ok(new { data = fields, total = fields.Count });
+        return Ok(new { data = details, total = details.Count });
     }
 
-    // DELETE: api/template/fields/{id} (Admin only)
-    [HttpDelete("fields/{id}")]
-    public async Task<IActionResult> DeleteTemplateField(uint id)
+    // DELETE: api/template/details/{id} (Admin only)
+    [HttpDelete("details/{id}")]
+    public async Task<IActionResult> DeleteTemplateDetail(uint id)
     {
         if (HttpContext.Items["Role"]?.ToString() != "admin")
             return Forbid();
 
-        var field = await _db.TemplateFields.FindAsync(id);
-        if (field == null)
-            return NotFound(new { message = "Template field tidak ditemukan" });
+        var detail = await _db.TemplateDetails.FindAsync(id);
+        if (detail == null)
+            return NotFound(new { message = "Template detail tidak ditemukan" });
 
-        _db.TemplateFields.Remove(field);
+        _db.TemplateDetails.Remove(detail);
         await _db.SaveChangesAsync();
 
-        return Ok(new { message = "Template field berhasil dihapus" });
+        return Ok(new { message = "Template detail berhasil dihapus" });
     }
 
     // GET: api/template/{id}/pdf - Download/view PDF file

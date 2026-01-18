@@ -31,7 +31,7 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<KesalahanDetail> KesalahanDetails { get; set; }
     public DbSet<GeminiApiKey> GeminiApiKeys { get; set; }
     public DbSet<Template> Templates { get; set; }
-    public DbSet<TemplateField> TemplateFields { get; set; }
+    public DbSet<TemplateDetail> TemplateDetails { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

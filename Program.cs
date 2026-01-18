@@ -55,6 +55,9 @@ builder.Services.AddHostedService<ValidationQueueBackgroundService>();
 // Register Gemini Service
 builder.Services.AddHttpClient<IGeminiService, GeminiService>();
 
+// Register Email Service
+builder.Services.AddScoped<IEmailService, EmailService>();
+
 var app = builder.Build();
 
 // Ensure storage directory exists

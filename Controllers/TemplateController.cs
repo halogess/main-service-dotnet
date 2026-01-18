@@ -11,31 +11,45 @@ public class TemplateController : ControllerBase
 {
     private readonly KorektorBukuDbContext _db;
     private readonly IHighlightedTextExtractor _highlightExtractor;
+    private readonly IPdfConversionService _pdfConversionService;
+    private readonly ILogger<TemplateController> _logger;
 
-    public TemplateController(KorektorBukuDbContext db, IHighlightedTextExtractor highlightExtractor)
+    public TemplateController(
+        KorektorBukuDbContext db, 
+        IHighlightedTextExtractor highlightExtractor,
+        IPdfConversionService pdfConversionService,
+        ILogger<TemplateController> logger)
     {
         _db = db;
         _highlightExtractor = highlightExtractor;
+        _pdfConversionService = pdfConversionService;
+        _logger = logger;
     }
 
     // GET: api/template (Admin only)
     [HttpGet]
-    public async Task<IActionResult> GetAllTemplates()
+    public async Task<IActionResult> GetAllTemplates([FromQuery] int limit = 10, [FromQuery] int offset = 0)
     {
         if (HttpContext.Items["Role"]?.ToString() != "admin")
             return Forbid();
 
-        var templates = await _db.Templates.ToListAsync();
+        // Get total count for pagination
+        var totalCount = await _db.Templates.CountAsync();
 
-        var result = templates.Select(t => new
-        {
-            id = t.TemplateId,
-            name = t.TemplateName,
-            status = t.TemplateStatus,
-            filepath = t.TemplateFilepath
-        }).ToList();
+        var templates = await _db.Templates
+            .OrderByDescending(t => t.TemplateCreatedAt)
+            .Skip(offset)
+            .Take(limit)
+            .Select(t => new
+            {
+                id = t.TemplateId,
+                name = t.TemplateName,
+                status = t.TemplateStatus,
+                created_at = t.TemplateCreatedAt
+            })
+            .ToListAsync();
 
-        return Ok(new { data = result, total = result.Count });
+        return Ok(new { data = templates, total = totalCount, limit = limit, offset = offset });
     }
 
     // GET: api/template/{id} (Admin only)
@@ -50,16 +64,45 @@ public class TemplateController : ControllerBase
         if (template == null)
             return NotFound(new { message = "Template tidak ditemukan" });
 
+        // Read PDF file and convert to base64 if exists
+        string? pdfBase64 = null;
+        if (!string.IsNullOrEmpty(template.TemplatePdfPath) && System.IO.File.Exists(template.TemplatePdfPath))
+        {
+            try
+            {
+                var pdfBytes = await System.IO.File.ReadAllBytesAsync(template.TemplatePdfPath);
+                pdfBase64 = Convert.ToBase64String(pdfBytes);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to read PDF file for template {Id}", id);
+            }
+        }
+
+        // Get template fields
+        var fields = await _db.TemplateFields
+            .Where(f => f.TemplateId == id)
+            .Select(f => new
+            {
+                id = f.TemplateFieldId,
+                text = f.TemplateFieldText,
+                key = f.TemplateFieldKey
+            })
+            .ToListAsync();
+
         return Ok(new
         {
             id = template.TemplateId,
             name = template.TemplateName,
             status = template.TemplateStatus,
-            filepath = template.TemplateFilepath
+            created_at = template.TemplateCreatedAt,
+            pdf_base64 = pdfBase64,
+            fields = fields,
+            total_fields = fields.Count
         });
     }
 
-    // POST: api/template (Admin only) - Upload file docx, extract highlighted text
+    // POST: api/template (Admin only) - Upload file docx, convert to PDF, extract highlighted text
     [HttpPost]
     public async Task<IActionResult> CreateTemplate([FromForm] IFormFile file, [FromForm] string name, [FromForm] string? status = null)
     {
@@ -86,27 +129,58 @@ public class TemplateController : ControllerBase
             if (!Directory.Exists(templatesDir))
                 Directory.CreateDirectory(templatesDir);
 
-            // Generate unique filename
-            var uniqueFilename = $"{Guid.NewGuid()}{extension}";
-            var filePath = Path.Combine(templatesDir, uniqueFilename);
+            // Generate unique filename (without extension)
+            var uniqueId = Guid.NewGuid().ToString();
+            var docxFilename = $"{uniqueId}.docx";
+            var pdfFilename = $"{uniqueId}.pdf";
+            var docxFilePath = Path.Combine(templatesDir, docxFilename);
+            var pdfFilePath = Path.Combine(templatesDir, pdfFilename);
 
-            // Save file
-            using (var stream = new FileStream(filePath, FileMode.Create))
+            // Save DOCX file
+            _logger.LogInformation("Saving template DOCX file: {Path}", docxFilePath);
+            using (var stream = new FileStream(docxFilePath, FileMode.Create))
             {
                 await file.CopyToAsync(stream);
+            }
+
+            // Convert DOCX to PDF using Adobe API
+            string? savedPdfPath = null;
+            byte[]? pdfBytes = null;
+            try
+            {
+                _logger.LogInformation("Converting template DOCX to PDF...");
+                pdfBytes = await _pdfConversionService.ConvertDocxToPdf(docxFilePath);
+                
+                if (pdfBytes != null && pdfBytes.Length > 0)
+                {
+                    await System.IO.File.WriteAllBytesAsync(pdfFilePath, pdfBytes);
+                    savedPdfPath = pdfFilePath;
+                    _logger.LogInformation("Template PDF saved: {Path}, Size: {Size} bytes", pdfFilePath, pdfBytes.Length);
+                }
+                else
+                {
+                    _logger.LogWarning("PDF conversion returned empty result");
+                    pdfBytes = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log but don't fail - PDF conversion is optional, DOCX is still saved
+                _logger.LogError(ex, "Failed to convert template to PDF. DOCX saved, PDF skipped.");
+                pdfBytes = null;
             }
 
             // Extract highlighted texts from DOCX
             var highlightedTexts = new List<string>();
             try
             {
-                using var docStream = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+                using var docStream = new FileStream(docxFilePath, FileMode.Open, FileAccess.Read);
                 highlightedTexts = _highlightExtractor.ExtractHighlightedTexts(docStream);
             }
             catch (Exception ex)
             {
                 // Log but don't fail - extraction is optional
-                Console.WriteLine($"Warning: Failed to extract highlights: {ex.Message}");
+                _logger.LogWarning(ex, "Failed to extract highlights from template");
             }
 
             // Save template to database
@@ -114,7 +188,8 @@ public class TemplateController : ControllerBase
             {
                 TemplateName = name,
                 TemplateStatus = status ?? "draft",
-                TemplateFilepath = filePath
+                TemplateDocxPath = docxFilePath,
+                TemplatePdfPath = savedPdfPath
             };
 
             _db.Templates.Add(template);
@@ -122,7 +197,7 @@ public class TemplateController : ControllerBase
 
             // Save highlighted texts as template fields (with key = null)
             var savedFields = new List<object>();
-            foreach (var text in highlightedTexts.Distinct())
+            foreach (var text in highlightedTexts)
             {
                 if (string.IsNullOrWhiteSpace(text))
                     continue;
@@ -149,7 +224,9 @@ public class TemplateController : ControllerBase
                 id = template.TemplateId,
                 name = template.TemplateName,
                 status = template.TemplateStatus,
-                filepath = template.TemplateFilepath,
+                created_at = template.TemplateCreatedAt,
+                pdf_converted = savedPdfPath != null,
+                pdf_base64 = pdfBytes != null ? Convert.ToBase64String(pdfBytes) : null,
                 fields = savedFields,
                 total_fields = savedFields.Count
             });
@@ -157,6 +234,7 @@ public class TemplateController : ControllerBase
         catch (Exception ex)
         {
             var innerMessage = ex.InnerException?.Message ?? ex.Message;
+            _logger.LogError(ex, "Failed to create template");
             return BadRequest(new { message = $"Gagal menyimpan template: {innerMessage}" });
         }
     }
@@ -187,7 +265,8 @@ public class TemplateController : ControllerBase
             id = template.TemplateId,
             name = template.TemplateName,
             status = template.TemplateStatus,
-            filepath = template.TemplateFilepath
+            docx_path = template.TemplateDocxPath,
+            pdf_path = template.TemplatePdfPath
         });
     }
 
@@ -202,6 +281,29 @@ public class TemplateController : ControllerBase
 
         if (template == null)
             return NotFound(new { message = "Template tidak ditemukan" });
+
+        // Delete files if they exist
+        try
+        {
+            if (!string.IsNullOrEmpty(template.TemplateDocxPath) && System.IO.File.Exists(template.TemplateDocxPath))
+            {
+                System.IO.File.Delete(template.TemplateDocxPath);
+                _logger.LogInformation("Deleted template DOCX: {Path}", template.TemplateDocxPath);
+            }
+            if (!string.IsNullOrEmpty(template.TemplatePdfPath) && System.IO.File.Exists(template.TemplatePdfPath))
+            {
+                System.IO.File.Delete(template.TemplatePdfPath);
+                _logger.LogInformation("Deleted template PDF: {Path}", template.TemplatePdfPath);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to delete template files");
+        }
+
+        // Delete template fields first
+        var fields = await _db.TemplateFields.Where(f => f.TemplateId == id).ToListAsync();
+        _db.TemplateFields.RemoveRange(fields);
 
         _db.Templates.Remove(template);
         await _db.SaveChangesAsync();
@@ -250,6 +352,41 @@ public class TemplateController : ControllerBase
         await _db.SaveChangesAsync();
 
         return Ok(new { message = "Template field berhasil dihapus" });
+    }
+
+    // GET: api/template/{id}/pdf - Download/view PDF file
+    [HttpGet("{id}/pdf")]
+    public async Task<IActionResult> GetTemplatePdf(uint id)
+    {
+        var template = await _db.Templates.FindAsync(id);
+
+        if (template == null)
+            return NotFound(new { message = "Template tidak ditemukan" });
+
+        if (string.IsNullOrEmpty(template.TemplatePdfPath) || !System.IO.File.Exists(template.TemplatePdfPath))
+            return NotFound(new { message = "PDF template belum tersedia" });
+
+        var pdfBytes = await System.IO.File.ReadAllBytesAsync(template.TemplatePdfPath);
+        return File(pdfBytes, "application/pdf", $"{template.TemplateName}.pdf");
+    }
+
+    // GET: api/template/{id}/docx - Download DOCX file
+    [HttpGet("{id}/docx")]
+    public async Task<IActionResult> GetTemplateDocx(uint id)
+    {
+        if (HttpContext.Items["Role"]?.ToString() != "admin")
+            return Forbid();
+
+        var template = await _db.Templates.FindAsync(id);
+
+        if (template == null)
+            return NotFound(new { message = "Template tidak ditemukan" });
+
+        if (string.IsNullOrEmpty(template.TemplateDocxPath) || !System.IO.File.Exists(template.TemplateDocxPath))
+            return NotFound(new { message = "File DOCX template tidak ditemukan" });
+
+        var docxBytes = await System.IO.File.ReadAllBytesAsync(template.TemplateDocxPath);
+        return File(docxBytes, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", $"{template.TemplateName}.docx");
     }
 }
 

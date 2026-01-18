@@ -349,6 +349,37 @@ public class ParagraphFormatRule
     public TitleParagraphSpacingRule? Spacing { get; set; }
 }
 
+// List Item Rule (item_daftar)
+public class ListItemRule
+{
+    [JsonPropertyName("font")]
+    public TitleFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public ListItemParagraphRule? Paragraph { get; set; }
+}
+
+public class ListItemParagraphRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("indentation")]
+    public ListItemIndentationRule? Indentation { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class ListItemIndentationRule
+{
+    [JsonPropertyName("left_indent")]
+    public DecimalRuleValue? LeftIndent { get; set; }
+
+    [JsonPropertyName("hanging")]
+    public DecimalRuleValue? Hanging { get; set; }
+}
+
 #endregion
 
 #region Validation Result DTOs
@@ -469,6 +500,12 @@ public partial class ValidationService : IValidationService
         result.TotalChecks += paragraphResult.TotalChecks;
         result.PassedChecks += paragraphResult.PassedChecks;
 
+        // Validate list items
+        var listItemResult = await ValidateListItemAsync(dokumenId, cancellationToken);
+        result.Errors.AddRange(listItemResult.Errors);
+        result.TotalChecks += listItemResult.TotalChecks;
+        result.PassedChecks += listItemResult.PassedChecks;
+
         // TODO: Add more validation categories here
         // - Table validation
         // - Image validation
@@ -532,6 +569,47 @@ public partial class ValidationService : IValidationService
             locations.Add(new ErrorLocation
             {
                 HalamanKe = pageNumber,
+                Bbox = bbox
+            });
+        }
+
+        return locations;
+    }
+
+    /// <summary>
+    /// Creates a list of ErrorLocation from page numbers and optional per-page bounding boxes.
+    /// </summary>
+    protected static List<ErrorLocation> CreateLocations(
+        IEnumerable<int> pageNumbers,
+        Dictionary<int, ErrorBbox> pageBboxMap)
+    {
+        var pageSet = new HashSet<int>();
+        if (pageNumbers != null)
+        {
+            foreach (var page in pageNumbers)
+                pageSet.Add(page);
+        }
+
+        if (pageBboxMap != null)
+        {
+            foreach (var page in pageBboxMap.Keys)
+                pageSet.Add(page);
+        }
+
+        var pages = pageSet
+            .OrderBy(p => p)
+            .ToList();
+
+        var locations = new List<ErrorLocation>(pages.Count);
+        if (pages.Count == 0)
+            return locations;
+
+        foreach (var page in pages)
+        {
+            pageBboxMap.TryGetValue(page, out var bbox);
+            locations.Add(new ErrorLocation
+            {
+                HalamanKe = page,
                 Bbox = bbox
             });
         }
@@ -705,6 +783,29 @@ public partial class ValidationService : IValidationService
             return null;
 
         return Math.Round(twips.Value / TwipsPerCm, 2);
+    }
+
+    private static string NormalizeAlignmentValue(string? alignment)
+    {
+        if (string.IsNullOrWhiteSpace(alignment))
+            return string.Empty;
+
+        var normalized = alignment.Trim().ToLowerInvariant();
+        if (normalized == "both")
+            return "justify";
+
+        return normalized;
+    }
+
+    private static bool AreAlignmentsEquivalent(string? actual, string? expected)
+    {
+        if (string.IsNullOrWhiteSpace(expected))
+            return false;
+
+        return string.Equals(
+            NormalizeAlignmentValue(actual),
+            NormalizeAlignmentValue(expected),
+            StringComparison.OrdinalIgnoreCase);
     }
 
 }

@@ -13,8 +13,9 @@ public interface IHighlightedTextExtractor
 public class HighlightedTextExtractor : IHighlightedTextExtractor
 {
     /// <summary>
-    /// Extracts highlighted text from a DOCX file, grouped per paragraph.
-    /// If a paragraph contains any highlighted runs, the entire paragraph text is captured.
+    /// Extracts highlighted text segments from a DOCX file.
+    /// Each contiguous highlighted segment is returned as "<context> [<highlighted>]".
+    /// Context is the non-highlighted text immediately before the segment in the paragraph.
     /// </summary>
     public List<string> ExtractHighlightedTexts(Stream docxStream)
     {
@@ -35,34 +36,57 @@ public class HighlightedTextExtractor : IHighlightedTextExtractor
         foreach (var paragraph in body.Descendants<Paragraph>())
         {
             var pPr = paragraph.ParagraphProperties;
-            var hasHighlight = false;
-            var paragraphText = new StringBuilder();
+            var contextBuffer = new StringBuilder();
+            var highlightBuffer = new StringBuilder();
+            var isInHighlight = false;
+
+            void FlushHighlight()
+            {
+                var highlightText = highlightBuffer.ToString().Trim();
+                if (string.IsNullOrWhiteSpace(highlightText))
+                    return;
+
+                var contextText = contextBuffer.ToString().Trim();
+                var formatted = string.IsNullOrWhiteSpace(contextText)
+                    ? $"[{highlightText}]"
+                    : $"{contextText} [{highlightText}]";
+                highlightedTexts.Add(formatted);
+            }
 
             foreach (var run in paragraph.Descendants<Run>())
             {
                 var runText = run.InnerText;
-                paragraphText.Append(runText);
 
                 // Check if run has highlight
-                if (!hasHighlight)
+                var effectiveRun = styleResolver.GetEffectiveRunProperties(run, pPr);
+                var runHighlighted = !string.IsNullOrWhiteSpace(effectiveRun.HighlightColor) &&
+                    effectiveRun.HighlightColor != "none";
+
+                if (runHighlighted)
                 {
-                    var effectiveRun = styleResolver.GetEffectiveRunProperties(run, pPr);
-                    if (!string.IsNullOrWhiteSpace(effectiveRun.HighlightColor) && 
-                        effectiveRun.HighlightColor != "none")
-                    {
-                        hasHighlight = true;
-                    }
+                    if (!string.IsNullOrEmpty(runText))
+                        highlightBuffer.Append(runText);
+                    isInHighlight = true;
+                }
+                else if (isInHighlight)
+                {
+                    FlushHighlight();
+                    highlightBuffer.Clear();
+                    contextBuffer.Clear();
+                    isInHighlight = false;
+                    if (!string.IsNullOrEmpty(runText))
+                        contextBuffer.Append(runText);
+                }
+                else if (!string.IsNullOrEmpty(runText))
+                {
+                    contextBuffer.Append(runText);
                 }
             }
 
-            // If paragraph has any highlight, add the entire paragraph text
-            if (hasHighlight)
+            if (isInHighlight)
             {
-                var text = paragraphText.ToString().Trim();
-                if (!string.IsNullOrWhiteSpace(text) && !highlightedTexts.Contains(text))
-                {
-                    highlightedTexts.Add(text);
-                }
+                FlushHighlight();
+                highlightBuffer.Clear();
             }
         }
 

@@ -218,27 +218,21 @@ public partial class ValidationService
                 .Where(tf => tf != null)
                 .ToList();
 
-            // Load page number for error reporting
+            // Load page info for error reporting
             var pageNumbers = await LoadPageNumbersAsync(new[] { elementId }, cancellationToken);
-            var pageNumber = pageNumbers.Values.FirstOrDefault();
-
-            // Load bbox for error reporting
-            var mergedBbox = await LoadMergedBboxAsync(new[] { elementId }, cancellationToken);
+            var pageBboxMap = await LoadPageBboxMapAsync(new[] { elementId }, cancellationToken);
 
             // Create locations for error reporting
-            var locations = CreateLocations(pageNumber, mergedBbox);
+            var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
 
             // --- Font Validations ---
-            ValidateSubchapterFont(result, rule, elementTextFormats!, plainText, locations);
+            ValidateSubchapterFont(result, rule, elementTextFormats!, content.TextRuns, plainText, locations);
 
             // --- Paragraph Validations ---
             ValidateSubchapterParagraph(result, rule, paragraphFormat, plainText, locations);
 
             // --- Numbering Validation ---
             ValidateSubchapterNumbering(result, rule, subchapterNumber, subchapterTitle, plainText, locations);
-
-            // --- List Item Suggestion (non-required) ---
-            ValidateSubchapterListItem(result, paragraphFormat, plainText, locations);
 
             if (neighborContexts.TryGetValue(elementId, out var context))
                 ApplyContextToErrors(result.Errors, errorStart, context);
@@ -253,34 +247,67 @@ public partial class ValidationService
         ValidationResult result,
         SubchapterTitleRule rule,
         List<DokumenFormatText> textFormats,
+        IReadOnlyList<TextRunInfo> textRuns,
         string evidence,
         List<ErrorLocation> locations)
     {
         if (textFormats.Count == 0)
             return;
 
+        var textFormatById = BuildTextFormatMap(textFormats);
+        var runs = GetMeaningfulRuns(textRuns);
+
         // Font Name
         var expectedFontName = rule?.Font?.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
             result.TotalChecks++;
-            var actuals = textFormats.Select(tf => tf.DftxFontAscii ?? "unknown").Distinct().ToList();
-            if (actuals.All(a => string.Equals(a, expectedFontName, StringComparison.OrdinalIgnoreCase)))
+            if (runs.Count > 0)
             {
-                result.PassedChecks++;
+                var mismatches = CollectRunMismatches(
+                    runs,
+                    textFormatById,
+                    tf => !string.Equals(tf.DftxFontAscii ?? "unknown", expectedFontName, StringComparison.OrdinalIgnoreCase),
+                    tf => tf.DftxFontAscii ?? "unknown");
+
+                if (mismatches.Count == 0)
+                {
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = "Font judul subbab tidak sesuai",
+                        Expected = expectedFontName,
+                        Actual = BuildMismatchSummary(mismatches),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
             else
             {
-                result.Errors.Add(new ValidationError
+                var actuals = textFormats.Select(tf => tf.DftxFontAscii ?? "unknown").Distinct().ToList();
+                if (actuals.All(a => string.Equals(a, expectedFontName, StringComparison.OrdinalIgnoreCase)))
                 {
-                    Category = "Isi Buku",
-                    Field = "judul_subbab",
-                    Message = "Font judul subbab tidak sesuai",
-                    Expected = expectedFontName,
-                    Actual = string.Join(", ", actuals),
-                    Evidence = evidence,
-                    Locations = locations
-                });
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = "Font judul subbab tidak sesuai",
+                        Expected = expectedFontName,
+                        Actual = string.Join(", ", actuals),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
         }
 
@@ -290,26 +317,57 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var expectedHalfPt = expectedFontSize.Value * 2m;
-            var actuals = textFormats
-                .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
-                .ToList();
-
-            if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
+            if (runs.Count > 0)
             {
-                result.PassedChecks++;
+                var mismatches = CollectRunMismatches(
+                    runs,
+                    textFormatById,
+                    tf => !tf.DftxSizeHalfpt.HasValue || Math.Abs(tf.DftxSizeHalfpt.Value - expectedHalfPt) > 0.5m,
+                    tf => tf.DftxSizeHalfpt.HasValue
+                        ? (tf.DftxSizeHalfpt.Value / 2m).ToString(CultureInfo.InvariantCulture) + " pt"
+                        : "unknown");
+
+                if (mismatches.Count == 0)
+                {
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = "Ukuran font judul subbab tidak sesuai",
+                        Expected = expectedFontSize.Value.ToString(CultureInfo.InvariantCulture) + " pt",
+                        Actual = BuildMismatchSummary(mismatches),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
             else
             {
-                result.Errors.Add(new ValidationError
+                var actuals = textFormats
+                    .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
+                    .ToList();
+
+                if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
                 {
-                    Category = "Isi Buku",
-                    Field = "judul_subbab",
-                    Message = "Ukuran font judul subbab tidak sesuai",
-                    Expected = expectedFontSize.Value.ToString(CultureInfo.InvariantCulture) + " pt",
-                    Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value / 2m).ToString(CultureInfo.InvariantCulture) + " pt" : "unknown")),
-                    Evidence = evidence,
-                    Locations = locations
-                });
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = "Ukuran font judul subbab tidak sesuai",
+                        Expected = expectedFontSize.Value.ToString(CultureInfo.InvariantCulture) + " pt",
+                        Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value / 2m).ToString(CultureInfo.InvariantCulture) + " pt" : "unknown")),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
         }
 
@@ -318,23 +376,52 @@ public partial class ValidationService
         if (expectedBold.HasValue)
         {
             result.TotalChecks++;
-            var actuals = textFormats.Select(tf => tf.DftxBold).Distinct().ToList();
-            if (actuals.All(a => a.HasValue && a.Value == expectedBold.Value))
+            if (runs.Count > 0)
             {
-                result.PassedChecks++;
+                var mismatches = CollectRunMismatches(
+                    runs,
+                    textFormatById,
+                    tf => !tf.DftxBold.HasValue || tf.DftxBold.Value != expectedBold.Value,
+                    tf => tf.DftxBold.HasValue ? (tf.DftxBold.Value ? "Bold" : "Tidak Bold") : "unknown");
+
+                if (mismatches.Count == 0)
+                {
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = expectedBold.Value ? "Judul subbab harus bold" : "Judul subbab tidak boleh bold",
+                        Expected = expectedBold.Value ? "Bold" : "Tidak Bold",
+                        Actual = BuildMismatchSummary(mismatches),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
             else
             {
-                result.Errors.Add(new ValidationError
+                var actuals = textFormats.Select(tf => tf.DftxBold).Distinct().ToList();
+                if (actuals.All(a => a.HasValue && a.Value == expectedBold.Value))
                 {
-                    Category = "Isi Buku",
-                    Field = "judul_subbab",
-                    Message = expectedBold.Value ? "Judul subbab harus bold" : "Judul subbab tidak boleh bold",
-                    Expected = expectedBold.Value ? "Bold" : "Tidak Bold",
-                    Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value ? "Bold" : "Tidak Bold") : "unknown")),
-                    Evidence = evidence,
-                    Locations = locations
-                });
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = expectedBold.Value ? "Judul subbab harus bold" : "Judul subbab tidak boleh bold",
+                        Expected = expectedBold.Value ? "Bold" : "Tidak Bold",
+                        Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value ? "Bold" : "Tidak Bold") : "unknown")),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
         }
 
@@ -343,23 +430,52 @@ public partial class ValidationService
         if (expectedItalic.HasValue)
         {
             result.TotalChecks++;
-            var actuals = textFormats.Select(tf => tf.DftxItalic).Distinct().ToList();
-            if (actuals.All(a => a.HasValue && a.Value == expectedItalic.Value))
+            if (runs.Count > 0)
             {
-                result.PassedChecks++;
+                var mismatches = CollectRunMismatches(
+                    runs,
+                    textFormatById,
+                    tf => !tf.DftxItalic.HasValue || tf.DftxItalic.Value != expectedItalic.Value,
+                    tf => tf.DftxItalic.HasValue ? (tf.DftxItalic.Value ? "Italic" : "Tidak Italic") : "unknown");
+
+                if (mismatches.Count == 0)
+                {
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = expectedItalic.Value ? "Judul subbab harus italic" : "Judul subbab tidak boleh italic",
+                        Expected = expectedItalic.Value ? "Italic" : "Tidak Italic",
+                        Actual = BuildMismatchSummary(mismatches),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
             else
             {
-                result.Errors.Add(new ValidationError
+                var actuals = textFormats.Select(tf => tf.DftxItalic).Distinct().ToList();
+                if (actuals.All(a => a.HasValue && a.Value == expectedItalic.Value))
                 {
-                    Category = "Isi Buku",
-                    Field = "judul_subbab",
-                    Message = expectedItalic.Value ? "Judul subbab harus italic" : "Judul subbab tidak boleh italic",
-                    Expected = expectedItalic.Value ? "Italic" : "Tidak Italic",
-                    Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value ? "Italic" : "Tidak Italic") : "unknown")),
-                    Evidence = evidence,
-                    Locations = locations
-                });
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = expectedItalic.Value ? "Judul subbab harus italic" : "Judul subbab tidak boleh italic",
+                        Expected = expectedItalic.Value ? "Italic" : "Tidak Italic",
+                        Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value ? "Italic" : "Tidak Italic") : "unknown")),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
         }
 
@@ -368,27 +484,66 @@ public partial class ValidationService
         if (expectedUnderline.HasValue)
         {
             result.TotalChecks++;
-            var actuals = textFormats.Select(tf => tf.DftxUnderline).Distinct().ToList();
-            bool matches = expectedUnderline.Value
-                ? actuals.All(a => !string.IsNullOrWhiteSpace(a) && !a.Equals("none", StringComparison.OrdinalIgnoreCase))
-                : actuals.All(a => string.IsNullOrWhiteSpace(a) || a.Equals("none", StringComparison.OrdinalIgnoreCase));
-
-            if (matches)
+            if (runs.Count > 0)
             {
-                result.PassedChecks++;
+                var mismatches = CollectRunMismatches(
+                    runs,
+                    textFormatById,
+                    tf =>
+                    {
+                        var hasUnderline = !string.IsNullOrWhiteSpace(tf.DftxUnderline) &&
+                            !tf.DftxUnderline.Equals("none", StringComparison.OrdinalIgnoreCase);
+                        return hasUnderline != expectedUnderline.Value;
+                    },
+                    tf =>
+                    {
+                        var hasUnderline = !string.IsNullOrWhiteSpace(tf.DftxUnderline) &&
+                            !tf.DftxUnderline.Equals("none", StringComparison.OrdinalIgnoreCase);
+                        return hasUnderline ? "Underline" : "Tidak Underline";
+                    });
+
+                if (mismatches.Count == 0)
+                {
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = expectedUnderline.Value ? "Judul subbab harus underline" : "Judul subbab tidak boleh underline",
+                        Expected = expectedUnderline.Value ? "Underline" : "Tidak Underline",
+                        Actual = BuildMismatchSummary(mismatches),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
             else
             {
-                result.Errors.Add(new ValidationError
+                var actuals = textFormats.Select(tf => tf.DftxUnderline).Distinct().ToList();
+                bool matches = expectedUnderline.Value
+                    ? actuals.All(a => !string.IsNullOrWhiteSpace(a) && !a.Equals("none", StringComparison.OrdinalIgnoreCase))
+                    : actuals.All(a => string.IsNullOrWhiteSpace(a) || a.Equals("none", StringComparison.OrdinalIgnoreCase));
+
+                if (matches)
                 {
-                    Category = "Isi Buku",
-                    Field = "judul_subbab",
-                    Message = expectedUnderline.Value ? "Judul subbab harus underline" : "Judul subbab tidak boleh underline",
-                    Expected = expectedUnderline.Value ? "Underline" : "Tidak Underline",
-                    Actual = string.Join(", ", actuals.Select(a => string.IsNullOrWhiteSpace(a) || a.Equals("none", StringComparison.OrdinalIgnoreCase) ? "Tidak Underline" : "Underline")),
-                    Evidence = evidence,
-                    Locations = locations
-                });
+                    result.PassedChecks++;
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = expectedUnderline.Value ? "Judul subbab harus underline" : "Judul subbab tidak boleh underline",
+                        Expected = expectedUnderline.Value ? "Underline" : "Tidak Underline",
+                        Actual = string.Join(", ", actuals.Select(a => string.IsNullOrWhiteSpace(a) || a.Equals("none", StringComparison.OrdinalIgnoreCase) ? "Tidak Underline" : "Underline")),
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
         }
     }
@@ -409,7 +564,7 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (string.Equals(actual, expectedAlignment, StringComparison.OrdinalIgnoreCase))
+            if (AreAlignmentsEquivalent(actual, expectedAlignment))
             {
                 result.PassedChecks++;
             }
@@ -439,26 +594,47 @@ public partial class ValidationService
             var hangingTwips = format.DfpIndHangingTwips ?? 0;
             var hangingCm = hangingTwips / 1440.0m * 2.54m; // twips to inches to cm
 
+            var isList = format.DfpIsList ||
+                         !string.IsNullOrWhiteSpace(format.DfpNumprJson) ||
+                         (format.DfpListNumId ?? 0) > 0;
+
             var minOk = !hangingMinCm.HasValue || hangingCm >= hangingMinCm.Value - 0.05m; // 0.5mm tolerance
             var maxOk = !hangingMaxCm.HasValue || hangingCm <= hangingMaxCm.Value + 0.05m;
+            var hasHanging = hangingTwips > 0;
 
-            if (minOk && maxOk && hangingTwips > 0)
+            if (isList && minOk && maxOk && hasHanging)
             {
                 result.PassedChecks++;
             }
             else
             {
                 var expectedRange = $"{hangingMinCm?.ToString(CultureInfo.InvariantCulture) ?? "0"} - {hangingMaxCm?.ToString(CultureInfo.InvariantCulture) ?? "∞"} cm";
-                result.Errors.Add(new ValidationError
+                if (!isList)
                 {
-                    Category = "Isi Buku",
-                    Field = "judul_subbab",
-                    Message = "Hanging indent judul subbab tidak sesuai",
-                    Expected = expectedRange,
-                    Actual = $"{hangingCm:F2} cm",
-                    Evidence = evidence,
-                    Locations = locations
-                });
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = "Judul subbab harus menggunakan Numbering (Multilevel List) agar hanging indent jelas",
+                        Expected = $"Numbering (Multilevel List) + hanging {expectedRange}",
+                        Actual = $"Tidak menggunakan numbering; hanging {hangingCm:F2} cm",
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
+                else
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = "Hanging indent judul subbab tidak sesuai",
+                        Expected = expectedRange,
+                        Actual = $"{hangingCm:F2} cm",
+                        Evidence = evidence,
+                        Locations = locations
+                    });
+                }
             }
         }
 
@@ -597,8 +773,6 @@ public partial class ValidationService
         if (string.IsNullOrWhiteSpace(text))
             return true;
 
-        // Simple Title Case check: first letter of each word should be uppercase
-        // (excluding common articles/prepositions if in the middle)
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var minorWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -608,14 +782,21 @@ public partial class ValidationService
 
         for (int i = 0; i < words.Length; i++)
         {
-            var word = words[i];
-            if (word.Length == 0)
+            var word = TrimEdgePunctuation(words[i]);
+            if (string.IsNullOrWhiteSpace(word))
                 continue;
 
-            // First word must be capitalized, minor words in middle can be lowercase
-            if (i == 0 || !minorWords.Contains(word))
+            var firstLetter = FindFirstLetter(word);
+            if (!firstLetter.HasValue)
+                continue;
+
+            if (IsAllUppercaseAlpha(word))
+                continue;
+
+            var isMinor = i > 0 && minorWords.Contains(word);
+            if (!isMinor)
             {
-                if (!char.IsUpper(word[0]))
+                if (!char.IsUpper(firstLetter.Value))
                     return false;
             }
         }
@@ -623,39 +804,50 @@ public partial class ValidationService
         return true;
     }
 
-    private static void ValidateSubchapterListItem(
-        ValidationResult result,
-        DokumenFormatParagraf? format,
-        string evidence,
-        List<ErrorLocation> locations)
+    private static string TrimEdgePunctuation(string word)
     {
-        if (format == null)
-            return;
+        if (string.IsNullOrEmpty(word))
+            return string.Empty;
 
-        // Check if the paragraph uses list numbering
-        var isList = format.DfpIsList ||
-                     !string.IsNullOrWhiteSpace(format.DfpNumprJson) ||
-                     (format.DfpListNumId ?? 0) > 0;
+        var start = 0;
+        var end = word.Length - 1;
 
-        result.TotalChecks++;
-        if (isList)
+        while (start <= end && !char.IsLetterOrDigit(word[start]))
+            start++;
+        while (end >= start && !char.IsLetterOrDigit(word[end]))
+            end--;
+
+        if (start > end)
+            return string.Empty;
+
+        return word.Substring(start, end - start + 1);
+    }
+
+    private static char? FindFirstLetter(string word)
+    {
+        foreach (var ch in word)
         {
-            result.PassedChecks++;
+            if (char.IsLetter(ch))
+                return ch;
         }
-        else
+
+        return null;
+    }
+
+    private static bool IsAllUppercaseAlpha(string word)
+    {
+        var hasLetter = false;
+        foreach (var ch in word)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "judul_subbab",
-                Message = "Disarankan menggunakan Numbering untuk judul subbab",
-                Expected = "Menggunakan Multilevel List/Numbering",
-                Actual = "Tidak menggunakan numbering (plain text)",
-                Evidence = evidence,
-                Locations = locations,
-                IsRequired = false // Non-required, just a suggestion
-            });
+            if (!char.IsLetter(ch))
+                continue;
+
+            hasLetter = true;
+            if (!char.IsUpper(ch))
+                return false;
         }
+
+        return hasLetter;
     }
 
     private async Task ValidateParagraphAfterSubchapterAsync(
@@ -683,15 +875,12 @@ public partial class ValidationService
             var plainText = content.PlainText?.Trim() ?? string.Empty;
             var context = contextById.TryGetValue(subchapterId, out var found) ? found : null;
 
-            // Load page number for error reporting
+            // Load page info for error reporting
             var pageNumbers = await LoadPageNumbersAsync(new[] { subchapterId }, cancellationToken);
-            var pageNumber = pageNumbers.Values.FirstOrDefault();
-
-            // Load bbox for error reporting
-            var mergedBbox = await LoadMergedBboxAsync(new[] { subchapterId }, cancellationToken);
+            var pageBboxMap = await LoadPageBboxMapAsync(new[] { subchapterId }, cancellationToken);
 
             // Create locations for error reporting
-            var locations = CreateLocations(pageNumber, mergedBbox);
+            var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
 
             // --- Validate paragraph after subchapter (based on struktur_konten rule) ---
             if (validateParagraphAfter)
@@ -764,8 +953,8 @@ public partial class ValidationService
         ElementNeighborContext? context,
         CancellationToken cancellationToken)
     {
-        // Get Y1 position from dokumen_elemen_visual using raw SQL
-        var (idColumn, _) = await ResolveVisualColumnsAsync(cancellationToken);
+        // Get page + Y1 position from dokumen_elemen_visual using raw SQL
+        var (idColumn, labelColumn) = await ResolveVisualColumnsAsync(cancellationToken);
         if (string.IsNullOrWhiteSpace(idColumn))
             return;
 
@@ -774,23 +963,65 @@ public partial class ValidationService
         if (shouldClose)
             await connection.OpenAsync(cancellationToken);
 
+        int? page = null;
         double? y1 = null;
+        var hasElementBelow = false;
 
         try
         {
-            var sql = $"SELECT `dev_bbox_y1` FROM `dokumen_elemen_visual` WHERE `{idColumn}` = {subchapterId} LIMIT 1";
+            var sql = $"SELECT `dev_page`, `dev_bbox_y1` FROM `dokumen_elemen_visual` WHERE `{idColumn}` = @id LIMIT 1";
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = sql;
+            var idParam = cmd.CreateParameter();
+            idParam.ParameterName = "@id";
+            idParam.Value = subchapterId;
+            cmd.Parameters.Add(idParam);
             using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
             if (await reader.ReadAsync(cancellationToken))
             {
+                page = reader["dev_page"] != DBNull.Value ? Convert.ToInt32(reader["dev_page"]) : null;
                 y1 = reader["dev_bbox_y1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y1"]) : null;
             }
+            if (!page.HasValue || !y1.HasValue)
+                return;
+
+            var labelExpr = !string.IsNullOrWhiteSpace(labelColumn)
+                ? $"LOWER(REPLACE(`{labelColumn}`, '-', '_'))"
+                : null;
+            var labelFilter = labelExpr != null
+                ? $"AND ({labelExpr} IS NULL OR {labelExpr} NOT IN ('footnote', 'page_footer', 'footer'))"
+                : string.Empty;
+
+            var belowSql = $"SELECT 1 FROM `dokumen_elemen_visual` " +
+                           $"WHERE `dev_page` = @page " +
+                           $"AND `dev_bbox_y0` IS NOT NULL " +
+                           $"AND `dev_bbox_y0` > @y1 " +
+                           $"AND `{idColumn}` <> @id " +
+                           $"{labelFilter} " +
+                           "LIMIT 1";
+
+            using var belowCmd = connection.CreateCommand();
+            belowCmd.CommandText = belowSql;
+            var pageParam = belowCmd.CreateParameter();
+            pageParam.ParameterName = "@page";
+            pageParam.Value = page.Value;
+            belowCmd.Parameters.Add(pageParam);
+            var y1Param = belowCmd.CreateParameter();
+            y1Param.ParameterName = "@y1";
+            y1Param.Value = y1.Value;
+            belowCmd.Parameters.Add(y1Param);
+            var idParam2 = belowCmd.CreateParameter();
+            idParam2.ParameterName = "@id";
+            idParam2.Value = subchapterId;
+            belowCmd.Parameters.Add(idParam2);
+
+            using var belowReader = await belowCmd.ExecuteReaderAsync(cancellationToken);
+            hasElementBelow = await belowReader.ReadAsync(cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to load Y position from dokumen_elemen_visual");
+            _logger.LogWarning(ex, "Failed to check elements below subchapter from dokumen_elemen_visual");
             return;
         }
         finally
@@ -799,34 +1030,8 @@ public partial class ValidationService
                 await connection.CloseAsync();
         }
 
-        if (!y1.HasValue)
-            return;
-
-        // Get page dimensions from section
-        var section = await (from e in _db.DokumenElemens
-            join p in _db.DokumenParts on e.DpartId equals p.DpartId
-            join s in _db.DokumenSections on p.DsecId equals s.DsecId
-            where e.DelemenId == subchapterId
-            select s)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (section == null)
-            return;
-
-        // Calculate if subchapter is near bottom
-        // Page height in twips, margin in twips, y1 is in points (need to convert)
-        var pageHeightTwips = section.DsecPageHeightTwips ?? 16838; // Default A4 height
-        var marginBottomTwips = section.DsecMarginBottomTwips ?? 1440; // Default 1 inch
-
-        // Convert page dimensions from twips to points (1 twip = 1/20 point)
-        var pageHeightPoints = pageHeightTwips / 20.0;
-        var marginBottomPoints = marginBottomTwips / 20.0;
-
-        // Bottom threshold is page height minus margin minus buffer (about 3 lines of text ~45 points)
-        var bottomThresholdPoints = pageHeightPoints - marginBottomPoints - 60;
-
         result.TotalChecks++;
-        if (y1.Value < bottomThresholdPoints)
+        if (hasElementBelow)
         {
             result.PassedChecks++;
         }

@@ -204,6 +204,9 @@ public class KorektorBukuDbContext : DbContext
         {
             entity.HasKey(e => e.KesalahanId);
             entity.Property(e => e.KesalahanLokasi).HasColumnType("varchar(255)");
+            entity.Property(e => e.KesalahanRefTipe)
+                .HasConversion<string>()
+                .HasColumnType("enum('buku','dokumen')");
             entity.HasMany(e => e.Details)
                 .WithOne(d => d.Kesalahan)
                 .HasForeignKey(d => d.KesalahanId)
@@ -223,6 +226,13 @@ public class KorektorBukuDbContext : DbContext
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
             entity.Property(e => e.GeminiApiKeyUpdatedAt)
                 .ValueGeneratedOnAddOrUpdate();
+        });
+
+        modelBuilder.Entity<Template>(entity =>
+        {
+            entity.HasKey(e => e.TemplateId);
+            entity.Property(e => e.TemplateCreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
     }
 }

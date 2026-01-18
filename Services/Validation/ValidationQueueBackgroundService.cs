@@ -127,15 +127,19 @@ public class ValidationQueueBackgroundService : BackgroundService
                         queue.AntrianErrorMessage = null;
                         _logger.LogInformation("Completed validation for antrian ID: {AntrianId}", queue.AntrianId);
 
-                        // Notify via WebSocket if needed
+                        // Notify via WebSocket
                         if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                         {
                             var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
                             if (dokumen != null)
                             {
-                                dokumen.DokumenStatus = "lolos";
+                                var isLolos = dokumen.DokumenJumlahKesalahan == 0;
+                                dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
                                 dokumen.DokumenUpdatedAt = DateTime.Now;
-                                await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "lolos");
+                                await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, dokumen.DokumenStatus);
+                                
+                                // TODO: Email notification (disabled for now)
+                                // await SendValidationEmailNotificationAsync(...);
                             }
                         }
                         else if (queue.AntrianTipe == "buku" && queue.BukuId.HasValue)
@@ -206,6 +210,10 @@ public class ValidationQueueBackgroundService : BackgroundService
 
         _logger.LogInformation("Validation Queue Background Service stopped");
     }
+
+    // NOTE: Email notification method removed for now. 
+    // EmailService is available but not integrated.
+    // Re-add SendValidationEmailNotificationAsync when ready to enable email notifications.
 
     private async Task EnrichAndStoreErrorsAsync(
         KorektorBukuDbContext db,
@@ -1103,7 +1111,12 @@ public class ValidationQueueBackgroundService : BackgroundService
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
         };
 
-        var locations = error.Locations.Select(loc => new Dictionary<string, object?>
+        var orderedLocations = error.Locations
+            .Where(loc => loc != null)
+            .OrderBy(loc => loc.HalamanKe <= 0 ? int.MaxValue : loc.HalamanKe)
+            .ToList();
+
+        var locations = orderedLocations.Select(loc => new Dictionary<string, object?>
         {
             ["halaman_ke"] = loc.HalamanKe,
             ["bbox"] = loc.Bbox != null ? new

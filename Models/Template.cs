@@ -20,8 +20,14 @@ public class Template
     [MaxLength(50)]
     public string TemplateStatus { get; set; } = string.Empty;
 
-    [Required]
-    [Column("template_filepath")]
-    [MaxLength(255)]
-    public string TemplateFilepath { get; set; } = string.Empty;
+    [Column("template_docx_path")]
+    [MaxLength(500)]
+    public string? TemplateDocxPath { get; set; }
+
+    [Column("template_pdf_path")]
+    [MaxLength(500)]
+    public string? TemplatePdfPath { get; set; }
+
+    [Column("template_created_at")]
+    public DateTime TemplateCreatedAt { get; set; } = DateTime.Now;
 }

@@ -15,22 +15,28 @@ public class KesalahanController : ControllerBase
     }
 
     [HttpGet("{id}")]
-    public async Task<IActionResult> GetKesalahanDetail(uint id)
+    public async Task<IActionResult> GetKesalahanById(uint id)
     {
-        var detail = await _db.KesalahanDetails
-            .FirstOrDefaultAsync(d => d.KesalahanDetailId == id);
+        var kesalahan = await _db.Kesalahans
+            .Include(k => k.Details)
+            .FirstOrDefaultAsync(k => k.KesalahanId == id);
 
-        if (detail == null)
-            return NotFound(new { message = "Detail kesalahan tidak ditemukan" });
+        if (kesalahan == null)
+            return NotFound(new { message = "Kesalahan tidak ditemukan" });
 
         return Ok(new
         {
-            id = detail.KesalahanDetailId,
-            kesalahan_id = detail.KesalahanId,
-            judul = detail.KesalahanDetailJudul,
-            penjelasan = detail.KesalahanDetailPenjelasan,
-            steps = detail.KesalahanDetailSteps,
-            is_required = detail.KesalahanIsRequired
+            id = kesalahan.KesalahanId,
+            kategori = kesalahan.KesalahanKategori,
+            lokasi = kesalahan.KesalahanLokasi,
+            details = kesalahan.Details.Select(d => new
+            {
+                id = d.KesalahanDetailId,
+                judul = d.KesalahanDetailJudul,
+                penjelasan = d.KesalahanDetailPenjelasan,
+                steps = d.KesalahanDetailSteps,
+                is_required = d.KesalahanIsRequired
+            }).ToList()
         });
     }
 }

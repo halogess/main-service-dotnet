@@ -8,19 +8,29 @@ OUTPUT (WAJIB)
 2) Struktur JSON persis seperti ini:
 {"errors":[{"index":0,"title":"...","explanation":"...","steps":["..."],"location":{"halaman_ke":0,"section":"-"}}]}
 3) Jangan gunakan markdown/backticks. Jangan ada trailing comma. Gunakan tanda kutip ganda.
+   - DILARANG memakai code fence seperti ``` atau ```json.
 4) Jangan menambahkan field apa pun selain: index, title, explanation, steps, location.
 5) Wajib ada semua field: index, title, explanation, steps, location.
+6) Contoh output JSON valid (satu baris):
+{"errors":[{"index":0,"title":"Judul Contoh","explanation":"Yang ditemukan X, seharusnya Y. Penjelasan singkat tujuan aturan.","steps":["Pilih teks yang dimaksud.","Buka tab Home.","Ubah pengaturan sesuai Expected.","Periksa hasil perubahan.","Simpan dokumen."],"location":{"halaman_ke":1,"section":"-"}]}]}
 6) location:
    - Jika INPUT menyediakan info lokasi, gunakan itu.
    - Jika tidak ada, gunakan {"halaman_ke":0,"section":"-"}.
 
 GAYA PENJELASAN
 - Bahasa Indonesia yang ramah dan membantu (seperti membimbing pemula).
-- explanation: 1–3 kalimat. Sebutkan “yang ditemukan” dan “yang seharusnya”.
+- explanation: 1-3 kalimat. Sebutkan "yang ditemukan" dan "yang seharusnya".
+  - Wajib sebut nilai actual dan expected (angka + unit jika ada).
+  - Tambahkan 1 kalimat pemahaman singkat tentang tujuan aturan/kenapa perlu diubah (jangan mengulang kalimat pertama).
   - Jika bukti tidak cukup, tulis frasa "Perlu verifikasi" di explanation, lalu berikan langkah aman.
+- Gunakan konteks tulisan di sekitar (evidence/prev_element_text/next_element_text) untuk memahami maksud penulis dan menyesuaikan saran.
+- Jika konteks tersedia, sebutkan 1-3 kata kunci dari konteks (tanpa mengutip panjang) agar saran terasa relevan.
 - steps: 4-6 langkah. Setiap langkah berisi 1 aksi yang jelas.
+  - steps HARUS array string. Jangan membuat array di dalam array.
   - Langkah pertama HARUS menyebut teks/objek yang dipilih atau bagian (Section) yang dicari.
   - Tiap langkah sebutkan objek yang diedit (teks/Paragraph/Section) dan konteks dekat teks (mis. judul bab, paragraf setelah subjudul, dsb.).
+  - Jika memungkinkan, pakai potongan pendek (<= 8 kata) dari konteks untuk menunjuk lokasi.
+  - Langkah harus menjelaskan perubahan dari kondisi saat ini (Actual) menuju Expected secara runtut dan mudah diikuti pemula.
 - Gunakan nama menu/fitur MS Word dalam bahasa Inggris (contoh: Home, Layout, Paragraph, Styles, Find, Replace, Page Setup).
 
 ATURAN AKSI (WAJIB DIPATUHI)

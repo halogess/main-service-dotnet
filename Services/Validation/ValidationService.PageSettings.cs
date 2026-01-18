@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
@@ -237,6 +238,10 @@ public partial class ValidationService
 
         var actualSize = DetectPaperSize(section.DsecPageWidthTwips, section.DsecPageHeightTwips);
         var actualOrientation = section.DsecOrientation?.ToUpper() ?? "PORTRAIT";
+        var actualDimensions = FormatPageDimensionsCm(section.DsecPageWidthTwips, section.DsecPageHeightTwips);
+        var actualDescriptor = string.IsNullOrWhiteSpace(actualDimensions)
+            ? $"{actualSize} {actualOrientation}"
+            : $"{actualSize} {actualOrientation} ({actualDimensions})";
 
         var isValid = allowedPapers.Any(p =>
             p.Size?.ToUpper() == actualSize &&
@@ -248,17 +253,54 @@ public partial class ValidationService
         }
         else
         {
-            var allowedStr = string.Join(", ", allowedPapers.Select(p => $"{p.Size} {p.Orientation}"));
+            var allowedStr = string.Join(", ", allowedPapers.Select(FormatPaperSpec).Where(s => !string.IsNullOrWhiteSpace(s)));
             result.Errors.Add(new ValidationError
             {
                 Category = "Pengaturan Halaman",
                 Field = "paper",
                 Message = $"Ukuran kertas section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                 Expected = allowedStr,
-                Actual = $"{actualSize} {actualOrientation}",
+                Actual = actualDescriptor,
                 SectionIndex = sectionNumber
             });
         }
+    }
+
+    private static string? FormatPaperSpec(PaperSpec spec)
+    {
+        if (spec == null || string.IsNullOrWhiteSpace(spec.Size))
+            return null;
+
+        var size = spec.Size!.Trim().ToUpperInvariant();
+        var orientation = (spec.Orientation ?? "PORTRAIT").Trim().ToUpperInvariant();
+
+        if (PaperSizes.TryGetValue(size, out var dimensions))
+        {
+            var width = dimensions.Width;
+            var height = dimensions.Height;
+            if (orientation == "LANDSCAPE")
+            {
+                (width, height) = (height, width);
+            }
+
+            var dim = FormatPageDimensionsCm(width, height);
+            if (!string.IsNullOrWhiteSpace(dim))
+                return $"{size} {orientation} ({dim})";
+        }
+
+        return $"{size} {orientation}";
+    }
+
+    private static string? FormatPageDimensionsCm(uint? widthTwips, uint? heightTwips)
+    {
+        if (!widthTwips.HasValue || !heightTwips.HasValue)
+            return null;
+
+        var widthCm = Math.Round(widthTwips.Value / TwipsPerCm, 2);
+        var heightCm = Math.Round(heightTwips.Value / TwipsPerCm, 2);
+        var widthText = widthCm.ToString(CultureInfo.InvariantCulture);
+        var heightText = heightCm.ToString(CultureInfo.InvariantCulture);
+        return $"{widthText} x {heightText} cm";
     }
 
     private void ValidateMargins(ValidationResult result, DokumenSection section, PaperMargins margins, int sectionNumber, string sectionType)
@@ -549,7 +591,9 @@ public partial class ValidationService
         foreach (var (name, (expectedW, expectedH)) in PaperSizes)
         {
             // Allow some tolerance (~5mm = ~283 twips)
-            if (Math.Abs(w - expectedW) < 300 && Math.Abs(h - expectedH) < 300)
+            var diffW = Math.Abs((long)w - expectedW);
+            var diffH = Math.Abs((long)h - expectedH);
+            if (diffW < 300 && diffH < 300)
                 return name;
         }
 

@@ -118,10 +118,15 @@ public partial class ValidationService
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
 
         var elementsById = bodyElements.ToDictionary(e => e.DelemenId);
-        var sectionHeaderIds = labelMap
-            .Where(kv => kv.Value.Equals("section_header", StringComparison.OrdinalIgnoreCase))
-            .Select(kv => kv.Key)
-            .ToList();
+        var sectionHeaderIds = new HashSet<ulong>();
+        foreach (var elem in bodyElements)
+        {
+            if (labelMap.TryGetValue(elem.DelemenId, out var label) &&
+                label.Equals("section_header", StringComparison.OrdinalIgnoreCase))
+            {
+                sectionHeaderIds.Add(elem.DelemenId);
+            }
+        }
 
         var contentById = new Dictionary<ulong, ElementContentInfo>();
         var candidateParagraphIds = new HashSet<uint>();
@@ -142,16 +147,45 @@ public partial class ValidationService
 
         ulong? titleElementId = null;
         var titleIds = new HashSet<ulong>();
-        foreach (var id in sectionHeaderIds)
-        {
-            if (!contentById.TryGetValue(id, out var content) || !content.ParagraphFormatId.HasValue)
-                continue;
+        var titleBlock = new List<ElementContentInfo>();
+        var inTitleBlock = false;
 
-            if (paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format) &&
-                string.Equals(format.DfpJc, "center", StringComparison.OrdinalIgnoreCase))
+        foreach (var elem in bodyElements)
+        {
+            if (!sectionHeaderIds.Contains(elem.DelemenId))
             {
-                titleIds.Add(id);
+                if (inTitleBlock)
+                    break;
+                continue;
             }
+
+            if (!contentById.TryGetValue(elem.DelemenId, out var content))
+            {
+                content = ParseElementContent(elem.DelemenJsonTree);
+                contentById[elem.DelemenId] = content;
+            }
+
+            if (!content.ParagraphFormatId.HasValue ||
+                !paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format) ||
+                !string.Equals(format.DfpJc, "center", StringComparison.OrdinalIgnoreCase))
+            {
+                if (inTitleBlock)
+                    break;
+                continue;
+            }
+
+            if (!inTitleBlock)
+            {
+                var plainText = content.PlainText?.TrimStart() ?? string.Empty;
+                if (!plainText.StartsWith("BAB", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                inTitleBlock = true;
+                titleElementId = elem.DelemenId;
+            }
+
+            titleIds.Add(elem.DelemenId);
+            titleBlock.Add(content);
         }
 
         result.TotalChecks++;
@@ -166,7 +200,6 @@ public partial class ValidationService
             return result;
         }
         result.PassedChecks++;
-        titleElementId = titleIds.First();
 
         var firstElement = bodyElements[0];
         result.TotalChecks++;
@@ -182,21 +215,6 @@ public partial class ValidationService
             return result;
         }
         result.PassedChecks++;
-
-        var titleBlock = new List<ElementContentInfo>();
-        foreach (var elem in bodyElements)
-        {
-            if (!titleIds.Contains(elem.DelemenId))
-                break;
-
-            if (!contentById.TryGetValue(elem.DelemenId, out var content))
-            {
-                content = ParseElementContent(elem.DelemenJsonTree);
-                contentById[elem.DelemenId] = content;
-            }
-
-            titleBlock.Add(content);
-        }
 
         if (titleBlock.Count == 0)
         {
@@ -398,8 +416,13 @@ public partial class ValidationService
                 .Select(pf => pf!.DfpJc ?? "unknown")
                 .Distinct()
                 .ToList();
+            var expectedNormalized = NormalizeAlignmentValue(expectedAlignment);
+            var normalizedAlignments = actualAlignments
+                .Select(NormalizeAlignmentValue)
+                .Distinct()
+                .ToList();
 
-            if (actualAlignments.All(a => string.Equals(a, expectedAlignment, StringComparison.OrdinalIgnoreCase)))
+            if (normalizedAlignments.All(a => string.Equals(a, expectedNormalized, StringComparison.OrdinalIgnoreCase)))
             {
                 result.PassedChecks++;
             }
@@ -549,29 +572,59 @@ public partial class ValidationService
                 return result;
             }
 
+            var textFormatById = BuildTextFormatMap(textFormats);
+            var titleRuns = GetMeaningfulRuns(titleBlock.SelectMany(content => content.TextRuns));
+
             var expectedFontName = rule?.Font?.FontName?.Value;
             if (!string.IsNullOrWhiteSpace(expectedFontName))
             {
                 result.TotalChecks++;
-                var actuals = textFormats
-                    .Select(tf => tf.DftxFontAscii ?? "unknown")
-                    .Distinct()
-                    .ToList();
-
-                if (actuals.All(a => string.Equals(a, expectedFontName, StringComparison.OrdinalIgnoreCase)))
+                if (titleRuns.Count > 0)
                 {
-                    result.PassedChecks++;
+                    var mismatches = CollectRunMismatches(
+                        titleRuns,
+                        textFormatById,
+                        tf => !string.Equals(tf.DftxFontAscii ?? "unknown", expectedFontName, StringComparison.OrdinalIgnoreCase),
+                        tf => tf.DftxFontAscii ?? "unknown");
+
+                    if (mismatches.Count == 0)
+                    {
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Font judul bab tidak sesuai",
+                            Expected = expectedFontName,
+                            Actual = BuildMismatchSummary(mismatches)
+                        });
+                    }
                 }
                 else
                 {
-                    result.Errors.Add(new ValidationError
+                    var actuals = textFormats
+                        .Select(tf => tf.DftxFontAscii ?? "unknown")
+                        .Distinct()
+                        .ToList();
+
+                    if (actuals.All(a => string.Equals(a, expectedFontName, StringComparison.OrdinalIgnoreCase)))
                     {
-                        Category = "Isi Buku",
-                        Field = "judul_bab",
-                        Message = "Font judul bab tidak sesuai",
-                        Expected = expectedFontName,
-                        Actual = string.Join(", ", actuals)
-                    });
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Font judul bab tidak sesuai",
+                            Expected = expectedFontName,
+                            Actual = string.Join(", ", actuals)
+                        });
+                    }
                 }
             }
 
@@ -581,24 +634,53 @@ public partial class ValidationService
                 result.TotalChecks++;
                 var expectedPt = expectedFontSize.Value;
                 var expectedHalfPt = expectedPt * 2m;
-                var actuals = textFormats
-                    .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
-                    .ToList();
-
-                if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
+                if (titleRuns.Count > 0)
                 {
-                    result.PassedChecks++;
+                    var mismatches = CollectRunMismatches(
+                        titleRuns,
+                        textFormatById,
+                        tf => !tf.DftxSizeHalfpt.HasValue || Math.Abs(tf.DftxSizeHalfpt.Value - expectedHalfPt) > 0.5m,
+                        tf => tf.DftxSizeHalfpt.HasValue
+                            ? (tf.DftxSizeHalfpt.Value / 2m).ToString(CultureInfo.InvariantCulture)
+                            : "unknown");
+
+                    if (mismatches.Count == 0)
+                    {
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Ukuran font judul bab tidak sesuai",
+                            Expected = expectedPt.ToString(CultureInfo.InvariantCulture),
+                            Actual = BuildMismatchSummary(mismatches)
+                        });
+                    }
                 }
                 else
                 {
-                    result.Errors.Add(new ValidationError
+                    var actuals = textFormats
+                        .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
+                        .ToList();
+
+                    if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
                     {
-                        Category = "Isi Buku",
-                        Field = "judul_bab",
-                        Message = "Ukuran font judul bab tidak sesuai",
-                        Expected = expectedPt.ToString(CultureInfo.InvariantCulture),
-                        Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value / 2m).ToString(CultureInfo.InvariantCulture) : "unknown"))
-                    });
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Ukuran font judul bab tidak sesuai",
+                            Expected = expectedPt.ToString(CultureInfo.InvariantCulture),
+                            Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value / 2m).ToString(CultureInfo.InvariantCulture) : "unknown"))
+                        });
+                    }
                 }
             }
 
@@ -606,22 +688,49 @@ public partial class ValidationService
             if (expectedBold.HasValue)
             {
                 result.TotalChecks++;
-                var actuals = textFormats.Select(tf => tf.DftxBold).Distinct().ToList();
-
-                if (actuals.All(a => a.HasValue && a.Value == expectedBold.Value))
+                if (titleRuns.Count > 0)
                 {
-                    result.PassedChecks++;
+                    var mismatches = CollectRunMismatches(
+                        titleRuns,
+                        textFormatById,
+                        tf => !tf.DftxBold.HasValue || tf.DftxBold.Value != expectedBold.Value,
+                        tf => tf.DftxBold.HasValue ? (tf.DftxBold.Value ? "Bold" : "Tidak Bold") : "unknown");
+
+                    if (mismatches.Count == 0)
+                    {
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Bold judul bab tidak sesuai",
+                            Expected = expectedBold.Value.ToString(),
+                            Actual = BuildMismatchSummary(mismatches)
+                        });
+                    }
                 }
                 else
                 {
-                    result.Errors.Add(new ValidationError
+                    var actuals = textFormats.Select(tf => tf.DftxBold).Distinct().ToList();
+
+                    if (actuals.All(a => a.HasValue && a.Value == expectedBold.Value))
                     {
-                        Category = "Isi Buku",
-                        Field = "judul_bab",
-                        Message = "Bold judul bab tidak sesuai",
-                        Expected = expectedBold.Value.ToString(),
-                        Actual = string.Join(", ", actuals.Select(a => a.HasValue ? a.Value.ToString() : "unknown"))
-                    });
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Bold judul bab tidak sesuai",
+                            Expected = expectedBold.Value.ToString(),
+                            Actual = string.Join(", ", actuals.Select(a => a.HasValue ? a.Value.ToString() : "unknown"))
+                        });
+                    }
                 }
             }
 
@@ -629,22 +738,49 @@ public partial class ValidationService
             if (expectedItalic.HasValue)
             {
                 result.TotalChecks++;
-                var actuals = textFormats.Select(tf => tf.DftxItalic).Distinct().ToList();
-
-                if (actuals.All(a => a.HasValue && a.Value == expectedItalic.Value))
+                if (titleRuns.Count > 0)
                 {
-                    result.PassedChecks++;
+                    var mismatches = CollectRunMismatches(
+                        titleRuns,
+                        textFormatById,
+                        tf => !tf.DftxItalic.HasValue || tf.DftxItalic.Value != expectedItalic.Value,
+                        tf => tf.DftxItalic.HasValue ? (tf.DftxItalic.Value ? "Italic" : "Tidak Italic") : "unknown");
+
+                    if (mismatches.Count == 0)
+                    {
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Italic judul bab tidak sesuai",
+                            Expected = expectedItalic.Value.ToString(),
+                            Actual = BuildMismatchSummary(mismatches)
+                        });
+                    }
                 }
                 else
                 {
-                    result.Errors.Add(new ValidationError
+                    var actuals = textFormats.Select(tf => tf.DftxItalic).Distinct().ToList();
+
+                    if (actuals.All(a => a.HasValue && a.Value == expectedItalic.Value))
                     {
-                        Category = "Isi Buku",
-                        Field = "judul_bab",
-                        Message = "Italic judul bab tidak sesuai",
-                        Expected = expectedItalic.Value.ToString(),
-                        Actual = string.Join(", ", actuals.Select(a => a.HasValue ? a.Value.ToString() : "unknown"))
-                    });
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Italic judul bab tidak sesuai",
+                            Expected = expectedItalic.Value.ToString(),
+                            Actual = string.Join(", ", actuals.Select(a => a.HasValue ? a.Value.ToString() : "unknown"))
+                        });
+                    }
                 }
             }
 
@@ -652,26 +788,63 @@ public partial class ValidationService
             if (expectedUnderline.HasValue)
             {
                 result.TotalChecks++;
-                var actuals = textFormats.Select(tf => tf.DftxUnderline).Distinct().ToList();
-
-                bool matches = expectedUnderline.Value
-                    ? actuals.All(a => !string.IsNullOrWhiteSpace(a) && !a.Equals("none", StringComparison.OrdinalIgnoreCase))
-                    : actuals.All(a => string.IsNullOrWhiteSpace(a) || a.Equals("none", StringComparison.OrdinalIgnoreCase));
-
-                if (matches)
+                if (titleRuns.Count > 0)
                 {
-                    result.PassedChecks++;
+                    var mismatches = CollectRunMismatches(
+                        titleRuns,
+                        textFormatById,
+                        tf =>
+                        {
+                            var hasUnderline = !string.IsNullOrWhiteSpace(tf.DftxUnderline) &&
+                                !tf.DftxUnderline.Equals("none", StringComparison.OrdinalIgnoreCase);
+                            return hasUnderline != expectedUnderline.Value;
+                        },
+                        tf =>
+                        {
+                            var hasUnderline = !string.IsNullOrWhiteSpace(tf.DftxUnderline) &&
+                                !tf.DftxUnderline.Equals("none", StringComparison.OrdinalIgnoreCase);
+                            return hasUnderline ? "Underline" : "Tidak Underline";
+                        });
+
+                    if (mismatches.Count == 0)
+                    {
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Underline judul bab tidak sesuai",
+                            Expected = expectedUnderline.Value ? "true" : "false",
+                            Actual = BuildMismatchSummary(mismatches)
+                        });
+                    }
                 }
                 else
                 {
-                    result.Errors.Add(new ValidationError
+                    var actuals = textFormats.Select(tf => tf.DftxUnderline).Distinct().ToList();
+
+                    bool matches = expectedUnderline.Value
+                        ? actuals.All(a => !string.IsNullOrWhiteSpace(a) && !a.Equals("none", StringComparison.OrdinalIgnoreCase))
+                        : actuals.All(a => string.IsNullOrWhiteSpace(a) || a.Equals("none", StringComparison.OrdinalIgnoreCase));
+
+                    if (matches)
                     {
-                        Category = "Isi Buku",
-                        Field = "judul_bab",
-                        Message = "Underline judul bab tidak sesuai",
-                        Expected = expectedUnderline.Value ? "true" : "false",
-                        Actual = string.Join(", ", actuals.Select(a => a ?? "none"))
-                    });
+                        result.PassedChecks++;
+                    }
+                    else
+                    {
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_bab",
+                            Message = "Underline judul bab tidak sesuai",
+                            Expected = expectedUnderline.Value ? "true" : "false",
+                            Actual = string.Join(", ", actuals.Select(a => a ?? "none"))
+                        });
+                    }
                 }
             }
         }
@@ -704,13 +877,11 @@ public partial class ValidationService
         if (result.Errors.Count > 0 && titleIds.Count > 0)
         {
             var pageNumbers = await LoadPageNumbersAsync(titleIds, cancellationToken);
-            var mergedBbox = await LoadMergedBboxAsync(titleIds, cancellationToken);
-            
-            if (pageNumbers.Count > 0)
+            var pageBboxMap = await LoadPageBboxMapAsync(titleIds, cancellationToken);
+            var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
+
+            if (locations.Count > 0)
             {
-                var firstPageNumber = pageNumbers.Values.Min();
-                var locations = CreateLocations(firstPageNumber, mergedBbox);
-                
                 foreach (var error in result.Errors)
                 {
                     if (string.Equals(error.Field, "judul_bab", StringComparison.OrdinalIgnoreCase) && error.Locations.Count == 0)
@@ -831,7 +1002,14 @@ public partial class ValidationService
         public uint? ParagraphFormatId { get; set; }
         public string PlainText { get; set; } = string.Empty;
         public List<uint> TextFormatIds { get; } = new();
+        public List<TextRunInfo> TextRuns { get; } = new();
         public bool HasNonTextContent { get; set; }
+    }
+
+    private sealed class TextRunInfo
+    {
+        public string Text { get; set; } = string.Empty;
+        public uint? TextFormatId { get; set; }
     }
 
     private sealed class BodyElementInfo
@@ -858,6 +1036,7 @@ public partial class ValidationService
             if (root.TryGetProperty("text", out var textEl) && textEl.ValueKind == JsonValueKind.String)
             {
                 info.PlainText = textEl.GetString() ?? string.Empty;
+                info.TextRuns.Add(new TextRunInfo { Text = info.PlainText });
                 return info;
             }
 
@@ -875,17 +1054,35 @@ public partial class ValidationService
 
                     if (type == "text" || type == "field")
                     {
-                        if (item.TryGetProperty("value", out var valueEl) && valueEl.ValueKind == JsonValueKind.String)
-                            sb.Append(valueEl.GetString());
+                        var value = item.TryGetProperty("value", out var valueEl) && valueEl.ValueKind == JsonValueKind.String
+                            ? valueEl.GetString()
+                            : null;
 
-                        if (item.TryGetProperty("dftx_id", out var dftxEl) && dftxEl.TryGetUInt32(out var dftxId))
-                            info.TextFormatIds.Add(dftxId);
+                        if (!string.IsNullOrEmpty(value))
+                            sb.Append(value);
 
+                        uint? runFormatId = null;
                         if (type == "field" &&
                             item.TryGetProperty("result_dftx_id", out var resultEl) &&
                             resultEl.TryGetUInt32(out var resultId))
                         {
-                            info.TextFormatIds.Add(resultId);
+                            runFormatId = resultId;
+                        }
+                        else if (item.TryGetProperty("dftx_id", out var dftxEl) && dftxEl.TryGetUInt32(out var dftxId))
+                        {
+                            runFormatId = dftxId;
+                        }
+
+                        if (runFormatId.HasValue)
+                            info.TextFormatIds.Add(runFormatId.Value);
+
+                        if (!string.IsNullOrEmpty(value))
+                        {
+                            info.TextRuns.Add(new TextRunInfo
+                            {
+                                Text = value,
+                                TextFormatId = runFormatId
+                            });
                         }
                     }
                     else if (type == "math")
@@ -908,6 +1105,132 @@ public partial class ValidationService
         }
 
         return info;
+    }
+
+    private static Dictionary<uint, DokumenFormatText> BuildTextFormatMap(IEnumerable<DokumenFormatText> textFormats)
+    {
+        return textFormats
+            .GroupBy(tf => tf.DftxId)
+            .ToDictionary(g => g.Key, g => g.First());
+    }
+
+    private static List<TextRunInfo> GetMeaningfulRuns(IEnumerable<TextRunInfo> runs)
+    {
+        var meaningful = new List<TextRunInfo>();
+        foreach (var run in runs)
+        {
+            if (!run.TextFormatId.HasValue)
+                continue;
+
+            var normalized = NormalizeWhitespace(run.Text);
+            if (string.IsNullOrWhiteSpace(normalized))
+                continue;
+
+            meaningful.Add(run);
+        }
+
+        return meaningful;
+    }
+
+    private static List<(string Text, string Actual)> CollectRunMismatches(
+        IEnumerable<TextRunInfo> runs,
+        Dictionary<uint, DokumenFormatText> formatById,
+        Func<DokumenFormatText, bool> isMismatch,
+        Func<DokumenFormatText, string> actualFormatter)
+    {
+        var mismatches = new List<(string Text, string Actual)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var run in runs)
+        {
+            if (!run.TextFormatId.HasValue)
+                continue;
+
+            var normalizedText = NormalizeRunText(run.Text);
+            if (string.IsNullOrWhiteSpace(normalizedText))
+                continue;
+
+            if (!formatById.TryGetValue(run.TextFormatId.Value, out var format))
+            {
+                var key = normalizedText + "||unknown";
+                if (seen.Add(key))
+                    mismatches.Add((normalizedText, "unknown"));
+                continue;
+            }
+
+            if (isMismatch(format))
+            {
+                var actual = actualFormatter(format);
+                var key = normalizedText + "||" + actual;
+                if (seen.Add(key))
+                    mismatches.Add((normalizedText, actual));
+            }
+        }
+
+        return mismatches;
+    }
+
+    private static string BuildMismatchSummary(List<(string Text, string Actual)> mismatches)
+    {
+        if (mismatches.Count == 0)
+            return string.Empty;
+
+        const int maxItems = 5;
+        var items = mismatches
+            .Select(m => $"'{m.Text}' -> {m.Actual}")
+            .ToList();
+
+        var shown = items.Take(maxItems).ToList();
+        var remaining = items.Count - shown.Count;
+        if (remaining > 0)
+            shown.Add($"+{remaining} lainnya");
+
+        return string.Join("; ", shown);
+    }
+
+    private static string NormalizeRunText(string text)
+    {
+        var normalized = NormalizeWhitespace(text);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return string.Empty;
+
+        const int maxLength = 40;
+        return normalized.Length <= maxLength ? normalized : normalized[..maxLength] + "...";
+    }
+
+    private static bool IsParagraphElement(string? elementType)
+    {
+        if (string.IsNullOrWhiteSpace(elementType))
+            return false;
+
+        return elementType.Equals("paragraph", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsListItemElement(string? elementType)
+    {
+        if (string.IsNullOrWhiteSpace(elementType))
+            return false;
+
+        return elementType.StartsWith("list-item-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int? TryParseListItemLevel(string? elementType, DokumenFormatParagraf? format)
+    {
+        if (!string.IsNullOrWhiteSpace(elementType))
+        {
+            var parts = elementType.Split('-', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 3 &&
+                int.TryParse(parts[^1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var level) &&
+                level >= 0)
+            {
+                return level;
+            }
+        }
+
+        if (format?.DfpListIlvl.HasValue == true)
+            return (int)format.DfpListIlvl.Value;
+
+        return null;
     }
 
     private static List<string> ExtractTitleLines(IEnumerable<ElementContentInfo> titleElements)
@@ -1023,9 +1346,8 @@ public partial class ValidationService
             // Load location for error
             var firstSubchapterId = bodyElements[firstSubchapterIndex.Value].DelemenId;
             var pageNumbers = await LoadPageNumbersAsync(new[] { firstSubchapterId }, cancellationToken);
-            var mergedBbox = await LoadMergedBboxAsync(new[] { firstSubchapterId }, cancellationToken);
-            var pageNumber = pageNumbers.Values.FirstOrDefault();
-            var locations = CreateLocations(pageNumber, mergedBbox);
+            var pageBboxMap = await LoadPageBboxMapAsync(new[] { firstSubchapterId }, cancellationToken);
+            var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
 
             result.Errors.Add(new ValidationError
             {
@@ -1078,7 +1400,13 @@ public partial class ValidationService
                     var id = Convert.ToUInt64(reader["delemen_id"]);
                     var label = reader["label"]?.ToString();
                     if (!string.IsNullOrWhiteSpace(label))
-                        labels[id] = label;
+                    {
+                        if (!labels.TryGetValue(id, out var existing) ||
+                            GetLabelPriority(label) < GetLabelPriority(existing))
+                        {
+                            labels[id] = label;
+                        }
+                    }
                 }
             }
         }
@@ -1093,6 +1421,22 @@ public partial class ValidationService
         }
 
         return labels;
+    }
+
+    private static int GetLabelPriority(string label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+            return int.MaxValue;
+
+        return label.Trim().ToLowerInvariant() switch
+        {
+            "section_header" => 0,
+            "text" => 1,
+            "table" => 2,
+            "image" => 3,
+            "formula" => 4,
+            _ => 10
+        };
     }
 
     private async Task<Dictionary<ulong, int>> LoadPageNumbersAsync(

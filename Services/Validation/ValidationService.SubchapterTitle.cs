@@ -118,7 +118,7 @@ public partial class ValidationService
             cancellationToken);
 
         var orderedElementIds = bodyElements.Select(e => e.DelemenId).ToList();
-        var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => e.DelemenJsonTree);
+        var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => (string?)e.DelemenJsonTree);
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
 
@@ -243,13 +243,13 @@ public partial class ValidationService
             var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
 
             // --- Font Validations ---
-            ValidateSubchapterFont(result, rule, elementTextFormats!, content.TextRuns, plainText, locations);
+            ValidateSubchapterFont(result, rule!, elementTextFormats!, content.TextRuns, plainText, locations);
 
             // --- Paragraph Validations ---
-            ValidateSubchapterParagraph(result, rule, paragraphFormat, plainText, locations);
+            ValidateSubchapterParagraph(result, rule!, paragraphFormat, plainText, locations);
 
             // --- Numbering Validation ---
-            ValidateSubchapterNumbering(result, rule, subchapterNumber, subchapterTitle, plainText, locations);
+            ValidateSubchapterNumbering(result, rule!, subchapterNumber, subchapterTitle, plainText, locations);
 
             if (neighborContexts.TryGetValue(elementId, out var context))
                 ApplyContextToErrors(result.Errors, errorStart, context);

@@ -24,4 +24,12 @@ public class Proposal
 
     [Column("proposal_perpanjangan")]
     public short? ProposalPerpanjangan { get; set; }
+
+    [Column("dosen_pembimbing")]
+    [MaxLength(6)]
+    public string? DosenPembimbing { get; set; }
+
+    [Column("dosen_co_pembimbing")]
+    [MaxLength(6)]
+    public string? DosenCoPembimbing { get; set; }
 }

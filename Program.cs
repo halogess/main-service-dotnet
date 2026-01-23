@@ -2,6 +2,8 @@ using _.Services;
 using ValidasiTugasAkhir.MainService.Services;
 using Microsoft.EntityFrameworkCore;
 
+LoadDotEnvIfPresent();
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
@@ -86,3 +88,36 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+static void LoadDotEnvIfPresent()
+{
+    var envPath = Path.Combine(Directory.GetCurrentDirectory(), ".env");
+    if (!File.Exists(envPath))
+        return;
+
+    foreach (var rawLine in File.ReadLines(envPath))
+    {
+        var line = rawLine.Trim();
+        if (line.Length == 0 || line.StartsWith('#'))
+            continue;
+
+        var separatorIndex = line.IndexOf('=');
+        if (separatorIndex <= 0)
+            continue;
+
+        var key = line[..separatorIndex].Trim();
+        var value = line[(separatorIndex + 1)..].Trim();
+        if (value.Length >= 2 &&
+            ((value.StartsWith('"') && value.EndsWith('"')) ||
+             (value.StartsWith('\'') && value.EndsWith('\''))))
+        {
+            value = value[1..^1];
+        }
+
+        if (string.IsNullOrWhiteSpace(key))
+            continue;
+
+        if (Environment.GetEnvironmentVariable(key) == null)
+            Environment.SetEnvironmentVariable(key, value);
+    }
+}

@@ -380,6 +380,56 @@ public class ListItemIndentationRule
     public DecimalRuleValue? Hanging { get; set; }
 }
 
+// Image Rule (gambar)
+public class ImageRule
+{
+    [JsonPropertyName("paragraph")]
+    public TitleParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("position")]
+    public ImagePositionRule? Position { get; set; }
+}
+
+public class ImagePositionRule
+{
+    [JsonPropertyName("layout_option")]
+    public RuleValue<string>? LayoutOption { get; set; }
+
+    [JsonPropertyName("cegah_melebihi_margin")]
+    public RuleValue<bool>? CegahMelebihiMargin { get; set; }
+
+    [JsonPropertyName("cegah_memenuhi_halaman")]
+    public RuleValue<bool>? CegahMemenuhiHalaman { get; set; }
+}
+
+// Caption Image Rule (caption_gambar)
+public class CaptionImageRule
+{
+    [JsonPropertyName("font")]
+    public TitleFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public TitleParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("numbering")]
+    public CaptionNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("position")]
+    public RuleValue<string>? Position { get; set; }
+}
+
+public class CaptionNumberingRule
+{
+    [JsonPropertyName("number_format")]
+    public RuleValue<string>? NumberFormat { get; set; }
+
+    [JsonPropertyName("case")]
+    public RuleValue<string>? Case { get; set; }
+
+    [JsonPropertyName("enter_after_numbering")]
+    public RuleValue<bool>? EnterAfterNumbering { get; set; }
+}
+
 #endregion
 
 #region Validation Result DTOs
@@ -456,6 +506,7 @@ public partial class ValidationService : IValidationService
     // Conversion constants
     private const decimal TwipsPerCm = 566.929m; // 1 cm = 566.929 twips
     private const decimal TwipsTolerance = 28.35m; // ~0.5mm tolerance
+    private const decimal EmusPerCm = 360000m; // 1 cm = 360,000 EMUs
 
     // Standard paper sizes in twips (width x height for portrait)
     private static readonly Dictionary<string, (uint Width, uint Height)> PaperSizes = new()
@@ -512,9 +563,14 @@ public partial class ValidationService : IValidationService
         result.TotalChecks += listItemResult.TotalChecks;
         result.PassedChecks += listItemResult.PassedChecks;
 
+        // Validate images
+        var imageResult = await ValidateImageAsync(dokumenId, cancellationToken);
+        result.Errors.AddRange(imageResult.Errors);
+        result.TotalChecks += imageResult.TotalChecks;
+        result.PassedChecks += imageResult.PassedChecks;
+
         // TODO: Add more validation categories here
         // - Table validation
-        // - Image validation
         // etc.
 
         return result;
@@ -733,7 +789,7 @@ public partial class ValidationService : IValidationService
     /// </summary>
     protected static List<ErrorLocation> CreateLocations(
         IEnumerable<int> pageNumbers,
-        Dictionary<int, ErrorBbox> pageBboxMap)
+        Dictionary<int, ErrorBbox>? pageBboxMap)
     {
         var pageSet = new HashSet<int>();
         if (pageNumbers != null)
@@ -758,7 +814,10 @@ public partial class ValidationService : IValidationService
 
         foreach (var page in pages)
         {
-            pageBboxMap.TryGetValue(page, out var bbox);
+            ErrorBbox? bbox = null;
+            if (pageBboxMap != null)
+                pageBboxMap.TryGetValue(page, out bbox);
+
             locations.Add(new ErrorLocation
             {
                 HalamanKe = page,

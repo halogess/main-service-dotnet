@@ -406,6 +406,9 @@ public partial class GeminiService
         var contextByIndex = contextErrors.ToDictionary(e => e.Index, e => e);
         foreach (var result in results)
         {
+            if (result.IsError == false)
+                continue;
+
             if (!contextByIndex.TryGetValue(result.Index, out var context))
                 continue;
 

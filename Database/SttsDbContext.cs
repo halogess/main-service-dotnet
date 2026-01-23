@@ -8,6 +8,8 @@ public class SttsDbContext : DbContext
     public DbSet<Mahasiswa> Mahasiswas { get; set; }
     public DbSet<Jurusan> Jurusans { get; set; }
     public DbSet<Proposal> Proposals { get; set; }
+    public DbSet<Dosen> Dosens { get; set; }
+    public DbSet<Karyawan> Karyawans { get; set; }
     
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -63,6 +65,8 @@ public class SttsDbContext : DbContext
             entity.Property(e => e.JurKode).HasColumnName("jur_kode").HasMaxLength(2);
             entity.Property(e => e.JurNama).HasColumnName("jur_nama").HasMaxLength(50);
             entity.Property(e => e.JurSingkat).HasColumnName("jur_singkat").HasMaxLength(20);
+            entity.Property(e => e.JurGelar).HasColumnName("jur_gelar").HasMaxLength(50);
+            entity.Property(e => e.JurFakultas).HasColumnName("jur_fakultas").HasMaxLength(50);
             entity.Property(e => e.JurStatus).HasColumnName("jur_status");
         });
 
@@ -70,6 +74,24 @@ public class SttsDbContext : DbContext
         {
             entity.ToTable("aka_ta_proposal");
             entity.HasKey(e => e.ProposalKode);
+        });
+
+        modelBuilder.Entity<Dosen>(entity =>
+        {
+            entity.ToTable("tk_dosen");
+            entity.HasKey(e => e.DosenKode);
+            entity.Property(e => e.DosenKode).HasColumnName("dosen_kode").HasMaxLength(10);
+            entity.Property(e => e.DosenNamaSk).HasColumnName("dosen_nama_sk").HasMaxLength(255);
+            entity.Property(e => e.DosenStatus).HasColumnName("dosen_status");
+            entity.Property(e => e.KaryawanNip).HasColumnName("karyawan_nip").HasMaxLength(15);
+        });
+
+        modelBuilder.Entity<Karyawan>(entity =>
+        {
+            entity.ToTable("tk_karyawan");
+            entity.HasKey(e => e.KaryawanNip);
+            entity.Property(e => e.KaryawanNip).HasColumnName("karyawan_nip").HasMaxLength(15);
+            entity.Property(e => e.KaryawanStatus).HasColumnName("karyawan_status");
         });
     }
 }

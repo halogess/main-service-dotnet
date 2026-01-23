@@ -12,8 +12,17 @@ public partial class GeminiService
     private static string BuildErrorGuidancePrompt(
         IReadOnlyList<EnhancedValidationError> errors,
         IReadOnlyList<RuleDefinitionPayload> ruleDefinitions,
+        IReadOnlyDictionary<int, OpenXmlContextPayload>? openXmlContexts,
+        IReadOnlyList<PageImageInfo>? pageImages,
         bool strictJson = false)
     {
+        var imageIndexByPage = new Dictionary<int, int>();
+        if (pageImages != null)
+        {
+            foreach (var info in pageImages)
+                imageIndexByPage[info.Page] = info.ImageIndex;
+        }
+
         var errorPayloadWithContext = errors
             .Select(err => new
             {
@@ -46,6 +55,15 @@ public partial class GeminiService
                 page_margin_bottom_cm = err.Error.PageMarginBottomCm,
                 page_margin_left_cm = err.Error.PageMarginLeftCm,
                 page_margin_right_cm = err.Error.PageMarginRightCm,
+                image_page = err.Error.Locations.FirstOrDefault()?.HalamanKe,
+                image_index = err.Error.Locations.FirstOrDefault()?.HalamanKe is int page &&
+                              imageIndexByPage.TryGetValue(page, out var idx)
+                    ? idx
+                    : (int?)null,
+                openxml_context = openXmlContexts != null &&
+                                  openXmlContexts.TryGetValue(err.Index, out var openXml)
+                    ? openXml
+                    : null,
                 location = err.Error.Locations.Count > 0
                     ? new
                     {
@@ -84,6 +102,9 @@ public partial class GeminiService
         var sb = new StringBuilder();
         sb.AppendLine("ATURAN_AKTIF_JSON:");
         sb.AppendLine(JsonSerializer.Serialize(filteredRules, promptJsonOptions));
+        sb.AppendLine("IMAGE_INDEX_MAP_JSON:");
+        sb.AppendLine(JsonSerializer.Serialize(pageImages ?? Array.Empty<PageImageInfo>(), promptJsonOptions));
+        sb.AppendLine("Catatan: Gambar halaman penuh dikirim sebagai inline data sesuai IMAGE_INDEX_MAP_JSON.");
         sb.AppendLine("KESALAHAN_JSON:");
         sb.AppendLine(JsonSerializer.Serialize(errorPayloadWithContext, promptJsonOptions));
 
@@ -91,6 +112,7 @@ public partial class GeminiService
         {
             sb.AppendLine("Output JSON valid saja, tanpa teks lain, tanpa markdown/backticks, tanpa trailing comma.");
             sb.AppendLine("Jangan tambah field di luar format yang diminta.");
+            sb.AppendLine("Wajib isi is_error dan skip_reason (skip_reason boleh kosong jika is_error=true).");
             sb.AppendLine("Explanation sebutkan yang ditemukan vs seharusnya; langkah sebut objek dan gunakan istilah MS Word bahasa Inggris.");
         }
 

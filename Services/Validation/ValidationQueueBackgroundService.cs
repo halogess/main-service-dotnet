@@ -319,6 +319,25 @@ public class ValidationQueueBackgroundService : BackgroundService
                         .GroupBy(d => d.Index)
                         .ToDictionary(g => g.Key, g => g.First());
 
+                    static bool HasEmptySteps(GeminiErrorDetail detail)
+                        => detail.Steps == null ||
+                           detail.Steps.Count == 0 ||
+                           detail.Steps.All(step => string.IsNullOrWhiteSpace(step));
+
+                    static bool ShouldRequeue(GeminiErrorDetail detail)
+                    {
+                        if (detail.IsError == false && string.IsNullOrWhiteSpace(detail.SkipReason))
+                            return true;
+                        return HasEmptySteps(detail);
+                    }
+
+                    var emptyStepIndices = detailByBatchIndex
+                        .Where(pair => ShouldRequeue(pair.Value))
+                        .Select(pair => pair.Key)
+                        .ToList();
+                    foreach (var emptyIndex in emptyStepIndices)
+                        detailByBatchIndex.Remove(emptyIndex);
+
                     foreach (var pair in detailByBatchIndex)
                     {
                         var item = batchItems[pair.Key];
@@ -328,6 +347,14 @@ public class ValidationQueueBackgroundService : BackgroundService
                     }
 
                     var missing = GetMissingIndices(detailByBatchIndex.Keys, batchItems.Count);
+                    if (emptyStepIndices.Count > 0)
+                    {
+                        _logger.LogWarning(
+                            "[BATCH] Empty steps or missing skip_reason for {EmptyCount}/{BatchSize} items in batch {BatchNum}; requeueing",
+                            emptyStepIndices.Count,
+                            batchItems.Count,
+                            currentBatchNumber);
+                    }
                     if (missing.Count > 0)
                     {
                         _logger.LogWarning(
@@ -414,6 +441,7 @@ public class ValidationQueueBackgroundService : BackgroundService
 
         // Group errors by category + elemen_id (fallback to lokasi when elemen_id is missing)
         var errorGroups = new Dictionary<string, (Kesalahan Parent, List<KesalahanDetail> Details)>();
+        var skipLogs = new List<LlmApiLog>();
         var errorsToStore = llmErrors;
         for (int i = 0; i < errorsToStore.Count; i++)
         {
@@ -421,6 +449,24 @@ public class ValidationQueueBackgroundService : BackgroundService
             GeminiErrorDetail? detail = null;
             if (detailByIndex.TryGetValue(i, out var found))
                 detail = found;
+
+            if (detail?.IsError == false)
+            {
+                skipLogs.Add(new LlmApiLog
+                {
+                    LogMessage = BuildSkipLogMessage(detail.SkipReason),
+                    LogErrorCode = 0,
+                    AntrianId = antrianId,
+                    ApiKeyId = 0,
+                    LogTokensUsed = 0,
+                    LogBatchNumber = 0,
+                    LogTotalBatches = 0,
+                    LogErrorCount = 0,
+                    LogKeyTokensUsed = 0,
+                    LogCreatedAt = DateTime.Now
+                });
+                continue;
+            }
 
             var title = !string.IsNullOrWhiteSpace(detail?.Title) ? detail!.Title : error.Message;
             title = Truncate(title, 255);
@@ -464,6 +510,9 @@ public class ValidationQueueBackgroundService : BackgroundService
             });
         }
 
+        if (skipLogs.Count > 0)
+            db.LlmApiLogs.AddRange(skipLogs);
+
         // Save to database
         foreach (var (_, group) in errorGroups)
         {
@@ -477,6 +526,9 @@ public class ValidationQueueBackgroundService : BackgroundService
             }
             db.KesalahanDetails.AddRange(group.Details);
         }
+
+        if (errorGroups.Count == 0 && skipLogs.Count > 0)
+            await db.SaveChangesAsync(cancellationToken);
     }
 
     private async Task<List<GeminiErrorDetail>> FetchGuidanceForBatchAsync(
@@ -505,7 +557,8 @@ public class ValidationQueueBackgroundService : BackgroundService
                 cancellationToken,
                 antrianId,
                 batchNumber,
-                totalBatches);
+                totalBatches,
+                dokumenId);
         }
         catch (Exception ex)
         {
@@ -568,7 +621,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         var sectionIndices = pageErrorIndices
             .Select(i => errors[i].SectionIndex)
             .Where(i => i.HasValue)
-            .Select(i => i.Value)
+            .Select(i => i!.Value)
             .ToHashSet();
 
         var sectionContexts = await LoadSectionContextsAsync(
@@ -711,7 +764,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         var sectionIndices = groupErrors
             .Select(e => e.SectionIndex)
             .Where(i => i.HasValue)
-            .Select(i => i.Value)
+            .Select(i => i!.Value)
             .Distinct()
             .OrderBy(i => i)
             .ToList();
@@ -789,7 +842,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         var sectionIndices = groupErrors
             .Select(e => e.SectionIndex)
             .Where(i => i.HasValue)
-            .Select(i => i.Value)
+            .Select(i => i!.Value)
             .Distinct()
             .OrderBy(i => i)
             .ToList();
@@ -1184,5 +1237,14 @@ public class ValidationQueueBackgroundService : BackgroundService
             return value;
 
         return value[..maxLength];
+    }
+
+    private static string BuildSkipLogMessage(string? skipReason)
+    {
+        var message = string.IsNullOrWhiteSpace(skipReason)
+            ? "skip"
+            : $"skip:{skipReason.Trim().Replace('\r', ' ').Replace('\n', ' ')}";
+
+        return message.Length <= 50 ? message : message[..50];
     }
 }

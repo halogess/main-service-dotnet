@@ -136,8 +136,8 @@ public class RulesController : ControllerBase
         return Ok(new { message = "Aturan berhasil dibuat", aturan_id = aturan.AturanId });
     }
 
-    // PUT: api/rules/{id} - Update aturan with details
-    [HttpPut("{id}")]
+    // PATCH: api/rules/{id} - Update aturan with details
+    [HttpPatch("{id}")]
     public async Task<IActionResult> Update(uint id, [FromBody] RulesUpdateRequest request)
     {
         var aturan = await _db.Aturans.FindAsync(id);

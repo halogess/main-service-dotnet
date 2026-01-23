@@ -29,6 +29,9 @@ public partial class GeminiService : IGeminiService
     private readonly double _generationTopP;
     private readonly int _generationTopK;
     private readonly int _generationMaxOutputTokens;
+    private readonly int _generationThinkingBudget;
+    private readonly bool _enableThinking;
+    private readonly bool _enableLlm;
     private readonly int _maxParseAttempts;
     private readonly TimeSpan _parseRetryDelay;
 
@@ -76,6 +79,8 @@ public partial class GeminiService : IGeminiService
         ""type"": ""object"",
         ""properties"": {
           ""index"": { ""type"": ""integer"", ""minimum"": 0 },
+          ""is_error"": { ""type"": ""boolean"" },
+          ""skip_reason"": { ""type"": ""string"", ""maxLength"": 200 },
           ""title"": { ""type"": ""string"", ""maxLength"": 100 },
           ""explanation"": { ""type"": ""string"", ""maxLength"": 500 },
           ""steps"": {
@@ -92,7 +97,7 @@ public partial class GeminiService : IGeminiService
             }
           }
         },
-        ""required"": [""index"", ""title"", ""explanation"", ""steps"", ""location""]
+        ""required"": [""index"", ""is_error"", ""skip_reason"", ""title"", ""explanation"", ""steps"", ""location""]
       }
     }
   },
@@ -118,6 +123,9 @@ public partial class GeminiService : IGeminiService
         _generationTopP = _configuration.GetValue("Gemini:TopP", 0.8);
         _generationTopK = _configuration.GetValue("Gemini:TopK", 20);
         _generationMaxOutputTokens = _configuration.GetValue("Gemini:MaxOutputTokens", 6000);
+        _generationThinkingBudget = Math.Max(0, _configuration.GetValue("Gemini:ThinkingBudget", 1024));
+        _enableThinking = _configuration.GetValue("Gemini:EnableThinking", _generationThinkingBudget > 0);
+        _enableLlm = _configuration.GetValue("Gemini:EnableLlm", true);
         _maxParseAttempts = Math.Max(1, _configuration.GetValue("Gemini:MaxParseAttempts", 3));
         var parseDelaySeconds = Math.Max(0, _configuration.GetValue("Gemini:ParseRetryDelaySeconds", 2));
         _parseRetryDelay = TimeSpan.FromSeconds(parseDelaySeconds);
@@ -224,15 +232,22 @@ public partial class GeminiService : IGeminiService
         CancellationToken cancellationToken = default,
         uint? antrianId = null,
         int? batchNumber = null,
-        int? totalBatches = null)
+        int? totalBatches = null,
+        uint? dokumenId = null)
     {
         if (errors.Count == 0)
             return new List<GeminiErrorDetail>();
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (!_enableLlm)
+        {
+            _logger.LogInformation("Gemini LLM disabled via config; using fallback guidance.");
+            return BuildFallbackGuidance(errors, activeRules);
+        }
+
         // Check cache first
-        var cacheKey = GenerateCacheKey(errors);
+        var cacheKey = GenerateCacheKey(errors, dokumenId);
         if (_guidanceCache.TryGetValue(cacheKey, out var cached) && !cached.IsExpired)
         {
             _logger.LogInformation("Cache hit for error guidance (key: {Key})", cacheKey[..8]);
@@ -260,7 +275,19 @@ public partial class GeminiService : IGeminiService
             errorCount: errors.Count);
 
         var (enhancedErrors, ruleDefinitions) = BuildEnhancedErrors(errors, activeRules);
-        var prompt = BuildErrorGuidancePrompt(enhancedErrors, ruleDefinitions, strictJson: true);
+        Dictionary<int, OpenXmlContextPayload>? openXmlContexts = null;
+        List<PageImageInfo>? pageImages = null;
+        List<LlmImagePayload>? imagePayloads = null;
+
+        if (dokumenId.HasValue)
+        {
+            openXmlContexts = await BuildOpenXmlContextsAsync(dokumenId.Value, errors, cancellationToken);
+            var imageResult = await LoadPageImagesAsync(dokumenId.Value, errors, cancellationToken);
+            pageImages = imageResult.Infos;
+            imagePayloads = imageResult.Payloads;
+        }
+
+        var prompt = BuildErrorGuidancePrompt(enhancedErrors, ruleDefinitions, openXmlContexts, pageImages, strictJson: true);
         _logger.LogDebug("Error guidance prompt length: {Length} chars, error count: {Count}", prompt.Length, errors.Count);
         
         var generationConfig = new Dictionary<string, object>
@@ -277,6 +304,14 @@ public partial class GeminiService : IGeminiService
             generationConfig["responseSchema"] = ErrorGuidanceSchema;
         }
 
+        if (_enableThinking && _generationThinkingBudget > 0 && SupportsThinking(_structuredModel))
+        {
+            generationConfig["thinkingConfig"] = new Dictionary<string, object>
+            {
+                ["thinkingBudget"] = _generationThinkingBudget
+            };
+        }
+
         string response = string.Empty;
         List<GeminiErrorDetail> results = new();
         bool parsed = false;
@@ -287,6 +322,7 @@ public partial class GeminiService : IGeminiService
                 prompt,
                 _errorGuidanceSystemInstruction,
                 generationConfig,
+                imagePayloads,
                 cancellationToken,
                 _structuredModel,
                 antrianId,
@@ -351,6 +387,70 @@ public partial class GeminiService : IGeminiService
         return results;
     }
 
+    private List<GeminiErrorDetail> BuildFallbackGuidance(
+        IReadOnlyList<ValidationError> errors,
+        IReadOnlyList<AturanDetail> activeRules)
+    {
+        var (enhancedErrors, _) = BuildEnhancedErrors(errors, activeRules);
+        var results = new List<GeminiErrorDetail>(enhancedErrors.Count);
+
+        foreach (var context in enhancedErrors)
+        {
+            var error = context.Error;
+            results.Add(new GeminiErrorDetail
+            {
+                Index = context.Index,
+                IsError = true,
+                SkipReason = string.Empty,
+                Title = BuildFallbackTitle(error),
+                Explanation = BuildFallbackExplanation(error),
+                Steps = BuildFallbackSteps(context),
+                Location = BuildFallbackLocation(error)
+            });
+        }
+
+        return results;
+    }
+
+    private static string BuildFallbackTitle(ValidationError error)
+    {
+        var title = !string.IsNullOrWhiteSpace(error.Message)
+            ? error.Message
+            : "Kesalahan format dokumen";
+        return title.Length <= 100 ? title : title[..100];
+    }
+
+    private static string BuildFallbackExplanation(ValidationError error)
+    {
+        var message = string.IsNullOrWhiteSpace(error.Message)
+            ? "Perlu perbaikan format."
+            : error.Message;
+
+        if (string.IsNullOrWhiteSpace(error.Expected) && string.IsNullOrWhiteSpace(error.Actual))
+            return message;
+
+        var expected = string.IsNullOrWhiteSpace(error.Expected) ? "-" : error.Expected;
+        var actual = string.IsNullOrWhiteSpace(error.Actual) ? "-" : error.Actual;
+        return $"{message} (expected: {expected}, actual: {actual})";
+    }
+
+    private static GeminiErrorLocation BuildFallbackLocation(ValidationError error)
+    {
+        var location = new GeminiErrorLocation
+        {
+            HalamanKe = 0,
+            Section = "-"
+        };
+
+        if (error.Locations.Count > 0 && error.Locations[0] != null && error.Locations[0].HalamanKe > 0)
+            location.HalamanKe = error.Locations[0].HalamanKe;
+
+        if (error.SectionIndex.HasValue)
+            location.Section = error.SectionIndex.Value.ToString(CultureInfo.InvariantCulture);
+
+        return location;
+    }
+
     private void LogGuidanceDiagnostics(List<GeminiErrorDetail> results, string response)
     {
         if (results.Count == 0)
@@ -374,10 +474,12 @@ public partial class GeminiService : IGeminiService
         }
     }
 
-    private static string GenerateCacheKey(IReadOnlyList<ValidationError> errors)
+    private static string GenerateCacheKey(IReadOnlyList<ValidationError> errors, uint? dokumenId)
     {
         // Create a signature based on error category, field, and message
-        var signature = string.Join("|", errors.Select(e => $"{e.Category}:{e.Field}:{e.Message}"));
+        var signature = (dokumenId.HasValue ? dokumenId.Value.ToString() : "doc:none") + "|" +
+            string.Join("|", errors.Select(e =>
+                $"{e.Category}:{e.Field}:{e.Message}:{e.Expected}:{e.Actual}:{e.DokumenElemenId}:{e.SectionIndex}:{e.PageRange}"));
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(signature));
         return Convert.ToHexString(bytes);
     }
@@ -467,6 +569,7 @@ public partial class GeminiService : IGeminiService
         string prompt,
         string? systemInstruction,
         object generationConfig,
+        IReadOnlyList<LlmImagePayload>? imagePayloads,
         CancellationToken cancellationToken = default,
         string? modelOverride = null,
         uint? antrianId = null,
@@ -485,6 +588,7 @@ public partial class GeminiService : IGeminiService
                     prompt,
                     systemInstruction,
                     generationConfig,
+                    imagePayloads,
                     cancellationToken,
                     currentModel,
                     antrianId,
@@ -731,6 +835,7 @@ public partial class GeminiService : IGeminiService
         string prompt,
         string? systemInstruction,
         object generationConfig,
+        IReadOnlyList<LlmImagePayload>? imagePayloads,
         CancellationToken cancellationToken = default,
         string? modelOverride = null,
         uint? antrianId = null,
@@ -779,6 +884,29 @@ public partial class GeminiService : IGeminiService
             _logger.LogInformation("System instruction inlined into prompt for model: {Model}", model);
         }
 
+        var parts = new List<object>
+        {
+            new { text = effectivePrompt }
+        };
+
+        if (imagePayloads != null && SupportsImages(model))
+        {
+            foreach (var image in imagePayloads)
+            {
+                if (string.IsNullOrWhiteSpace(image.Base64))
+                    continue;
+
+                parts.Add(new
+                {
+                    inlineData = new
+                    {
+                        mimeType = image.MimeType,
+                        data = image.Base64
+                    }
+                });
+            }
+        }
+
         var requestBody = new Dictionary<string, object?>
         {
             ["contents"] = new[]
@@ -786,10 +914,7 @@ public partial class GeminiService : IGeminiService
                 new
                 {
                     role = "user",
-                    parts = new[]
-                    {
-                        new { text = effectivePrompt }
-                    }
+                    parts = parts.ToArray()
                 }
             },
             ["generationConfig"] = generationConfig
@@ -872,15 +997,15 @@ public partial class GeminiService : IGeminiService
 
             var result = JsonSerializer.Deserialize<JsonElement>(responseBody);
             LogResponseMetadata(result);
-            var parts = result
+            var responseParts = result
                 .GetProperty("candidates")[0]
                 .GetProperty("content")
                 .GetProperty("parts");
 
             var textBuilder = new StringBuilder();
-            if (parts.ValueKind == JsonValueKind.Array)
+            if (responseParts.ValueKind == JsonValueKind.Array)
             {
-                foreach (var part in parts.EnumerateArray())
+                foreach (var part in responseParts.EnumerateArray())
                 {
                     if (part.ValueKind != JsonValueKind.Object)
                         continue;
@@ -1181,6 +1306,27 @@ public partial class GeminiService : IGeminiService
 
     private static bool SupportsResponseSchema(string? model)
         => !IsGemmaModel(model);
+
+    private static bool SupportsThinking(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return false;
+
+        var name = model.Trim();
+        var lastSlash = name.LastIndexOf('/');
+        if (lastSlash >= 0 && lastSlash < name.Length - 1)
+            name = name[(lastSlash + 1)..];
+
+        return name.StartsWith("gemini-2.5", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool SupportsImages(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return false;
+
+        return !IsGemmaModel(model);
+    }
 
     private static bool IsGemmaModel(string? model)
     {

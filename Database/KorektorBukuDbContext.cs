@@ -32,6 +32,7 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<GeminiApiKey> GeminiApiKeys { get; set; }
     public DbSet<Template> Templates { get; set; }
     public DbSet<TemplateDetail> TemplateDetails { get; set; }
+    public DbSet<TemplateGeneration> TemplateGenerations { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

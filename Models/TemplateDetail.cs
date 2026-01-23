@@ -27,6 +27,9 @@ public class TemplateDetail
     [MaxLength(100)]
     public string? TemplateDetailCatatan { get; set; }
 
+    [Column("template_detail_optional")]
+    public bool TemplateDetailOptional { get; set; } = false;
+
     // Navigation property
     [ForeignKey("TemplateId")]
     public Template? Template { get; set; }

@@ -136,7 +136,7 @@ public partial class ValidationService
 
         var elementTypeById = bodyElements.ToDictionary(e => e.DelemenId, e => e.DelemenType);
         var orderedElementIds = bodyElements.Select(e => e.DelemenId).ToList();
-        var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => e.DelemenJsonTree);
+        var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => (string?)e.DelemenJsonTree);
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
 

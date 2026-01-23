@@ -99,19 +99,22 @@ public class EmailService : IEmailService
     /// <summary>
     /// Initialize Gmail Service dengan Service Account
     /// </summary>
-    private async Task InitializeGmailServiceAsync()
+    private Task InitializeGmailServiceAsync()
     {
         try
         {
             if (string.IsNullOrEmpty(_serviceAccountJsonPath) || !File.Exists(_serviceAccountJsonPath))
             {
                 _logger.LogError("Service Account JSON file tidak ditemukan: {Path}", _serviceAccountJsonPath);
-                return;
+                return Task.CompletedTask;
             }
 
             // Load Service Account credentials
-            var credential = GoogleCredential
-                .FromFile(_serviceAccountJsonPath)
+            var serviceAccountCredential = CredentialFactory
+                .FromFile<ServiceAccountCredential>(_serviceAccountJsonPath);
+
+            var credential = serviceAccountCredential
+                .ToGoogleCredential()
                 .CreateScoped(GmailService.Scope.GmailSend)
                 .CreateWithUser(_delegatedUserEmail); // Domain-wide delegation
 
@@ -129,6 +132,8 @@ public class EmailService : IEmailService
             _logger.LogError(ex, "Gagal menginisialisasi Gmail Service");
             _gmailService = null;
         }
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

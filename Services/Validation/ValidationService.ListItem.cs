@@ -36,12 +36,6 @@ public partial class ValidationService
 
         if (aturan == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Aturan",
-                Field = "aturan",
-                Message = "Tidak ada aturan yang aktif"
-            });
             return result;
         }
 
@@ -53,12 +47,6 @@ public partial class ValidationService
 
         if (listItemDetail == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "item_daftar",
-                Message = "Aturan item daftar tidak ditemukan"
-            });
             return result;
         }
 
@@ -114,7 +102,7 @@ public partial class ValidationService
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
 
-        var listItemElements = new List<(ulong Id, string? Type, ElementContentInfo Content)>();
+        var listItemElements = new List<(ulong Id, string? Type, string? Label, ElementContentInfo Content)>();
         foreach (var elem in bodyElements)
         {
             var content = ParseElementContent(elem.DelemenJsonTree);
@@ -122,27 +110,18 @@ public partial class ValidationService
             if (string.IsNullOrWhiteSpace(plainText))
                 continue;
 
-            var label = labelMap.TryGetValue(elem.DelemenId, out var rawLabel)
+            var normalizedLabel = labelMap.TryGetValue(elem.DelemenId, out var rawLabel)
                 ? NormalizeLabel(rawLabel)
                 : string.Empty;
 
             var isListCandidate = listItemIds != null
                 ? listItemIds.Contains(elem.DelemenId)
-                : IsListItemElement(elem.DelemenType) || label == "section_header" || label == "list_item";
+                : !string.IsNullOrEmpty(normalizedLabel) && IsListLabel(normalizedLabel);
 
             if (!isListCandidate)
                 continue;
 
-            if (listItemIds == null && label == "section_header")
-            {
-                if (plainText.StartsWith("BAB", StringComparison.OrdinalIgnoreCase) ||
-                    SubchapterNumberPattern.IsMatch(plainText))
-                {
-                    continue;
-                }
-            }
-
-            listItemElements.Add((elem.DelemenId, elem.DelemenType, content));
+            listItemElements.Add((elem.DelemenId, elem.DelemenType, normalizedLabel, content));
         }
 
         if (listItemElements.Count == 0)
@@ -171,7 +150,7 @@ public partial class ValidationService
                 .ToDictionaryAsync(t => t.DftxId, cancellationToken)
             : new Dictionary<uint, DokumenFormatText>();
 
-        foreach (var (elementId, elementType, content) in listItemElements)
+        foreach (var (elementId, elementType, elementLabel, content) in listItemElements)
         {
             var plainText = content.PlainText?.Trim() ?? string.Empty;
             var evidence = plainText.Length > 100 ? plainText[..100] + "..." : plainText;
@@ -192,7 +171,7 @@ public partial class ValidationService
             var pageBboxMap = await LoadPageBboxMapAsync(new[] { elementId }, cancellationToken);
             var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
 
-            var level = TryParseListItemLevel(elementType, paragraphFormat);
+            var level = TryParseListItemLevel(elementType, paragraphFormat, elementLabel);
 
             ValidateListItemFont(result, rule, elementTextFormats!, content.TextRuns, evidence, locations);
             ValidateListItemParagraph(result, rule, paragraphFormat, level, evidence, locations);
@@ -604,6 +583,27 @@ public partial class ValidationService
                     Locations = locations
                 });
             }
+        }
+
+        result.TotalChecks++;
+        var firstLineTwips = format.DfpIndFirstLineTwips ?? 0;
+        var firstLineCm = firstLineTwips / 1440.0m * 2.54m;
+        if (Math.Abs(firstLineCm) <= 0.05m)
+        {
+            result.PassedChecks++;
+        }
+        else
+        {
+            result.Errors.Add(new ValidationError
+            {
+                Category = "Isi Buku",
+                Field = "item_daftar",
+                Message = "First line indent item daftar harus 0",
+                Expected = "0 cm",
+                Actual = firstLineCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                Evidence = evidence,
+                Locations = locations
+            });
         }
 
         var spacingRule = rule?.Paragraph?.Spacing;

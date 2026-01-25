@@ -42,12 +42,6 @@ public partial class ValidationService
 
         if (aturan == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Aturan",
-                Field = "aturan",
-                Message = "Tidak ada aturan yang aktif"
-            });
             return result;
         }
 
@@ -59,12 +53,6 @@ public partial class ValidationService
 
         if (subbabDetail == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "judul_subbab",
-                Message = "Aturan judul subbab tidak ditemukan"
-            });
             return result;
         }
 
@@ -122,43 +110,31 @@ public partial class ValidationService
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
 
-        // Find section_header elements
-        var sectionHeaderIds = labelMap
-            .Where(kv => kv.Value.Equals("section_header", StringComparison.OrdinalIgnoreCase))
+        // Find subchapter label elements
+        var labelSubchapterIds = labelMap
+            .Where(kv => NormalizeLabel(kv.Value) == "judul_subbab")
             .Select(kv => kv.Key)
             .ToHashSet();
+        var resolvedSubchapterIds = subchapterIds;
+        if (resolvedSubchapterIds == null || resolvedSubchapterIds.Count == 0)
+            resolvedSubchapterIds = labelSubchapterIds.Count > 0 ? labelSubchapterIds : null;
+        if (resolvedSubchapterIds == null || resolvedSubchapterIds.Count == 0)
+            return result;
 
         // Build element lookup
         var elementsById = bodyElements.ToDictionary(e => e.DelemenId);
 
-        // Find subchapter titles (section headers starting with X.X pattern)
+        // Find subchapter titles (label judul_subbab only)
         var subchapterElements = new List<(ulong Id, ElementContentInfo Content)>();
-        if (subchapterIds != null)
+        if (resolvedSubchapterIds != null && resolvedSubchapterIds.Count > 0)
         {
             foreach (var elem in bodyElements)
             {
-                if (!subchapterIds.Contains(elem.DelemenId))
+                if (!resolvedSubchapterIds.Contains(elem.DelemenId))
                     continue;
 
                 var content = ParseElementContent(elem.DelemenJsonTree);
                 subchapterElements.Add((elem.DelemenId, content));
-            }
-        }
-        else
-        {
-            foreach (var elem in bodyElements)
-            {
-                if (!sectionHeaderIds.Contains(elem.DelemenId))
-                    continue;
-
-                var content = ParseElementContent(elem.DelemenJsonTree);
-                var plainText = content.PlainText?.Trim() ?? string.Empty;
-
-                // Check if it matches subchapter pattern (X.X, X.X.X, etc.)
-                if (SubchapterNumberPattern.IsMatch(plainText))
-                {
-                    subchapterElements.Add((elem.DelemenId, content));
-                }
             }
         }
 
@@ -904,16 +880,36 @@ public partial class ValidationService
             {
                 result.TotalChecks++;
 
-                // Check if next element exists and is a paragraph (text label)
+                // Check if next element exists and is a paragraph (paragraf label)
                 var nextIndex = subchapterIndex + 1;
                 if (nextIndex < bodyElementIds.Count)
                 {
                     var nextElementId = bodyElementIds[nextIndex];
 
-                    if (labelMap.TryGetValue(nextElementId, out var nextLabel) &&
-                        nextLabel.Equals("text", StringComparison.OrdinalIgnoreCase))
+                    if (labelMap.TryGetValue(nextElementId, out var nextLabel))
                     {
-                        result.PassedChecks++;
+                        var normalizedLabel = NormalizeLabel(nextLabel);
+                        if (normalizedLabel == "paragraf")
+                        {
+                            result.PassedChecks++;
+                        }
+                        else
+                        {
+                            var error = new ValidationError
+                            {
+                                Category = "Isi Buku",
+                                Field = "judul_subbab",
+                                Message = "Harus ada minimal 1 paragraf setelah judul subbab",
+                                Expected = "Paragraf",
+                                Actual = nextLabel ?? "unknown",
+                                Evidence = plainText,
+                                Locations = locations,
+                                DokumenElemenId = subchapterId
+                            };
+                            if (context != null)
+                                ApplyContext(error, context);
+                            result.Errors.Add(error);
+                        }
                     }
                     else
                     {
@@ -923,8 +919,8 @@ public partial class ValidationService
                             Category = "Isi Buku",
                             Field = "judul_subbab",
                             Message = "Harus ada minimal 1 paragraf setelah judul subbab",
-                            Expected = "Paragraf (text)",
-                            Actual = nextLabel ?? "unknown",
+                            Expected = "Paragraf",
+                            Actual = "unknown",
                             Evidence = plainText,
                             Locations = locations,
                             DokumenElemenId = subchapterId
@@ -942,7 +938,7 @@ public partial class ValidationService
                         Category = "Isi Buku",
                         Field = "judul_subbab",
                         Message = "Harus ada minimal 1 paragraf setelah judul subbab",
-                        Expected = "Paragraf (text)",
+                        Expected = "Paragraf",
                         Actual = "Tidak ada elemen setelah subbab",
                         Evidence = plainText,
                         Locations = locations,

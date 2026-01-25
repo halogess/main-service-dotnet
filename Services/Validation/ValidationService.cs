@@ -595,7 +595,7 @@ public partial class ValidationService : IValidationService
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
             where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
-            select new { e.DelemenId, e.DelemenType, e.DelemenJsonTree })
+            select new BodyElementInfo { DelemenId = e.DelemenId, DelemenType = e.DelemenType, DelemenJsonTree = e.DelemenJsonTree })
             .ToListAsync(cancellationToken);
 
         if (bodyElements.Count == 0)
@@ -605,121 +605,178 @@ public partial class ValidationService : IValidationService
             bodyElements.Select(e => e.DelemenId),
             cancellationToken);
 
-        var contentById = new Dictionary<ulong, ElementContentInfo>();
-        var paragraphFormatIds = new HashSet<uint>();
         foreach (var elem in bodyElements)
         {
-            var content = ParseElementContent(elem.DelemenJsonTree);
-            contentById[elem.DelemenId] = content;
-            if (content.ParagraphFormatId.HasValue)
-                paragraphFormatIds.Add(content.ParagraphFormatId.Value);
-        }
+            if (!labelMap.TryGetValue(elem.DelemenId, out var rawLabel))
+                continue;
 
-        var paragraphFormats = paragraphFormatIds.Count > 0
-            ? await _db.DokumenFormatParagrafs
-                .Where(p => paragraphFormatIds.Contains(p.DfpId))
-                .ToDictionaryAsync(p => p.DfpId, cancellationToken)
-            : new Dictionary<uint, DokumenFormatParagraf>();
-
-        bool IsLabel(ulong id, string expected)
-        {
-            if (!labelMap.TryGetValue(id, out var label))
-                return false;
-            return string.Equals(NormalizeLabel(label), expected, StringComparison.OrdinalIgnoreCase);
-        }
-
-        bool IsCentered(ulong id)
-        {
-            if (!contentById.TryGetValue(id, out var content) || !content.ParagraphFormatId.HasValue)
-                return false;
-            if (!paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format))
-                return false;
-            return string.Equals(format.DfpJc, "center", StringComparison.OrdinalIgnoreCase);
-        }
-
-        bool StartsWithBab(ulong id)
-        {
-            if (!contentById.TryGetValue(id, out var content))
-                return false;
-            var text = content.PlainText?.TrimStart() ?? string.Empty;
-            return text.StartsWith("BAB", StringComparison.OrdinalIgnoreCase);
-        }
-
-        // Chapter title block: section_header + center + starts with "BAB"
-        var inTitleBlock = false;
-        foreach (var elem in bodyElements)
-        {
-            if (!IsLabel(elem.DelemenId, "section_header"))
+            var normalized = NormalizeLabel(rawLabel);
+            if (normalized == "judul_bab")
             {
-                if (inTitleBlock)
-                    break;
+                classification.ChapterTitleIds.Add(elem.DelemenId);
                 continue;
             }
 
-            if (!IsCentered(elem.DelemenId))
+            if (normalized == "judul_subbab")
             {
-                if (inTitleBlock)
-                    break;
-                continue;
-            }
-
-            if (!inTitleBlock && !StartsWithBab(elem.DelemenId))
-                continue;
-
-            inTitleBlock = true;
-            classification.ChapterTitleIds.Add(elem.DelemenId);
-        }
-
-        // Subchapter: section_header + numbering pattern, not chapter title
-        foreach (var elem in bodyElements)
-        {
-            if (classification.ChapterTitleIds.Contains(elem.DelemenId))
-                continue;
-
-            if (!IsLabel(elem.DelemenId, "section_header"))
-                continue;
-
-            var content = contentById[elem.DelemenId];
-            var plainText = content.PlainText?.Trim() ?? string.Empty;
-            if (SubchapterNumberPattern.IsMatch(plainText))
                 classification.SubchapterIds.Add(elem.DelemenId);
-        }
-
-        // List item: label section_header or list_item, or list-item type, not chapter/subchapter
-        foreach (var elem in bodyElements)
-        {
-            if (classification.ChapterTitleIds.Contains(elem.DelemenId) ||
-                classification.SubchapterIds.Contains(elem.DelemenId))
                 continue;
+            }
 
-            var label = labelMap.TryGetValue(elem.DelemenId, out var rawLabel)
-                ? NormalizeLabel(rawLabel)
-                : string.Empty;
-
-            if (IsListItemElement(elem.DelemenType) ||
-                label == "section_header" ||
-                label == "list_item")
+            if (IsListLabel(normalized))
             {
                 classification.ListItemIds.Add(elem.DelemenId);
+                continue;
             }
-        }
 
-        // Paragraph: label text + paragraph type, not already classified
-        foreach (var elem in bodyElements)
-        {
-            if (classification.ChapterTitleIds.Contains(elem.DelemenId) ||
-                classification.SubchapterIds.Contains(elem.DelemenId) ||
-                classification.ListItemIds.Contains(elem.DelemenId))
-                continue;
-
-            if (!IsParagraphElement(elem.DelemenType))
-                continue;
-
-            if (IsLabel(elem.DelemenId, "text"))
+            if (normalized == "paragraf")
+            {
                 classification.ParagraphIds.Add(elem.DelemenId);
+            }
         }
 
         return classification;
+    }
+
+    private async Task PersistStructureLabelsAsync(
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        ElementClassification classification,
+        Dictionary<ulong, ElementContentInfo> contentById,
+        Dictionary<uint, DokumenFormatParagraf> paragraphFormats,
+        CancellationToken cancellationToken)
+    {
+        if (bodyElements.Count == 0)
+            return;
+
+        var labelById = BuildStructureLabelMap(bodyElements, classification, contentById, paragraphFormats);
+        if (labelById.Count == 0)
+            return;
+
+        var (idColumn, labelColumn) = await ResolveVisualColumnsAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(idColumn))
+            return;
+
+        if (!string.IsNullOrWhiteSpace(labelColumn) &&
+            labelColumn.Equals("dev_label_struktural", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var connection = _db.Database.GetDbConnection();
+        var shouldClose = connection.State != ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+
+        try
+        {
+            using (var checkCmd = connection.CreateCommand())
+            {
+                checkCmd.CommandText = "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS " +
+                                       "WHERE TABLE_SCHEMA = DATABASE() " +
+                                       "AND TABLE_NAME = 'dokumen_elemen_visual' " +
+                                       "AND COLUMN_NAME = 'dev_label_struktural' " +
+                                       "LIMIT 1";
+
+                var exists = await checkCmd.ExecuteScalarAsync(cancellationToken);
+                if (exists == null || exists == DBNull.Value)
+                    return;
+            }
+
+            const int batchSize = 200;
+            foreach (var chunk in labelById.Chunk(batchSize))
+            {
+                using var cmd = connection.CreateCommand();
+                var sb = new StringBuilder();
+                sb.Append("UPDATE `dokumen_elemen_visual` ");
+                sb.Append("SET `dev_label_struktural` = CASE `")
+                  .Append(idColumn)
+                  .Append("` ");
+
+                var ids = new List<string>();
+                var index = 0;
+                foreach (var (id, label) in chunk)
+                {
+                    var paramName = "@label" + index;
+                    sb.Append("WHEN ").Append(id).Append(" THEN ").Append(paramName).Append(' ');
+
+                    var param = cmd.CreateParameter();
+                    param.ParameterName = paramName;
+                    param.Value = label ?? (object)DBNull.Value;
+                    cmd.Parameters.Add(param);
+
+                    ids.Add(id.ToString(CultureInfo.InvariantCulture));
+                    index++;
+                }
+
+                sb.Append("ELSE `dev_label_struktural` END ");
+                sb.Append("WHERE `").Append(idColumn).Append("` IN (")
+                  .Append(string.Join(",", ids))
+                  .Append(')');
+
+                cmd.CommandText = sb.ToString();
+                await cmd.ExecuteNonQueryAsync(cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to update dev_label_struktural");
+        }
+        finally
+        {
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+        }
+    }
+
+    private static Dictionary<ulong, string?> BuildStructureLabelMap(
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        ElementClassification classification,
+        Dictionary<ulong, ElementContentInfo> contentById,
+        Dictionary<uint, DokumenFormatParagraf> paragraphFormats)
+    {
+        var labels = new Dictionary<ulong, string?>(bodyElements.Count);
+        foreach (var elem in bodyElements)
+        {
+            string? label = null;
+
+            if (classification.ChapterTitleIds.Contains(elem.DelemenId))
+            {
+                label = "judul_bab";
+            }
+            else if (classification.SubchapterIds.Contains(elem.DelemenId))
+            {
+                label = "judul_subbab";
+            }
+            else if (classification.ListItemIds.Contains(elem.DelemenId))
+            {
+                label = BuildListStructureLabel(elem, contentById, paragraphFormats);
+            }
+            else if (classification.ParagraphIds.Contains(elem.DelemenId))
+            {
+                label = "paragraf";
+            }
+
+            labels[elem.DelemenId] = label;
+        }
+
+        return labels;
+    }
+
+    private static string BuildListStructureLabel(
+        BodyElementInfo element,
+        Dictionary<ulong, ElementContentInfo> contentById,
+        Dictionary<uint, DokumenFormatParagraf> paragraphFormats)
+    {
+        DokumenFormatParagraf? format = null;
+        if (contentById.TryGetValue(element.DelemenId, out var content) &&
+            content.ParagraphFormatId.HasValue)
+        {
+            paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out format);
+        }
+
+        var level = TryParseListItemLevel(element.DelemenType, format);
+        if (level.HasValue)
+            return $"list_level_{level.Value + 1}";
+
+        return "list_item";
     }
 
     /// <summary>

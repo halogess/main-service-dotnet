@@ -44,6 +44,7 @@ services:
       - Gemini__BatchDelaySeconds=${Gemini__BatchDelaySeconds}
       - Gemini__MaxParallelBatches=${Gemini__MaxParallelBatches}
       - Gemini__MaxBatchRetries=${Gemini__MaxBatchRetries}
+      - Gemini__EnableLlm=${Gemini__EnableLlm}
       - AllowedHosts=${AllowedHosts}
     volumes:
       - ${VOLUME_BASE_PATH}:/app/storage

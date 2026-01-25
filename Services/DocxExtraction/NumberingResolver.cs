@@ -50,6 +50,10 @@ public class NumberingResolver
             if (ind.Right?.Value != null) effective.IndentRight = int.Parse(ind.Right.Value);
             if (ind.FirstLine?.Value != null) effective.IndentFirstLine = int.Parse(ind.FirstLine.Value);
             if (ind.Hanging?.Value != null) effective.IndentHanging = int.Parse(ind.Hanging.Value);
+            if (ind.Start?.Value != null) effective.IndentStart = int.Parse(ind.Start.Value);
+            if (ind.End?.Value != null) effective.IndentEnd = int.Parse(ind.End.Value);
+            if (ind.LeftChars?.Value != null) effective.IndentLeftChars = ind.LeftChars.Value;
+            if (ind.RightChars?.Value != null) effective.IndentRightChars = ind.RightChars.Value;
         }
         
         // Spacing

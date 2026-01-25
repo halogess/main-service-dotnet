@@ -38,12 +38,6 @@ public partial class ValidationService
 
         if (aturan == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Aturan",
-                Field = "aturan",
-                Message = "Tidak ada aturan yang aktif"
-            });
             return result;
         }
 
@@ -55,12 +49,6 @@ public partial class ValidationService
 
         if (paragrafDetail == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "paragraf",
-                Message = "Aturan paragraf tidak ditemukan"
-            });
             return result;
         }
 
@@ -164,21 +152,10 @@ public partial class ValidationService
                 return listItemIds.Contains(elementId);
 
             var label = GetNormalizedLabel(elementId);
-            if (!IsListItemElement(elementType) && label != "section_header" && label != "list_item")
-                return false;
+            if (!string.IsNullOrEmpty(label))
+                return IsListLabel(label);
 
-            if (label == "section_header")
-            {
-                var content = GetContent(elementId, elementJsonById.TryGetValue(elementId, out var json) ? json : null);
-                var text = content.PlainText?.Trim() ?? string.Empty;
-                if (text.StartsWith("BAB", StringComparison.OrdinalIgnoreCase) ||
-                    SubchapterNumberPattern.IsMatch(text))
-                {
-                    return false;
-                }
-            }
-
-            return true;
+            return false;
         }
 
         // Find paragraph elements in OpenXML order
@@ -195,8 +172,11 @@ public partial class ValidationService
             }
             else
             {
-                if (!labelMap.TryGetValue(elem.DelemenId, out var label) ||
-                    !label.Equals("text", StringComparison.OrdinalIgnoreCase))
+                if (!labelMap.TryGetValue(elem.DelemenId, out var label))
+                    continue;
+
+                var normalizedLabel = NormalizeLabel(label);
+                if (normalizedLabel != "paragraf")
                     continue;
             }
 
@@ -218,7 +198,7 @@ public partial class ValidationService
         var paragraphIdSet = new HashSet<ulong>(paragraphElements.Select(e => e.Id));
         var listItemFormatIds = new HashSet<uint>();
         var listItemTextFormatIds = new HashSet<uint>();
-        var listBlocks = new List<(List<ulong> ListItemIds, List<ulong> ParagraphsAfter, uint? LastFormatId, ulong LastElementId, string? LastElementType)>();
+        var listBlocks = new List<(List<ulong> ListItemIds, List<ulong> ParagraphsAfter, uint? LastFormatId, ulong LastElementId, string? LastElementType, string? LastLabel)>();
 
         for (var i = 0; i < bodyElements.Count; i++)
         {
@@ -243,6 +223,9 @@ public partial class ValidationService
             var lastListElement = bodyElements[listEnd - 1];
             var lastListContent = GetContent(lastListElement.DelemenId, lastListElement.DelemenJsonTree);
             var listFormatId = lastListContent.ParagraphFormatId;
+            var lastListLabel = labelMap.TryGetValue(lastListElement.DelemenId, out var rawLabel)
+                ? NormalizeLabel(rawLabel)
+                : null;
 
             var paragraphsAfter = new List<ulong>();
             for (var j = listEnd; j < bodyElements.Count; j++)
@@ -251,15 +234,18 @@ public partial class ValidationService
                 if (!IsParagraphElement(nextElem.DelemenType))
                     break;
 
-                if (!labelMap.TryGetValue(nextElem.DelemenId, out var nextLabel) ||
-                    !nextLabel.Equals("text", StringComparison.OrdinalIgnoreCase))
+                if (!labelMap.TryGetValue(nextElem.DelemenId, out var nextLabel))
+                    break;
+
+                var normalizedLabel = NormalizeLabel(nextLabel);
+                if (normalizedLabel != "paragraf")
                     break;
 
                 if (paragraphIdSet.Contains(nextElem.DelemenId))
                     paragraphsAfter.Add(nextElem.DelemenId);
             }
 
-            listBlocks.Add((listBlockItemIds, paragraphsAfter, listFormatId, lastListElement.DelemenId, lastListElement.DelemenType));
+            listBlocks.Add((listBlockItemIds, paragraphsAfter, listFormatId, lastListElement.DelemenId, lastListElement.DelemenType, lastListLabel));
 
             i = listEnd - 1;
         }
@@ -305,7 +291,7 @@ public partial class ValidationService
                 if (block.LastFormatId.HasValue)
                     listFormats.TryGetValue(block.LastFormatId.Value, out listFormat);
 
-                var level = TryParseListItemLevel(block.LastElementType, listFormat).GetValueOrDefault(0);
+                var level = TryParseListItemLevel(block.LastElementType, listFormat, block.LastLabel).GetValueOrDefault(0);
                 decimal? expectedTextStartCm = null;
                 if (expectedListLeft.HasValue || expectedListHanging.HasValue)
                 {

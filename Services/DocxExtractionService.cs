@@ -17,11 +17,8 @@ public class DocxExtractionService : IDocxExtractionService
 {
     private readonly KorektorBukuDbContext _db;
     private readonly ILogger<DocxExtractionService> _logger;
-    private readonly string _storagePath;
-    
     // Helper instances
     private readonly FloatingElementHelper _floatingHelper;
-    private readonly MediaExtractor _mediaExtractor;
     private readonly DrawingExtractor _drawingExtractor;
     private readonly ParagraphExtractor _paragraphExtractor;
 
@@ -29,11 +26,8 @@ public class DocxExtractionService : IDocxExtractionService
     {
         _db = db;
         _logger = logger;
-        _storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
-        
         // Initialize helpers
         _floatingHelper = new FloatingElementHelper(_logger);
-        _mediaExtractor = new MediaExtractor(_logger, _storagePath);
         _drawingExtractor = new DrawingExtractor(_logger);
         _paragraphExtractor = new ParagraphExtractor(_logger, _drawingExtractor);
     }
@@ -50,9 +44,10 @@ public class DocxExtractionService : IDocxExtractionService
             // Initialize StyleResolver for paragraph style chain resolution
             var stylesPart = doc.MainDocumentPart?.StyleDefinitionsPart;
             var stylesWithEffectsPart = doc.MainDocumentPart?.StylesWithEffectsPart;
+            var numberingPart = doc.MainDocumentPart?.NumberingDefinitionsPart;
             var themeResolver = ThemeFontResolver.FromThemePart(doc.MainDocumentPart?.ThemePart);
             var themeLangResolver = ThemeFontLangResolver.FromSettingsPart(doc.MainDocumentPart?.DocumentSettingsPart);
-            var styleResolver = new StyleResolver(stylesPart, stylesWithEffectsPart, themeResolver);
+            var styleResolver = new StyleResolver(stylesPart, stylesWithEffectsPart, themeResolver, numberingPart);
             _paragraphExtractor.SetStyleResolver(styleResolver);
             _paragraphExtractor.SetThemeFontLangResolver(themeLangResolver);
             _paragraphExtractor.SetDbContext(_db); // Enable inline format saving
@@ -76,10 +71,7 @@ public class DocxExtractionService : IDocxExtractionService
             // Inject table extraction callback into ParagraphExtractor for handling nested tables in textboxes
             _paragraphExtractor.SetTableExtractor(tableExtractor.ConvertTableToJsonAsync);
             
-            await _mediaExtractor.ExtractAllMedia(doc, dokumenId);
-            
             var body = doc.MainDocumentPart!.Document.Body!;
-            var numberingPart = doc.MainDocumentPart.NumberingDefinitionsPart;
             var numberingCounters = new Dictionary<int, Dictionary<int, int>>();
             
             // Create ParagraphFormatExtractor with StyleResolver for effective property resolution

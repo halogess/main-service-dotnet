@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json.Linq;
 using ValidasiTugasAkhir.MainService.Models;
 
 namespace ValidasiTugasAkhir.MainService.Services;
@@ -27,8 +28,16 @@ public partial class ValidationService
     {
         public ulong ElementId { get; init; }
         public int OrderIndex { get; init; }
-        public ElementContentInfo Content { get; init; } = new();
-        public string NormalizedText { get; init; } = string.Empty;
+        public ElementContentInfo Content { get; set; } = new();
+        public string NormalizedText { get; set; } = string.Empty;
+    }
+
+    private sealed class CaptionContinuationCandidate
+    {
+        public CaptionInfo Caption { get; init; } = null!;
+        public BodyElementInfo NextElement { get; init; } = null!;
+        public ElementContentInfo NextContent { get; init; } = new();
+        public string NormalizedNextText { get; init; } = string.Empty;
     }
 
     private sealed class PageLayoutSnapshot
@@ -66,12 +75,6 @@ public partial class ValidationService
 
         if (aturan == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Aturan",
-                Field = "aturan",
-                Message = "Tidak ada aturan yang aktif"
-            });
             return result;
         }
 
@@ -87,14 +90,37 @@ public partial class ValidationService
             .Where(d => d.AturanDetailKey == "caption_gambar")
             .FirstOrDefaultAsync(cancellationToken);
 
+        var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         ImageRule? imageRule = null;
+        CaptionImageRule? captionRule = null;
+
         if (gambarDetail != null)
         {
             try
             {
-                imageRule = JsonSerializer.Deserialize<ImageRule>(
-                    gambarDetail.AturanDetailJsonValue ?? "{}",
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                var rawJson = gambarDetail.AturanDetailJsonValue ?? "{}";
+                using var doc = JsonDocument.Parse(rawJson);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (doc.RootElement.TryGetProperty("gambar", out var gambarElement))
+                    {
+                        imageRule = JsonSerializer.Deserialize<ImageRule>(gambarElement.GetRawText(), jsonOptions);
+                    }
+                    else
+                    {
+                        imageRule = JsonSerializer.Deserialize<ImageRule>(rawJson, jsonOptions);
+                    }
+
+                    if (captionDetail == null &&
+                        doc.RootElement.TryGetProperty("caption_gambar", out var captionElement))
+                    {
+                        captionRule = JsonSerializer.Deserialize<CaptionImageRule>(captionElement.GetRawText(), jsonOptions);
+                    }
+                }
+                else
+                {
+                    imageRule = JsonSerializer.Deserialize<ImageRule>(rawJson, jsonOptions);
+                }
             }
             catch (JsonException ex)
             {
@@ -107,24 +133,14 @@ public partial class ValidationService
                 });
             }
         }
-        else
-        {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "gambar",
-                Message = "Aturan gambar tidak ditemukan"
-            });
-        }
 
-        CaptionImageRule? captionRule = null;
         if (captionDetail != null)
         {
             try
             {
                 captionRule = JsonSerializer.Deserialize<CaptionImageRule>(
                     captionDetail.AturanDetailJsonValue ?? "{}",
-                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                    jsonOptions);
             }
             catch (JsonException ex)
             {
@@ -137,22 +153,13 @@ public partial class ValidationService
                 });
             }
         }
-        else
-        {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "caption_gambar",
-                Message = "Aturan caption gambar tidak ditemukan"
-            });
-        }
 
         var bodyElements = await (from e in _db.DokumenElemens
             join p in _db.DokumenParts on e.DpartId equals p.DpartId
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
             where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
-            select new { e.DelemenId, e.DelemenType, e.DelemenJsonTree })
+            select new BodyElementInfo { DelemenId = e.DelemenId, DelemenType = e.DelemenType, DelemenJsonTree = e.DelemenJsonTree })
             .ToListAsync(cancellationToken);
 
         if (bodyElements.Count == 0)
@@ -187,9 +194,12 @@ public partial class ValidationService
             var elem = bodyElements[index];
             var content = GetContent(elem.DelemenId, elem.DelemenJsonTree);
             var normalizedText = NormalizeWhitespace(content.PlainText);
+            var normalizedLabel = labelMap.TryGetValue(elem.DelemenId, out var rawLabel)
+                ? NormalizeLabel(rawLabel)
+                : string.Empty;
 
             var imageItems = ExtractImageItems(elem.DelemenJsonTree);
-            if (imageItems.Count > 0 && string.IsNullOrWhiteSpace(normalizedText))
+            if (imageItems.Count > 0 && string.IsNullOrWhiteSpace(normalizedText) && normalizedLabel == "gambar")
             {
                 var imageBlock = new ImageBlockInfo
                 {
@@ -204,7 +214,7 @@ public partial class ValidationService
 
             if (IsParagraphElement(elem.DelemenType) &&
                 !string.IsNullOrWhiteSpace(normalizedText) &&
-                IsCaptionCandidate(normalizedText))
+                normalizedLabel == "caption_gambar")
             {
                 captionCandidates.Add(new CaptionInfo
                 {
@@ -219,9 +229,45 @@ public partial class ValidationService
         if (imageBlocks.Count == 0)
             return result;
 
+        var captionContinuationCandidates = new List<CaptionContinuationCandidate>();
+        foreach (var caption in captionCandidates)
+        {
+            var nextIndex = caption.OrderIndex + 1;
+            if (nextIndex >= bodyElements.Count)
+                continue;
+
+            var nextElement = bodyElements[nextIndex];
+            if (!IsParagraphElement(nextElement.DelemenType))
+                continue;
+
+            if (!labelMap.TryGetValue(nextElement.DelemenId, out var nextLabel))
+                continue;
+
+            var normalizedLabel = NormalizeLabel(nextLabel);
+            if (normalizedLabel != "caption_gambar")
+                continue;
+
+            var nextContent = GetContent(nextElement.DelemenId, nextElement.DelemenJsonTree);
+            var normalizedNextText = NormalizeWhitespace(nextContent.PlainText);
+            if (string.IsNullOrWhiteSpace(normalizedNextText) || nextContent.HasNonTextContent)
+                continue;
+
+            if (IsCaptionCandidate(normalizedNextText))
+                continue;
+
+            captionContinuationCandidates.Add(new CaptionContinuationCandidate
+            {
+                Caption = caption,
+                NextElement = nextElement,
+                NextContent = nextContent,
+                NormalizedNextText = normalizedNextText
+            });
+        }
+
         var paragraphFormatIds = imageBlocks
             .Select(b => b.ParagraphFormatId)
             .Concat(captionCandidates.Select(c => c.Content.ParagraphFormatId))
+            .Concat(captionContinuationCandidates.Select(c => c.NextContent.ParagraphFormatId))
             .Where(id => id.HasValue)
             .Select(id => id!.Value)
             .Distinct()
@@ -249,6 +295,7 @@ public partial class ValidationService
 
         var captionTextFormatIds = captionCandidates
             .SelectMany(c => c.Content.TextFormatIds)
+            .Concat(captionContinuationCandidates.SelectMany(c => c.NextContent.TextFormatIds))
             .Distinct()
             .ToList();
 
@@ -257,6 +304,14 @@ public partial class ValidationService
                 .Where(t => captionTextFormatIds.Contains(t.DftxId))
                 .ToDictionaryAsync(t => t.DftxId, cancellationToken)
             : new Dictionary<uint, DokumenFormatText>();
+
+        await MergeCaptionContinuationAsync(
+            bodyElements,
+            captionContinuationCandidates,
+            paragraphFormats,
+            captionTextFormats,
+            contentCache,
+            cancellationToken);
 
         var usedCaptionIds = new HashSet<ulong>();
 
@@ -281,34 +336,59 @@ public partial class ValidationService
                 !usedCaptionIds.Contains(c.ElementId) &&
                 c.OrderIndex > block.OrderIndex &&
                 c.OrderIndex < nextImageIndex);
+            CaptionInfo? captionBefore = captionCandidates.LastOrDefault(c =>
+                !usedCaptionIds.Contains(c.ElementId) &&
+                c.OrderIndex < block.OrderIndex &&
+                c.OrderIndex > prevImageIndex);
 
-            if (captionAfter != null)
+            CaptionInfo? selectedCaption = null;
+            var positionRule = captionRule?.Position?.Value?.Trim();
+            var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
+                ? null
+                : positionRule.ToLowerInvariant();
+
+            if (captionRule != null && normalizedPosition == "before")
             {
-                usedCaptionIds.Add(captionAfter.ElementId);
-                if (captionRule != null)
+                if (captionBefore != null)
                 {
-                    paragraphFormats.TryGetValue(captionAfter.Content.ParagraphFormatId ?? 0, out var captionFormat);
-                    var captionLocations = await BuildElementLocationsAsync(captionAfter.ElementId, cancellationToken);
-                    var captionErrorStart = result.Errors.Count;
-
-                    ValidateCaptionFont(result, captionRule, captionAfter, captionTextFormats, captionLocations);
-                    ValidateCaptionParagraphFormat(result, captionRule, captionFormat, captionAfter.NormalizedText, captionLocations);
-                    ValidateCaptionNumbering(result, captionRule, captionAfter, captionLocations);
-
-                    if (neighborContexts.TryGetValue(captionAfter.ElementId, out var captionContext))
-                        ApplyContextToErrors(result.Errors, captionErrorStart, captionContext);
-
-                    ApplyElementIdToErrors(result.Errors, captionErrorStart, captionAfter.ElementId);
+                    selectedCaption = captionBefore;
+                }
+                else if (captionAfter != null)
+                {
+                    result.TotalChecks++;
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "caption_gambar",
+                        Message = "Posisi caption gambar harus sebelum gambar",
+                        Expected = "before",
+                        Actual = "after",
+                        Evidence = block.Evidence,
+                        Locations = locations
+                    });
+                }
+                else
+                {
+                    result.TotalChecks++;
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "caption_gambar",
+                        Message = "Caption gambar tidak ditemukan",
+                        Expected = "Caption sebelum gambar",
+                        Actual = "Tidak ada caption",
+                        Evidence = block.Evidence,
+                        Locations = locations
+                    });
                 }
             }
-            else if (captionRule?.Position?.Value?.Equals("after", StringComparison.OrdinalIgnoreCase) == true)
+            else if (captionRule != null && normalizedPosition == "after")
             {
-                var captionBefore = captionCandidates.LastOrDefault(c =>
-                    !usedCaptionIds.Contains(c.ElementId) &&
-                    c.OrderIndex < block.OrderIndex &&
-                    c.OrderIndex > prevImageIndex);
-
-                if (captionBefore != null)
+                if (captionAfter != null)
+                {
+                    selectedCaption = captionAfter;
+                }
+                else if (captionBefore != null)
                 {
                     result.TotalChecks++;
                     result.Errors.Add(new ValidationError
@@ -335,6 +415,30 @@ public partial class ValidationService
                         Evidence = block.Evidence,
                         Locations = locations
                     });
+                }
+            }
+            else
+            {
+                selectedCaption = captionAfter ?? captionBefore;
+            }
+
+            if (selectedCaption != null)
+            {
+                usedCaptionIds.Add(selectedCaption.ElementId);
+                if (captionRule != null)
+                {
+                    paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId ?? 0, out var captionFormat);
+                    var captionLocations = await BuildElementLocationsAsync(selectedCaption.ElementId, cancellationToken);
+                    var captionErrorStart = result.Errors.Count;
+
+                    ValidateCaptionFont(result, captionRule, selectedCaption, captionTextFormats, captionLocations);
+                    ValidateCaptionParagraphFormat(result, captionRule, captionFormat, selectedCaption.NormalizedText, captionLocations);
+                    ValidateCaptionNumbering(result, captionRule, selectedCaption, captionLocations);
+
+                    if (neighborContexts.TryGetValue(selectedCaption.ElementId, out var captionContext))
+                        ApplyContextToErrors(result.Errors, captionErrorStart, captionContext);
+
+                    ApplyElementIdToErrors(result.Errors, captionErrorStart, selectedCaption.ElementId);
                 }
             }
 
@@ -1249,6 +1353,206 @@ public partial class ValidationService
             foreach (var child in contentEl.EnumerateArray())
                 CollectImageItems(child, items, drawingId);
         }
+    }
+
+    private async Task MergeCaptionContinuationAsync(
+        List<BodyElementInfo> bodyElements,
+        List<CaptionContinuationCandidate> continuationCandidates,
+        Dictionary<uint, DokumenFormatParagraf> paragraphFormats,
+        Dictionary<uint, DokumenFormatText> textFormats,
+        Dictionary<ulong, ElementContentInfo> contentCache,
+        CancellationToken cancellationToken)
+    {
+        if (continuationCandidates.Count == 0)
+            return;
+
+        var updates = new Dictionary<ulong, string>();
+        var mergedCaptionIds = new HashSet<ulong>();
+
+        foreach (var candidate in continuationCandidates)
+        {
+            if (mergedCaptionIds.Contains(candidate.Caption.ElementId))
+                continue;
+
+            var captionContent = candidate.Caption.Content;
+            var nextContent = candidate.NextContent;
+
+            if (!captionContent.ParagraphFormatId.HasValue || !nextContent.ParagraphFormatId.HasValue)
+                continue;
+
+            if (!paragraphFormats.TryGetValue(captionContent.ParagraphFormatId.Value, out var captionFormat) ||
+                !paragraphFormats.TryGetValue(nextContent.ParagraphFormatId.Value, out var nextFormat))
+                continue;
+
+            if (!AreAlignmentsEquivalent(captionFormat.DfpJc, nextFormat.DfpJc))
+                continue;
+
+            if (!TryGetElementBold(captionContent, textFormats, out var captionBold) ||
+                !TryGetElementBold(nextContent, textFormats, out var nextBold))
+                continue;
+
+            if (captionBold != nextBold)
+                continue;
+
+            var normalizedCaption = NormalizeWhitespace(captionContent.PlainText);
+            if (!string.IsNullOrWhiteSpace(candidate.NormalizedNextText) &&
+                normalizedCaption.EndsWith(candidate.NormalizedNextText, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var captionElement = bodyElements[candidate.Caption.OrderIndex];
+            var captionJson = captionElement.DelemenJsonTree;
+            var nextJson = candidate.NextElement.DelemenJsonTree;
+
+            if (string.IsNullOrWhiteSpace(captionJson) || string.IsNullOrWhiteSpace(nextJson))
+                continue;
+
+            if (!TryMergeCaptionJson(captionJson, nextJson, captionContent, nextContent, out var mergedJson))
+                continue;
+
+            if (string.Equals(mergedJson, captionJson, StringComparison.Ordinal))
+                continue;
+
+            captionElement.DelemenJsonTree = mergedJson;
+            updates[candidate.Caption.ElementId] = mergedJson;
+            mergedCaptionIds.Add(candidate.Caption.ElementId);
+
+            var updatedContent = ParseElementContent(mergedJson);
+            candidate.Caption.Content = updatedContent;
+            candidate.Caption.NormalizedText = NormalizeWhitespace(updatedContent.PlainText);
+            contentCache[candidate.Caption.ElementId] = updatedContent;
+        }
+
+        if (updates.Count == 0)
+            return;
+
+        foreach (var (id, json) in updates)
+        {
+            var entity = new DokumenElemen { DelemenId = id };
+            _db.DokumenElemens.Attach(entity);
+            entity.DelemenJsonTree = json;
+            _db.Entry(entity).Property(e => e.DelemenJsonTree).IsModified = true;
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static bool TryGetElementBold(
+        ElementContentInfo content,
+        Dictionary<uint, DokumenFormatText> textFormats,
+        out bool bold)
+    {
+        bold = false;
+
+        var runs = GetMeaningfulRuns(content.TextRuns);
+        if (runs.Count == 0)
+            return false;
+
+        bool? current = null;
+        foreach (var run in runs)
+        {
+            if (!run.TextFormatId.HasValue)
+                continue;
+
+            if (!textFormats.TryGetValue(run.TextFormatId.Value, out var format))
+                continue;
+
+            if (!format.DftxBold.HasValue)
+                continue;
+
+            if (!current.HasValue)
+                current = format.DftxBold.Value;
+            else if (current.Value != format.DftxBold.Value)
+                return false;
+        }
+
+        if (!current.HasValue)
+            return false;
+
+        bold = current.Value;
+        return true;
+    }
+
+    private static bool TryMergeCaptionJson(
+        string captionJson,
+        string nextJson,
+        ElementContentInfo captionContent,
+        ElementContentInfo nextContent,
+        out string mergedJson)
+    {
+        mergedJson = captionJson;
+
+        if (string.IsNullOrWhiteSpace(captionJson) || string.IsNullOrWhiteSpace(nextJson))
+            return false;
+
+        try
+        {
+            var captionObj = JObject.Parse(captionJson);
+            var nextObj = JObject.Parse(nextJson);
+
+            if (captionObj.TryGetValue("content", out var captionContentToken) && captionContentToken is JArray captionArray)
+            {
+                if (!string.IsNullOrEmpty(captionContent.PlainText) &&
+                    !char.IsWhiteSpace(captionContent.PlainText[^1]))
+                {
+                    captionArray.Add(new JObject
+                    {
+                        ["type"] = "text",
+                        ["value"] = " "
+                    });
+                }
+
+                if (!TryAppendContentItems(captionArray, nextObj))
+                    return false;
+
+                mergedJson = captionObj.ToString(Newtonsoft.Json.Formatting.None);
+                return true;
+            }
+
+            if (captionObj.TryGetValue("text", out var captionTextToken) && captionTextToken.Type == JTokenType.String)
+            {
+                var nextText = nextContent.PlainText ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(nextText))
+                    return false;
+
+                var captionText = captionTextToken.Value<string>() ?? string.Empty;
+                var separator = string.IsNullOrEmpty(captionText) || char.IsWhiteSpace(captionText[^1]) ? "" : " ";
+                captionObj["text"] = captionText + separator + nextText;
+                mergedJson = captionObj.ToString(Newtonsoft.Json.Formatting.None);
+                return true;
+            }
+        }
+        catch (Newtonsoft.Json.JsonException)
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static bool TryAppendContentItems(JArray captionArray, JObject nextObj)
+    {
+        if (nextObj.TryGetValue("content", out var nextContentToken) && nextContentToken is JArray nextArray)
+        {
+            foreach (var item in nextArray)
+                captionArray.Add(item.DeepClone());
+            return nextArray.Count > 0;
+        }
+
+        if (nextObj.TryGetValue("text", out var nextTextToken) && nextTextToken.Type == JTokenType.String)
+        {
+            var text = nextTextToken.Value<string>();
+            if (string.IsNullOrWhiteSpace(text))
+                return false;
+
+            captionArray.Add(new JObject
+            {
+                ["type"] = "text",
+                ["value"] = text
+            });
+            return true;
+        }
+
+        return false;
     }
 
     private static bool IsCaptionCandidate(string text)

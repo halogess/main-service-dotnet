@@ -76,7 +76,7 @@ public class TextFormatExtractor
     
     /// <summary>
     /// Extract EFFECTIVE run properties using full style inheritance via StyleResolver.
-    /// Precedence: docDefaults → paragraphStyle.rPr → characterStyle.rPr → direct rPr
+    /// Precedence: docDefaults → default character style → paragraphStyle.rPr → characterStyle.rPr → direct rPr
     /// </summary>
     public DokumenFormatText ExtractEffectiveFormat(
         Run run,

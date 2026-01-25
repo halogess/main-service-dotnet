@@ -36,12 +36,6 @@ public partial class ValidationService
 
         if (aturan == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Aturan",
-                Field = "aturan",
-                Message = "Tidak ada aturan yang aktif"
-            });
             return result;
         }
 
@@ -53,12 +47,6 @@ public partial class ValidationService
 
         if (judulDetail == null)
         {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Isi Buku",
-                Field = "judul_bab",
-                Message = "Aturan judul bab tidak ditemukan"
-            });
             return result;
         }
 
@@ -121,19 +109,27 @@ public partial class ValidationService
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
 
         var elementsById = bodyElements.ToDictionary(e => e.DelemenId);
-        var sectionHeaderIds = new HashSet<ulong>();
+        var labelChapterIds = new HashSet<ulong>();
         foreach (var elem in bodyElements)
         {
-            if (labelMap.TryGetValue(elem.DelemenId, out var label) &&
-                label.Equals("section_header", StringComparison.OrdinalIgnoreCase))
-            {
-                sectionHeaderIds.Add(elem.DelemenId);
-            }
+            if (!labelMap.TryGetValue(elem.DelemenId, out var label))
+                continue;
+
+            var normalizedLabel = NormalizeLabel(label);
+            if (normalizedLabel == "judul_bab")
+                labelChapterIds.Add(elem.DelemenId);
         }
+
+        var resolvedChapterIds = chapterIds;
+        if (resolvedChapterIds == null || resolvedChapterIds.Count == 0)
+            resolvedChapterIds = labelChapterIds.Count > 0 ? labelChapterIds : null;
+
+        if (resolvedChapterIds == null || resolvedChapterIds.Count == 0)
+            return result;
 
         var contentById = new Dictionary<ulong, ElementContentInfo>();
         var candidateParagraphIds = new HashSet<uint>();
-        foreach (var id in sectionHeaderIds)
+        foreach (var id in resolvedChapterIds)
         {
             if (!elementsById.TryGetValue(id, out var elem))
                 continue;
@@ -152,66 +148,22 @@ public partial class ValidationService
         var titleIds = new HashSet<ulong>();
         var titleBlock = new List<ElementContentInfo>();
 
-        if (chapterIds != null)
+        foreach (var elem in bodyElements)
         {
-            foreach (var elem in bodyElements)
+            if (!resolvedChapterIds.Contains(elem.DelemenId))
+                continue;
+
+            if (!contentById.TryGetValue(elem.DelemenId, out var content))
             {
-                if (!chapterIds.Contains(elem.DelemenId))
-                    continue;
-
-                if (!contentById.TryGetValue(elem.DelemenId, out var content))
-                {
-                    content = ParseElementContent(elem.DelemenJsonTree);
-                    contentById[elem.DelemenId] = content;
-                }
-
-                if (!titleElementId.HasValue)
-                    titleElementId = elem.DelemenId;
-
-                titleIds.Add(elem.DelemenId);
-                titleBlock.Add(content);
+                content = ParseElementContent(elem.DelemenJsonTree);
+                contentById[elem.DelemenId] = content;
             }
-        }
-        else
-        {
-            var inTitleBlock = false;
-            foreach (var elem in bodyElements)
-            {
-                if (!sectionHeaderIds.Contains(elem.DelemenId))
-                {
-                    if (inTitleBlock)
-                        break;
-                    continue;
-                }
 
-                if (!contentById.TryGetValue(elem.DelemenId, out var content))
-                {
-                    content = ParseElementContent(elem.DelemenJsonTree);
-                    contentById[elem.DelemenId] = content;
-                }
+            if (!titleElementId.HasValue)
+                titleElementId = elem.DelemenId;
 
-                if (!content.ParagraphFormatId.HasValue ||
-                    !paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format) ||
-                    !string.Equals(format.DfpJc, "center", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (inTitleBlock)
-                        break;
-                    continue;
-                }
-
-                if (!inTitleBlock)
-                {
-                    var plainText = content.PlainText?.TrimStart() ?? string.Empty;
-                    if (!plainText.StartsWith("BAB", StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    inTitleBlock = true;
-                    titleElementId = elem.DelemenId;
-                }
-
-                titleIds.Add(elem.DelemenId);
-                titleBlock.Add(content);
-            }
+            titleIds.Add(elem.DelemenId);
+            titleBlock.Add(content);
         }
 
         result.TotalChecks++;
@@ -1240,8 +1192,31 @@ public partial class ValidationService
         return elementType.StartsWith("list-item-", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static int? TryParseListItemLevel(string? elementType, DokumenFormatParagraf? format)
+    private static bool IsListLabel(string? label)
     {
+        var normalized = NormalizeLabel(label);
+        return normalized.StartsWith("list_level_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int? TryParseListLabelLevel(string? label)
+    {
+        var normalized = NormalizeLabel(label);
+        if (!normalized.StartsWith("list_level_", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var suffix = normalized["list_level_".Length..];
+        if (int.TryParse(suffix, NumberStyles.Integer, CultureInfo.InvariantCulture, out var level) && level > 0)
+            return level - 1;
+
+        return null;
+    }
+
+    private static int? TryParseListItemLevel(string? elementType, DokumenFormatParagraf? format, string? label = null)
+    {
+        var labelLevel = TryParseListLabelLevel(label);
+        if (labelLevel.HasValue)
+            return labelLevel.Value;
+
         if (!string.IsNullOrWhiteSpace(elementType))
         {
             var parts = elementType.Split('-', StringSplitOptions.RemoveEmptyEntries);
@@ -1317,24 +1292,20 @@ public partial class ValidationService
             }
         }
 
-        // Find first subchapter (element with section_header label that matches X.X pattern)
-        var subchapterPattern = new System.Text.RegularExpressions.Regex(@"^\d+\.\d+", System.Text.RegularExpressions.RegexOptions.Compiled);
+        // Find first subchapter (label judul_subbab only)
         int? firstSubchapterIndex = null;
         
         for (int i = titleEndIndex; i < bodyElements.Count; i++)
         {
             var elemId = bodyElements[i].DelemenId;
-            if (labelMap.TryGetValue(elemId, out var label) && 
-                label.Equals("section_header", StringComparison.OrdinalIgnoreCase))
+            if (!labelMap.TryGetValue(elemId, out var label))
+                continue;
+
+            var normalizedLabel = NormalizeLabel(label);
+            if (normalizedLabel == "judul_subbab")
             {
-                var content = ParseElementContent(bodyElements[i].DelemenJsonTree);
-                var plainText = content.PlainText?.Trim() ?? string.Empty;
-                
-                if (subchapterPattern.IsMatch(plainText))
-                {
-                    firstSubchapterIndex = i;
-                    break;
-                }
+                firstSubchapterIndex = i;
+                break;
             }
         }
 
@@ -1344,21 +1315,24 @@ public partial class ValidationService
             return;
         }
 
-        // Check if there's at least one paragraph (text) between title and first subchapter
+        // Check if there's at least one paragraph (paragraf) between title and first subchapter
         result.TotalChecks++;
         bool hasParagraphBefore = false;
         
         for (int i = titleEndIndex; i < firstSubchapterIndex.Value; i++)
         {
             var elemId = bodyElements[i].DelemenId;
-            if (labelMap.TryGetValue(elemId, out var label) && 
-                label.Equals("text", StringComparison.OrdinalIgnoreCase))
+            if (labelMap.TryGetValue(elemId, out var label))
             {
-                var content = ParseElementContent(bodyElements[i].DelemenJsonTree);
-                if (!IsEmptyElement(content))
+                var normalizedLabel = NormalizeLabel(label);
+                if (normalizedLabel == "paragraf")
                 {
-                    hasParagraphBefore = true;
-                    break;
+                    var content = ParseElementContent(bodyElements[i].DelemenJsonTree);
+                    if (!IsEmptyElement(content))
+                    {
+                        hasParagraphBefore = true;
+                        break;
+                    }
                 }
             }
         }
@@ -1454,14 +1428,29 @@ public partial class ValidationService
         if (string.IsNullOrWhiteSpace(label))
             return int.MaxValue;
 
-        return label.Trim().ToLowerInvariant() switch
+        var normalized = NormalizeLabel(label);
+        if (normalized.StartsWith("list_level_", StringComparison.OrdinalIgnoreCase))
+            return 5;
+
+        return normalized switch
         {
-            "section_header" => 0,
-            "text" => 1,
-            "table" => 2,
-            "image" => 3,
-            "formula" => 4,
-            _ => 10
+            "judul_bab" => 0,
+            "judul_subbab" => 1,
+            "caption_gambar" => 2,
+            "caption_tabel" => 3,
+            "paragraf" => 4,
+            "list_item" => 5,
+            "tabel" => 6,
+            "gambar" => 7,
+            "kode" => 8,
+            "page_header" => 9,
+            "page_footer" => 10,
+            "section_header" => 11,
+            "text" => 12,
+            "table" => 13,
+            "image" => 14,
+            "formula" => 15,
+            _ => 20
         };
     }
 
@@ -1712,9 +1701,7 @@ public partial class ValidationService
                     c.IndexOf("elemen", StringComparison.OrdinalIgnoreCase) >= 0 &&
                     c.IndexOf("id", StringComparison.OrdinalIgnoreCase) >= 0);
 
-            var labelColumn = columns.FirstOrDefault(c => c.Equals("label", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c => c.EndsWith("label", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c => c.IndexOf("label", StringComparison.OrdinalIgnoreCase) >= 0);
+            var labelColumn = columns.FirstOrDefault(c => c.Equals("dev_label_struktural", StringComparison.OrdinalIgnoreCase));
 
             return (idColumn, labelColumn);
         }

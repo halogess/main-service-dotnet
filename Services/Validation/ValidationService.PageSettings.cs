@@ -31,15 +31,7 @@ public partial class ValidationService
             .FirstOrDefaultAsync(cancellationToken);
 
         if (aturan == null)
-        {
-            result.Errors.Add(new ValidationError
-            {
-                Category = "Aturan",
-                Field = "aturan",
-                Message = "Tidak ada aturan yang aktif"
-            });
             return result;
-        }
 
         // Get aturan details for page settings
         var aturanDetails = await _db.AturanDetails

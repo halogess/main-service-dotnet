@@ -229,10 +229,11 @@ public class TableStyleResolver
         
         // Extract wholeTable properties
         // Note: Table styles only have StyleTableProperties (tblPr) and StyleTableCellProperties (tcPr)
-        // There is no StyleTableRowProperties in OpenXML SDK
         // Convert StyleTableProperties to TableProperties
         styleDef.WholeTableTblPr = ConvertStyleTablePropertiesToTableProperties(style.StyleTableProperties);
-        styleDef.WholeTableTrPr = null; // Not available in table styles
+        // Convert style row properties (CT_TrPrBaseStyleable) to TableRowProperties
+        var styleRowProps = style.GetFirstChild<TableStyleConditionalFormattingTableRowProperties>();
+        styleDef.WholeTableTrPr = ConvertStyleTableRowPropertiesToTableRowProperties(styleRowProps);
         // Convert StyleTableCellProperties to TableCellProperties
         styleDef.WholeTableTcPr = ConvertStyleTableCellPropertiesToTableCellProperties(style.StyleTableCellProperties);
         
@@ -245,9 +246,12 @@ public class TableStyleResolver
             
             var conditionalStyle = new ConditionalTableStyle
             {
-                TblPr = ConvertStyleTablePropertiesToTableProperties(tblStylePr.GetFirstChild<StyleTableProperties>()),
-                TrPr = null, // Not available in conditional table styles
-                TcPr = ConvertStyleTableCellPropertiesToTableCellProperties(tblStylePr.GetFirstChild<StyleTableCellProperties>())
+                TblPr = ConvertConditionalTablePropertiesToTableProperties(
+                    tblStylePr.GetFirstChild<TableStyleConditionalFormattingTableProperties>()),
+                TrPr = ConvertStyleTableRowPropertiesToTableRowProperties(
+                    tblStylePr.GetFirstChild<TableStyleConditionalFormattingTableRowProperties>()),
+                TcPr = ConvertConditionalTableCellPropertiesToTableCellProperties(
+                    tblStylePr.GetFirstChild<TableStyleConditionalFormattingTableCellProperties>())
             };
             
             styleDef.ConditionalStyles[type] = conditionalStyle;
@@ -442,6 +446,21 @@ public class TableStyleResolver
         
         return tableProps;
     }
+
+    private static TableProperties? ConvertConditionalTablePropertiesToTableProperties(
+        TableStyleConditionalFormattingTableProperties? styleProps)
+    {
+        if (styleProps == null)
+            return null;
+
+        var tableProps = new TableProperties();
+        foreach (var child in styleProps.ChildElements)
+        {
+            tableProps.Append(child.CloneNode(true));
+        }
+
+        return tableProps;
+    }
     
     /// <summary>
     /// Convert StyleTableCellProperties to TableCellProperties by cloning all child elements.
@@ -461,6 +480,36 @@ public class TableStyleResolver
         }
         
         return cellProps;
+    }
+
+    private static TableCellProperties? ConvertConditionalTableCellPropertiesToTableCellProperties(
+        TableStyleConditionalFormattingTableCellProperties? styleCellProps)
+    {
+        if (styleCellProps == null)
+            return null;
+
+        var cellProps = new TableCellProperties();
+        foreach (var child in styleCellProps.ChildElements)
+        {
+            cellProps.Append(child.CloneNode(true));
+        }
+
+        return cellProps;
+    }
+
+    private static TableRowProperties? ConvertStyleTableRowPropertiesToTableRowProperties(
+        TableStyleConditionalFormattingTableRowProperties? styleRowProps)
+    {
+        if (styleRowProps == null)
+            return null;
+
+        var rowProps = new TableRowProperties();
+        foreach (var child in styleRowProps.ChildElements)
+        {
+            rowProps.Append(child.CloneNode(true));
+        }
+
+        return rowProps;
     }
     
 

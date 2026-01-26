@@ -194,12 +194,15 @@ public class DrawingExtractor
     {
         if (parent == null)
             return (null, null);
-        
-        var xml = parent.OuterXml;
-        var idMatch = System.Text.RegularExpressions.Regex.Match(xml, @"id=[""']([^""']+)[""']");
-        var nameMatch = System.Text.RegularExpressions.Regex.Match(xml, @"o:spid=[""']([^""']+)[""']");
-        
-        return (idMatch.Success ? idMatch.Groups[1].Value : null, 
-                nameMatch.Success ? nameMatch.Groups[1].Value : null);
+
+        var shape = parent as DocumentFormat.OpenXml.Vml.Shape
+            ?? parent.Descendants<DocumentFormat.OpenXml.Vml.Shape>().FirstOrDefault();
+        if (shape == null)
+            return (null, null);
+
+        var id = string.IsNullOrWhiteSpace(shape.Id?.Value) ? null : shape.Id!.Value;
+        var spid = string.IsNullOrWhiteSpace(shape.OptionalString?.Value) ? null : shape.OptionalString!.Value;
+
+        return (id, spid);
     }
 }

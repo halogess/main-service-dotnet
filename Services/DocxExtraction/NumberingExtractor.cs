@@ -10,7 +10,7 @@ public static class NumberingExtractor
 {
     /// <summary>
     /// Get the formatted numbering text for a list item.
-    /// Counters are keyed by abstractNumId because multiple numIds can share the same abstractNumId.
+    /// Counters are keyed by numId to keep each numbering instance independent.
     /// </summary>
     public static string GetNumberingText(
         NumberingDefinitionsPart numberingPart, 
@@ -18,104 +18,214 @@ public static class NumberingExtractor
         int ilvl, 
         Dictionary<int, Dictionary<int, int>> counters)
     {
-        var numInstance = numberingPart.Numbering.Elements<NumberingInstance>()
+        var numbering = numberingPart.Numbering;
+        if (numbering == null) return "?";
+
+        var numInstance = numbering.Elements<NumberingInstance>()
             .FirstOrDefault(n => n.NumberID?.Value == numId);
         if (numInstance == null) return "?";
-        
+
         int abstractNumId = numInstance.AbstractNumId?.Val?.Value ?? -1;
-        
-        var abstractNum = numberingPart.Numbering.Elements<AbstractNum>()
+        var abstractNum = numbering.Elements<AbstractNum>()
             .FirstOrDefault(a => a.AbstractNumberId?.Value == abstractNumId);
         if (abstractNum == null) return "?";
-        
-        var level = abstractNum.Elements<Level>()
-            .FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == ilvl);
+
+        var level = GetEffectiveLevel(numInstance, abstractNum, ilvl, out var startOverride);
         if (level == null) return "?";
-        
-        // Check for lvlOverride with startOverride in num instance
-        int? startOverride = null;
-        var lvlOverride = numInstance.Elements<LevelOverride>()
-            .FirstOrDefault(lo => lo.LevelIndex?.Value == ilvl);
-        if (lvlOverride != null)
+
+        if (!counters.TryGetValue(numId, out var numCounters))
         {
-            startOverride = lvlOverride.StartOverrideNumberingValue?.Val?.Value;
+            numCounters = new Dictionary<int, int>();
+            counters[numId] = numCounters;
         }
-        
-        // Use abstractNumId as key so different numIds sharing same abstractNumId share counter
-        if (!counters.ContainsKey(abstractNumId))
-            counters[abstractNumId] = new Dictionary<int, int>();
-        
-        // Track applied startOverrides using negative numId as key
-        int appliedKey = -numId - 1;
-        bool startOverrideApplied = counters.ContainsKey(appliedKey);
-        
-        if (startOverride.HasValue && !startOverrideApplied)
+
+        if (!numCounters.TryGetValue(ilvl, out var currentVal))
         {
-            counters[appliedKey] = new Dictionary<int, int>();
-            counters[abstractNumId][ilvl] = startOverride.Value;
-        }
-        else if (!counters[abstractNumId].ContainsKey(ilvl))
-        {
-            int start = level.StartNumberingValue?.Val ?? 1;
-            counters[abstractNumId][ilvl] = start;
+            currentVal = startOverride ?? GetLevelStart(level);
+            numCounters[ilvl] = currentVal;
         }
         else
         {
-            counters[abstractNumId][ilvl]++;
+            currentVal++;
+            numCounters[ilvl] = currentVal;
         }
-        
-        // Reset lower levels when we move to a higher level
-        foreach (var key in counters[abstractNumId].Keys.ToList())
+
+        ResetLowerLevels(numCounters, numInstance, abstractNum, ilvl);
+
+        var numFmt = level.NumberingFormat?.Val?.Value ?? NumberFormatValues.Decimal;
+        var lvlText = level.LevelText?.Val?.Value ?? $"%{ilvl + 1}";
+
+        if (numFmt == NumberFormatValues.None)
+            return string.Empty;
+
+        if (numFmt == NumberFormatValues.Bullet || level.LevelPictureBulletId != null)
         {
-            if (key > ilvl) counters[abstractNumId].Remove(key);
+            var normalizedBullet = NormalizeBulletChar(lvlText);
+            var bulletText = normalizedBullet.Length > 0 ? normalizedBullet : "â€¢";
+            return bulletText + GetLevelSuffix(level);
         }
-        
-        int currentVal = counters[abstractNumId][ilvl];
-        
-        string lvlText = level.LevelText?.Val?.Value ?? "";
-        string numFmt = level.NumberingFormat?.Val?.ToString() ?? "decimal";
-        
-        if (numFmt == "bullet")
-        {
-            string normalizedBullet = NormalizeBulletChar(lvlText);
-            return normalizedBullet.Length > 0 ? normalizedBullet : "•";
-        }
-        
-        string formatted = lvlText;
-        for (int i = 0; i <= ilvl; i++)
-        {
-            int cVal = counters[abstractNumId].ContainsKey(i) 
-                ? counters[abstractNumId][i] 
-                : (int)(abstractNum.Elements<Level>()
-                    .FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == i)?
-                    .StartNumberingValue?.Val ?? 1);
-             
-            var subLevel = abstractNum.Elements<Level>()
-                .FirstOrDefault(l => l.LevelIndex != null && l.LevelIndex.Value == i);
-            string subFmt = subLevel?.NumberingFormat?.Val?.ToString() ?? "decimal";
-             
-            string subValStr = FormatNumber(cVal, subFmt, subLevel?.LevelText?.Val?.Value);
-            formatted = formatted.Replace($"%{i + 1}", subValStr);
-        }
-        
-        return formatted;
+
+        var isLegal = level.IsLegalNumberingStyle != null &&
+                      (level.IsLegalNumberingStyle.Val?.Value ?? true);
+
+        var formatted = ReplaceLevelText(
+            lvlText,
+            placeholderIndex =>
+            {
+                int levelIndex = placeholderIndex - 1;
+                if (levelIndex < 0)
+                    return null;
+
+                var subLevel = GetEffectiveLevel(numInstance, abstractNum, levelIndex, out var subStartOverride);
+                var levelValue = numCounters.TryGetValue(levelIndex, out var existing)
+                    ? existing
+                    : (subStartOverride ?? GetLevelStart(subLevel));
+
+                var subFmt = isLegal
+                    ? NumberFormatValues.Decimal
+                    : (subLevel?.NumberingFormat?.Val?.Value ?? NumberFormatValues.Decimal);
+
+                return FormatNumber(levelValue, subFmt, subLevel?.LevelText?.Val?.Value);
+            });
+
+        return formatted + GetLevelSuffix(level);
     }
-    
+
     /// <summary>
     /// Format a number according to the numbering format
     /// </summary>
-    public static string FormatNumber(int value, string format, string? levelText = null)
+    public static string FormatNumber(int value, NumberFormatValues format, string? levelText = null)
     {
-        return format switch
+        if (format == NumberFormatValues.DecimalZero)
+            return value.ToString("D2");
+        if (format == NumberFormatValues.LowerLetter)
+            return GetLetter(value, true);
+        if (format == NumberFormatValues.UpperLetter)
+            return GetLetter(value, false);
+        if (format == NumberFormatValues.LowerRoman)
+            return ToRoman(value).ToLowerInvariant();
+        if (format == NumberFormatValues.UpperRoman)
+            return ToRoman(value);
+        if (format == NumberFormatValues.Bullet)
+            return NormalizeBulletChar(levelText ?? string.Empty);
+        if (format == NumberFormatValues.None)
+            return string.Empty;
+
+        return value.ToString();
+    }
+
+    private static Level? GetEffectiveLevel(
+        NumberingInstance numInstance,
+        AbstractNum abstractNum,
+        int ilvl,
+        out int? startOverride)
+    {
+        startOverride = null;
+
+        var levelOverride = numInstance.Elements<LevelOverride>()
+            .FirstOrDefault(lo => lo.LevelIndex?.Value == ilvl);
+        if (levelOverride != null)
         {
-            "decimalZero" => value.ToString("D2"),
-            "lowerLetter" => GetLetter(value, true),
-            "upperLetter" => GetLetter(value, false),
-            "lowerRoman" => ToRoman(value).ToLowerInvariant(),
-            "upperRoman" => ToRoman(value),
-            "bullet" => NormalizeBulletChar(levelText ?? ""),
-            _ => value.ToString()
-        };
+            startOverride = levelOverride.StartOverrideNumberingValue?.Val?.Value;
+            if (levelOverride.Level != null)
+                return levelOverride.Level;
+        }
+
+        return abstractNum.Elements<Level>()
+            .FirstOrDefault(l => l.LevelIndex?.Value == ilvl);
+    }
+
+    private static int GetLevelStart(Level? level)
+    {
+        return level?.StartNumberingValue?.Val?.Value ?? 1;
+    }
+
+    private static void ResetLowerLevels(
+        Dictionary<int, int> numCounters,
+        NumberingInstance numInstance,
+        AbstractNum abstractNum,
+        int currentLevel)
+    {
+        var keys = numCounters.Keys.ToList();
+        foreach (var levelIndex in keys)
+        {
+            if (levelIndex <= currentLevel)
+                continue;
+
+            var restart = GetLevelRestart(numInstance, abstractNum, levelIndex);
+            if (restart.HasValue && restart.Value > currentLevel)
+                continue;
+
+            numCounters.Remove(levelIndex);
+        }
+    }
+
+    private static int? GetLevelRestart(
+        NumberingInstance numInstance,
+        AbstractNum abstractNum,
+        int levelIndex)
+    {
+        var level = GetEffectiveLevel(numInstance, abstractNum, levelIndex, out var unusedStartOverride);
+        return level?.LevelRestart?.Val?.Value;
+    }
+
+    private static string ReplaceLevelText(string levelText, Func<int, string?> resolvePlaceholder)
+    {
+        if (string.IsNullOrEmpty(levelText))
+            return string.Empty;
+
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < levelText.Length; i++)
+        {
+            var ch = levelText[i];
+            if (ch != '%' || i + 1 >= levelText.Length)
+            {
+                sb.Append(ch);
+                continue;
+            }
+
+            var next = levelText[i + 1];
+            if (next == '%')
+            {
+                sb.Append('%');
+                i++;
+                continue;
+            }
+
+            if (!char.IsDigit(next))
+            {
+                sb.Append(ch);
+                continue;
+            }
+
+            int j = i + 1;
+            int number = 0;
+            while (j < levelText.Length && char.IsDigit(levelText[j]))
+            {
+                number = number * 10 + (levelText[j] - '0');
+                j++;
+            }
+
+            var replacement = resolvePlaceholder(number);
+            if (replacement != null)
+                sb.Append(replacement);
+            else
+                sb.Append(levelText, i, j - i);
+
+            i = j - 1;
+        }
+
+        return sb.ToString();
+    }
+
+    private static string GetLevelSuffix(Level level)
+    {
+        var suffix = level.LevelSuffix?.Val?.Value ?? LevelSuffixValues.Tab;
+        if (suffix == LevelSuffixValues.Nothing)
+            return "";
+        if (suffix == LevelSuffixValues.Space)
+            return " ";
+        return "\t";
     }
     
     /// <summary>

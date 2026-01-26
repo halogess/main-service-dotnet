@@ -1,4 +1,6 @@
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
+using System.Globalization;
 
 namespace ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 
@@ -68,28 +70,49 @@ public class TableLookFlags
     /// </summary>
     public static TableLookFlags FromTableLook(TableLook? tableLook)
     {
-        if (tableLook == null)
+        var defaults = new TableLookFlags
         {
-            // Default values when no tblLook is specified
-            return new TableLookFlags
-            {
-                FirstRow = true,
-                LastRow = false,
-                FirstColumn = true,
-                LastColumn = false,
-                NoHBand = false,
-                NoVBand = false
-            };
-        }
-        
+            FirstRow = true,
+            LastRow = false,
+            FirstColumn = true,
+            LastColumn = false,
+            NoHBand = false,
+            NoVBand = true
+        };
+
+        if (tableLook == null)
+            return defaults;
+
+        var fromVal = ParseTableLookVal(tableLook.Val);
+
         return new TableLookFlags
         {
-            FirstRow = tableLook.FirstRow?.Value ?? true,
-            LastRow = tableLook.LastRow?.Value ?? false,
-            FirstColumn = tableLook.FirstColumn?.Value ?? true,
-            LastColumn = tableLook.LastColumn?.Value ?? false,
-            NoHBand = tableLook.NoHorizontalBand?.Value ?? false,
-            NoVBand = tableLook.NoVerticalBand?.Value ?? false
+            FirstRow = tableLook.FirstRow?.Value ?? fromVal?.FirstRow ?? defaults.FirstRow,
+            LastRow = tableLook.LastRow?.Value ?? fromVal?.LastRow ?? defaults.LastRow,
+            FirstColumn = tableLook.FirstColumn?.Value ?? fromVal?.FirstColumn ?? defaults.FirstColumn,
+            LastColumn = tableLook.LastColumn?.Value ?? fromVal?.LastColumn ?? defaults.LastColumn,
+            NoHBand = tableLook.NoHorizontalBand?.Value ?? fromVal?.NoHBand ?? defaults.NoHBand,
+            NoVBand = tableLook.NoVerticalBand?.Value ?? fromVal?.NoVBand ?? defaults.NoVBand
+        };
+    }
+
+    private static TableLookFlags? ParseTableLookVal(HexBinaryValue? val)
+    {
+        var hex = val?.Value;
+        if (string.IsNullOrWhiteSpace(hex))
+            return null;
+
+        if (!int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var mask))
+            return null;
+
+        return new TableLookFlags
+        {
+            FirstRow = (mask & 0x0020) != 0,
+            LastRow = (mask & 0x0040) != 0,
+            FirstColumn = (mask & 0x0080) != 0,
+            LastColumn = (mask & 0x0100) != 0,
+            NoHBand = (mask & 0x0200) != 0,
+            NoVBand = (mask & 0x0400) != 0
         };
     }
 }

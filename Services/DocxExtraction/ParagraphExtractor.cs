@@ -39,10 +39,22 @@ public class ParagraphExtractor
     
     // Database context for saving formats (optional - set via SetDbContext)
     private KorektorBukuDbContext? _db;
+    private ThemeFontResolver? _themeFontResolver;
     private ThemeFontLangResolver? _themeFontLangResolver;
     
     // Table extraction callback (to handle nested tables in textboxes)
     private Func<Table, NumberingDefinitionsPart?, Dictionary<int, Dictionary<int, int>>?, Task<JObject>>? _tableExtractor;
+
+    private sealed class FieldContext
+    {
+        public StringBuilder InstrBuilder { get; } = new StringBuilder();
+        public StringBuilder ResultBuilder { get; } = new StringBuilder();
+        public bool InInstruction { get; set; } = true;
+        public bool InResult { get; set; }
+        public bool IsLocked { get; set; }
+        public bool IsDirty { get; set; }
+        public Run? FirstResultRun { get; set; }
+    }
 
     public ParagraphExtractor(ILogger logger, DrawingExtractor drawingExtractor)
     {
@@ -75,6 +87,14 @@ public class ParagraphExtractor
     public void SetThemeFontLangResolver(ThemeFontLangResolver? themeFontLangResolver)
     {
         _themeFontLangResolver = themeFontLangResolver;
+    }
+
+    /// <summary>
+    /// Sets the ThemeFontResolver for theme font resolution
+    /// </summary>
+    public void SetThemeFontResolver(ThemeFontResolver? themeFontResolver)
+    {
+        _themeFontResolver = themeFontResolver;
     }
     
     /// <summary>
@@ -184,7 +204,7 @@ public class ParagraphExtractor
                 {
                     string label = NumberingExtractor.GetNumberingText(numberingPart, numId.Value, ilvl, numberingCounters);
                     if (!string.IsNullOrEmpty(label))
-                        numberingText = label + " ";
+                        numberingText = label;
                     _logger.LogInformation("Numbering: source={Source}, numId={NumId}, ilvl={Ilvl}, label={Label}", 
                         source, numId, ilvl, label);
                 }
@@ -225,7 +245,8 @@ public class ParagraphExtractor
             uint? textFormatId = null;
             if (_db != null && currentRun != null && _styleResolver != null)
             {
-                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(currentRun, _styleResolver, paragraphProps, _themeFontLangResolver);
+                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(
+                    currentRun, _styleResolver, paragraphProps, _themeFontLangResolver, _themeFontResolver);
                 _db.DokumenFormatTexts.Add(textFormat);
                 _db.SaveChanges();
                 textFormatId = textFormat.DftxId;
@@ -258,66 +279,110 @@ public class ParagraphExtractor
             currentRun = null;
         }
         
-        // === FIELD TRACKING STATE (for complex fields spanning multiple runs) ===
-        bool inComplexField = false;
-        bool inFieldInstr = false;
-        bool inFieldResult = false;
-        var fieldInstrBuilder = new System.Text.StringBuilder();
-        var fieldResultBuilder = new System.Text.StringBuilder();
-        bool fieldIsLocked = false;
-        bool fieldIsDirty = false;
-        Run? firstResultRun = null; // To capture formatting of result
-        
-        void FlushComplexField()
+        // === FIELD TRACKING STATE (supports nested fields) ===
+        var fieldStack = new Stack<FieldContext>();
+
+        FieldContext? CurrentField()
         {
-            if (!inComplexField) return;
-            
-            var instrText = fieldInstrBuilder.ToString().Trim();
-            var resultText = fieldResultBuilder.ToString();
-            
-            // Save field format to database
-            ulong? fieldFormatId = null;
-            if (_db != null && !string.IsNullOrEmpty(instrText))
+            return fieldStack.Count > 0 ? fieldStack.Peek() : null;
+        }
+
+        void CloseField(FieldContext context)
+        {
+            var instrTextRaw = context.InstrBuilder.ToString();
+            var resultText = context.ResultBuilder.ToString();
+
+            if (fieldStack.Count > 0)
             {
-                var fieldFormat = _fieldFormatExtractor.ExtractFormat(instrText, resultText, fieldIsLocked, fieldIsDirty);
+                var parent = fieldStack.Peek();
+                if (parent.InResult)
+                    parent.ResultBuilder.Append(resultText);
+                else if (parent.InInstruction)
+                    parent.InstrBuilder.Append(instrTextRaw);
+                return;
+            }
+
+            // Save field format to database (top-level only)
+            ulong? fieldFormatId = null;
+            if (_db != null && !string.IsNullOrEmpty(instrTextRaw))
+            {
+                var fieldFormat = _fieldFormatExtractor.ExtractFormat(instrTextRaw, resultText, context.IsLocked, context.IsDirty);
                 _db.DokumenFormatFields.Add(fieldFormat);
                 _db.SaveChanges();
                 fieldFormatId = fieldFormat.DffdId;
             }
-            
+
             // Create field JSON item - format IDs first, then content
             FlushText();
             var fieldItem = new JObject
             {
                 ["type"] = "field",
-                ["field_type"] = _fieldFormatExtractor.DetectFieldType(instrText)
+                ["field_type"] = _fieldFormatExtractor.DetectFieldType(instrTextRaw)
             };
             if (fieldFormatId.HasValue)
                 fieldItem["dffd_id"] = fieldFormatId.Value;
-            
+
             // Add result format ID if we captured first result run (save ALL, not just significant)
-            if (firstResultRun != null && _db != null && _styleResolver != null)
+            if (context.FirstResultRun != null && _db != null && _styleResolver != null)
             {
-                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(firstResultRun, _styleResolver, paragraphProps, _themeFontLangResolver);
+                var textFormat = _textFormatExtractor.ExtractEffectiveFormat(
+                    context.FirstResultRun, _styleResolver, paragraphProps, _themeFontLangResolver, _themeFontResolver);
                 _db.DokumenFormatTexts.Add(textFormat);
                 _db.SaveChanges();
                 fieldItem["result_dftx_id"] = textFormat.DftxId;
             }
-            
+
             // Add value after IDs
             fieldItem["value"] = resultText;
-            
+
             regularItems.Add((fieldItem, itemIndex++));
-            
-            // Reset state
-            inComplexField = false;
-            inFieldInstr = false;
-            inFieldResult = false;
-            fieldInstrBuilder.Clear();
-            fieldResultBuilder.Clear();
-            fieldIsLocked = false;
-            fieldIsDirty = false;
-            firstResultRun = null;
+        }
+
+        void StartField(FieldChar fldChar)
+        {
+            var ctx = new FieldContext
+            {
+                IsLocked = fldChar.FieldLock?.Value ?? false,
+                IsDirty = fldChar.Dirty?.Value ?? false
+            };
+            fieldStack.Push(ctx);
+        }
+
+        void SeparateField()
+        {
+            var current = CurrentField();
+            if (current == null)
+                return;
+
+            current.InInstruction = false;
+            current.InResult = true;
+        }
+
+        void EndField()
+        {
+            if (fieldStack.Count == 0)
+                return;
+
+            var ctx = fieldStack.Pop();
+            CloseField(ctx);
+        }
+
+        void AppendFieldInstruction(string text)
+        {
+            var current = CurrentField();
+            if (current?.InInstruction == true)
+                current.InstrBuilder.Append(text);
+        }
+
+        void AppendFieldResult(string text, Run? run)
+        {
+            var current = CurrentField();
+            if (current?.InResult != true)
+                return;
+
+            if (current.FirstResultRun == null && run != null)
+                current.FirstResultRun = run;
+            current.ResultBuilder.Append(text);
         }
         
         void ProcessElement(OpenXmlElement elem, bool skipTextBox = false)
@@ -334,8 +399,10 @@ public class ParagraphExtractor
                 {
                     effective = _styleResolver.GetEffectiveRunProperties(run, paragraphProps);
                     // Create format signature from key properties: font|size|bold|italic|underline
-                    var fontKey = TextFormatExtractor.ResolvePreferredFont(effective, run, _themeFontLangResolver) ?? "";
-                    formatSignature = $"{fontKey}|{effective.FontSize ?? 0}|{(effective.Bold == true ? "B" : "")}|{(effective.Italic == true ? "I" : "")}|{(effective.Underline == true ? "U" : "")}|{effective.UnderlineStyle ?? ""}";
+                    var fontKey = TextFormatExtractor.ResolvePreferredFont(
+                        effective, run, _themeFontLangResolver, _themeFontResolver) ?? "";
+                    var sizeKey = TextFormatExtractor.ResolvePreferredFontSize(effective, run, _themeFontLangResolver) ?? 0;
+                    formatSignature = $"{fontKey}|{sizeKey}|{(effective.Bold == true ? "B" : "")}|{(effective.Italic == true ? "I" : "")}|{(effective.Underline == true ? "U" : "")}|{effective.UnderlineStyle ?? ""}";
                 }
                 
                 var runText = new StringBuilder();
@@ -373,76 +440,49 @@ public class ParagraphExtractor
                         
                         if (fldType == FieldCharValues.Begin)
                         {
-                            inComplexField = true;
-                            inFieldInstr = true;
-                            inFieldResult = false;
-                            fieldIsLocked = fldChar.FieldLock?.Value ?? false;
-                            fieldIsDirty = fldChar.Dirty?.Value ?? false;
-                            fieldInstrBuilder.Clear();
-                            fieldResultBuilder.Clear();
-                            firstResultRun = null;
+                            StartField(fldChar);
                         }
                         else if (fldType == FieldCharValues.Separate)
                         {
-                            inFieldInstr = false;
-                            inFieldResult = true;
+                            SeparateField();
                         }
                         else if (fldType == FieldCharValues.End)
                         {
-                            FlushComplexField();
+                            EndField();
                         }
                         continue;
                     }
 
                     if (child is FieldCode fieldCode)
                     {
-                        if (inFieldInstr)
-                            fieldInstrBuilder.Append(fieldCode.Text);
+                        AppendFieldInstruction(fieldCode.Text);
                         continue;
                     }
 
                     if (child is Text t)
                     {
-                        if (inFieldResult)
-                        {
-                            if (firstResultRun == null)
-                                firstResultRun = run;
-                            fieldResultBuilder.Append(t.Text);
-                        }
-                        else if (!inComplexField)
-                        {
+                        if (fieldStack.Count > 0)
+                            AppendFieldResult(t.Text, run);
+                        else
                             runText.Append(t.Text);
-                        }
                         continue;
                     }
 
                     if (child is TabChar)
                     {
-                        if (inFieldResult)
-                        {
-                            if (firstResultRun == null)
-                                firstResultRun = run;
-                            fieldResultBuilder.Append('\t');
-                        }
-                        else if (!inComplexField)
-                        {
+                        if (fieldStack.Count > 0)
+                            AppendFieldResult("\t", run);
+                        else
                             runText.Append('\t');
-                        }
                         continue;
                     }
 
                     if (child is Break)
                     {
-                        if (inFieldResult)
-                        {
-                            if (firstResultRun == null)
-                                firstResultRun = run;
-                            fieldResultBuilder.Append('\n');
-                        }
-                        else if (!inComplexField)
-                        {
+                        if (fieldStack.Count > 0)
+                            AppendFieldResult("\n", run);
+                        else
                             runText.Append('\n');
-                        }
                         continue;
                     }
 
@@ -450,7 +490,8 @@ public class ParagraphExtractor
                     {
                         FlushRunTextSegment();
                         FlushAccumulatedRun();
-                        ProcessElement(child, skipTextBox);
+                        if (fieldStack.Count == 0)
+                            ProcessElement(child, skipTextBox);
                         continue;
                     }
 
@@ -458,11 +499,12 @@ public class ParagraphExtractor
                     {
                         FlushRunTextSegment();
                         FlushAccumulatedRun();
-                        ProcessElement(child, skipTextBox);
+                        if (fieldStack.Count == 0)
+                            ProcessElement(child, skipTextBox);
                         continue;
                     }
 
-                    if (!inComplexField)
+                    if (fieldStack.Count == 0)
                     {
                         FlushRunTextSegment();
                         ProcessElement(child, skipTextBox);
@@ -519,6 +561,9 @@ public class ParagraphExtractor
             }
             else if (elem is Drawing drawing)
             {
+                if (fieldStack.Count > 0)
+                    return;
+
                 FlushText();
                 
                 // Extract drawing format and save
@@ -564,6 +609,9 @@ public class ParagraphExtractor
             }
             else if (elem is Picture pict)
             {
+                if (fieldStack.Count > 0)
+                    return;
+
                 FlushText();
                 
                 // Extract VML picture format and save
@@ -595,6 +643,9 @@ public class ParagraphExtractor
             }
             else if (elem is TextBoxContent txbx && !skipTextBox)
             {
+                if (fieldStack.Count > 0)
+                    return;
+
                 FlushText();
                 var shapeData = ExtractTextBoxAsShape(txbx, elem.Parent, numberingPart, numberingCounters);
                 if (shapeData != null)
@@ -607,6 +658,13 @@ public class ParagraphExtractor
                 
                 var instrText = simpleField.Instruction?.Value ?? "";
                 var resultText = simpleField.InnerText;
+
+                if (fieldStack.Count > 0)
+                {
+                    var fieldResultRun = simpleField.Descendants<Run>().FirstOrDefault();
+                    AppendFieldResult(resultText, fieldResultRun);
+                    return;
+                }
                 
                 // Save field format
                 ulong? fieldFormatId = null;
@@ -631,7 +689,8 @@ public class ParagraphExtractor
                 var resultRun = simpleField.Descendants<Run>().FirstOrDefault();
                 if (resultRun != null && _db != null && _styleResolver != null)
                 {
-                    var textFormat = _textFormatExtractor.ExtractEffectiveFormat(resultRun, _styleResolver, paragraphProps, _themeFontLangResolver);
+                    var textFormat = _textFormatExtractor.ExtractEffectiveFormat(
+                        resultRun, _styleResolver, paragraphProps, _themeFontLangResolver, _themeFontResolver);
                     _db.DokumenFormatTexts.Add(textFormat);
                     _db.SaveChanges();
                     fieldItem["result_dftx_id"] = textFormat.DftxId;
@@ -651,49 +710,27 @@ public class ParagraphExtractor
                 {
                     // Start of complex field
                     FlushText();
-                    inComplexField = true;
-                    inFieldInstr = true;
-                    inFieldResult = false;
-                    fieldIsLocked = fieldChar.FieldLock?.Value ?? false;
-                    fieldIsDirty = fieldChar.Dirty?.Value ?? false;
-                    fieldInstrBuilder.Clear();
-                    fieldResultBuilder.Clear();
-                    firstResultRun = null;
+                    StartField(fieldChar);
                 }
                 else if (fldType == FieldCharValues.Separate)
                 {
                     // Switch from instruction to result
-                    inFieldInstr = false;
-                    inFieldResult = true;
+                    SeparateField();
                 }
                 else if (fldType == FieldCharValues.End)
                 {
                     // End of complex field - flush it
-                    FlushComplexField();
+                    EndField();
                 }
             }
             // === FIELD CODE (w:instrText) - instruction text inside complex field ===
-            else if (elem is FieldCode fieldCode && inFieldInstr)
+            else if (elem is FieldCode fieldCode)
             {
-                fieldInstrBuilder.Append(fieldCode.Text);
+                AppendFieldInstruction(fieldCode.Text);
             }
             else if (elem is not TextBoxContent)
             {
-                // Handle text inside complex field result
-                if (inFieldResult && elem is Run resultRun)
-                {
-                    // Capture first result run for formatting
-                    if (firstResultRun == null)
-                        firstResultRun = resultRun;
-                    
-                    // Collect result text
-                    foreach (var child in resultRun.ChildElements)
-                    {
-                        if (child is Text txt)
-                            fieldResultBuilder.Append(txt.Text);
-                    }
-                }
-                else if (!inComplexField)
+                if (fieldStack.Count == 0)
                 {
                     // Normal processing when not in a complex field
                     foreach (var child in elem.ChildElements)
@@ -704,6 +741,9 @@ public class ParagraphExtractor
 
         foreach (var child in p.ChildElements)
             ProcessElement(child);
+
+        while (fieldStack.Count > 0)
+            CloseField(fieldStack.Pop());
 
         FlushAccumulatedRun();  // Flush any remaining accumulated run text
         FlushText();

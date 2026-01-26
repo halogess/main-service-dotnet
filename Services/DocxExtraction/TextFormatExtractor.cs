@@ -52,10 +52,12 @@ public class TextFormatExtractor
         
         // Underline (w:u/@w:val)
         var underline = rPr.Underline;
-        if (underline?.Val?.Value != null)
+        if (underline != null)
         {
-            var ulVal = underline.Val.Value;
-            if (ulVal == UnderlineValues.None)
+            var ulVal = underline.Val?.Value;
+            if (ulVal == null)
+                format.DftxUnderline = "single"; // w:u default when val is omitted
+            else if (ulVal == UnderlineValues.None)
                 format.DftxUnderline = "none";
             else if (ulVal == UnderlineValues.Single)
                 format.DftxUnderline = "single";
@@ -82,7 +84,8 @@ public class TextFormatExtractor
         Run run,
         StyleResolver styleResolver,
         ParagraphProperties? paragraphProps = null,
-        ThemeFontLangResolver? themeFontLangResolver = null)
+        ThemeFontLangResolver? themeFontLangResolver = null,
+        ThemeFontResolver? themeFontResolver = null)
     {
         var format = new DokumenFormatText();
         
@@ -94,16 +97,19 @@ public class TextFormatExtractor
             format.DftxRawRprXml = run.RunProperties.OuterXml;
         
         // Map effective properties to format model
-        format.DftxFontAscii = ResolvePreferredFont(effective, run, themeFontLangResolver);
-        format.DftxSizeHalfpt = effective.FontSize.HasValue ? (ushort)effective.FontSize.Value : null;
+        format.DftxFontAscii = ResolvePreferredFont(effective, run, themeFontLangResolver, themeFontResolver);
+        var resolvedSize = ResolvePreferredFontSize(effective, run, themeFontLangResolver);
+        format.DftxSizeHalfpt = resolvedSize.HasValue ? (ushort)resolvedSize.Value : null;
         format.DftxBold = effective.Bold;
         format.DftxItalic = effective.Italic;
         
         // Map underline
-        if (effective.Underline == true && !string.IsNullOrEmpty(effective.UnderlineStyle))
+        if (effective.Underline == true)
         {
-            var ulStyle = effective.UnderlineStyle.ToLower();
-            if (ulStyle.Contains("single") || ulStyle == "words")
+            var ulStyle = effective.UnderlineStyle?.ToLowerInvariant();
+            if (string.IsNullOrEmpty(ulStyle))
+                format.DftxUnderline = "single";
+            else if (ulStyle.Contains("single") || ulStyle == "words")
                 format.DftxUnderline = "single";
             else if (ulStyle.Contains("double"))
                 format.DftxUnderline = "double";
@@ -127,14 +133,100 @@ public class TextFormatExtractor
     public static string? ResolvePreferredFont(
         EffectiveRunProperties effective,
         Run run,
-        ThemeFontLangResolver? themeFontLangResolver = null)
+        ThemeFontLangResolver? themeFontLangResolver = null,
+        ThemeFontResolver? themeFontResolver = null)
     {
         var hint = effective.FontHint;
         var text = run.InnerText;
-        return ResolvePreferredFont(effective, hint, text, themeFontLangResolver);
+        return ResolvePreferredFont(effective, hint, text, themeFontLangResolver, themeFontResolver);
     }
 
     private static string? ResolvePreferredFont(
+        EffectiveRunProperties effective,
+        string? hint,
+        string? text,
+        ThemeFontLangResolver? themeFontLangResolver,
+        ThemeFontResolver? themeFontResolver)
+    {
+        var script = DetermineScript(effective, hint, text, themeFontLangResolver);
+        return script switch
+        {
+            ScriptCategory.EastAsia => PickEastAsia(effective, themeFontLangResolver, themeFontResolver),
+            ScriptCategory.ComplexScript => PickComplexScript(effective, themeFontLangResolver, themeFontResolver),
+            _ => PickLatin(effective, themeFontLangResolver, themeFontResolver)
+        };
+    }
+
+    private static string? PickLatin(
+        EffectiveRunProperties effective,
+        ThemeFontLangResolver? themeFontLangResolver,
+        ThemeFontResolver? themeFontResolver)
+    {
+        var latinLang = effective.LangLatin ?? themeFontLangResolver?.LatinLang;
+        var eastAsiaLang = effective.LangEastAsia ?? themeFontLangResolver?.EastAsiaLang;
+        var bidiLang = effective.LangBidi ?? themeFontLangResolver?.BidiLang;
+
+        return ResolveFontValue(effective.FontAscii, effective.FontAsciiTheme, themeFontResolver, latinLang)
+            ?? ResolveFontValue(effective.FontHighAnsi, effective.FontHighAnsiTheme, themeFontResolver, latinLang)
+            ?? ResolveFontValue(effective.FontEastAsia, effective.FontEastAsiaTheme, themeFontResolver, eastAsiaLang)
+            ?? ResolveFontValue(effective.FontComplexScript, effective.FontComplexScriptTheme, themeFontResolver, bidiLang);
+    }
+
+    private static string? PickEastAsia(
+        EffectiveRunProperties effective,
+        ThemeFontLangResolver? themeFontLangResolver,
+        ThemeFontResolver? themeFontResolver)
+    {
+        var eastAsiaLang = effective.LangEastAsia ?? themeFontLangResolver?.EastAsiaLang;
+        var latinLang = effective.LangLatin ?? themeFontLangResolver?.LatinLang;
+        var bidiLang = effective.LangBidi ?? themeFontLangResolver?.BidiLang;
+
+        return ResolveFontValue(effective.FontEastAsia, effective.FontEastAsiaTheme, themeFontResolver, eastAsiaLang)
+            ?? ResolveFontValue(effective.FontAscii, effective.FontAsciiTheme, themeFontResolver, latinLang)
+            ?? ResolveFontValue(effective.FontHighAnsi, effective.FontHighAnsiTheme, themeFontResolver, latinLang)
+            ?? ResolveFontValue(effective.FontComplexScript, effective.FontComplexScriptTheme, themeFontResolver, bidiLang);
+    }
+
+    private static string? PickComplexScript(
+        EffectiveRunProperties effective,
+        ThemeFontLangResolver? themeFontLangResolver,
+        ThemeFontResolver? themeFontResolver)
+    {
+        var bidiLang = effective.LangBidi ?? themeFontLangResolver?.BidiLang;
+        var latinLang = effective.LangLatin ?? themeFontLangResolver?.LatinLang;
+        var eastAsiaLang = effective.LangEastAsia ?? themeFontLangResolver?.EastAsiaLang;
+
+        return ResolveFontValue(effective.FontComplexScript, effective.FontComplexScriptTheme, themeFontResolver, bidiLang)
+            ?? ResolveFontValue(effective.FontAscii, effective.FontAsciiTheme, themeFontResolver, latinLang)
+            ?? ResolveFontValue(effective.FontHighAnsi, effective.FontHighAnsiTheme, themeFontResolver, latinLang)
+            ?? ResolveFontValue(effective.FontEastAsia, effective.FontEastAsiaTheme, themeFontResolver, eastAsiaLang);
+    }
+
+    public static int? ResolvePreferredFontSize(
+        EffectiveRunProperties effective,
+        Run run,
+        ThemeFontLangResolver? themeFontLangResolver)
+    {
+        var hint = effective.FontHint;
+        var text = run.InnerText;
+        var isComplexScript = IsComplexScriptForSize(hint, text);
+
+        if (isComplexScript && effective.FontSizeCs.HasValue)
+            return effective.FontSizeCs;
+
+        return effective.FontSize ?? effective.FontSizeCs;
+    }
+
+    private static bool IsComplexScriptForSize(string? hint, string? text)
+    {
+        var normalizedHint = hint?.Trim().ToLowerInvariant();
+        if (normalizedHint == "cs" || normalizedHint == "bidi")
+            return true;
+
+        return !string.IsNullOrEmpty(text) && ContainsComplexScript(text);
+    }
+
+    private static ScriptCategory DetermineScript(
         EffectiveRunProperties effective,
         string? hint,
         string? text,
@@ -142,53 +234,51 @@ public class TextFormatExtractor
     {
         var normalizedHint = hint?.Trim().ToLowerInvariant();
         if (normalizedHint == "eastasia")
-            return PickEastAsia(effective);
+            return ScriptCategory.EastAsia;
         if (normalizedHint == "cs" || normalizedHint == "bidi")
-            return PickComplexScript(effective);
+            return ScriptCategory.ComplexScript;
 
         if (!string.IsNullOrWhiteSpace(effective.LangBidi))
-            return PickComplexScript(effective);
+            return ScriptCategory.ComplexScript;
         if (!string.IsNullOrWhiteSpace(effective.LangEastAsia))
-            return PickEastAsia(effective);
+            return ScriptCategory.EastAsia;
 
         if (!string.IsNullOrEmpty(text))
         {
             if (ContainsComplexScript(text))
-                return PickComplexScript(effective);
+                return ScriptCategory.ComplexScript;
             if (ContainsEastAsian(text))
-                return PickEastAsia(effective);
+                return ScriptCategory.EastAsia;
         }
 
         if (themeFontLangResolver?.HasBidi == true)
-            return PickComplexScript(effective);
+            return ScriptCategory.ComplexScript;
         if (themeFontLangResolver?.HasEastAsia == true)
-            return PickEastAsia(effective);
+            return ScriptCategory.EastAsia;
 
-        return PickLatin(effective);
+        return ScriptCategory.Latin;
     }
 
-    private static string? PickLatin(EffectiveRunProperties effective)
+    private static string? ResolveFontValue(
+        string? explicitFont,
+        string? themeKey,
+        ThemeFontResolver? themeFontResolver,
+        string? languageTag)
     {
-        return effective.FontAscii
-            ?? effective.FontHighAnsi
-            ?? effective.FontEastAsia
-            ?? effective.FontComplexScript;
+        if (!string.IsNullOrWhiteSpace(explicitFont))
+            return explicitFont;
+
+        if (!string.IsNullOrWhiteSpace(themeKey))
+            return themeFontResolver?.ResolveThemeFont(themeKey, languageTag);
+
+        return null;
     }
 
-    private static string? PickEastAsia(EffectiveRunProperties effective)
+    private enum ScriptCategory
     {
-        return effective.FontEastAsia
-            ?? effective.FontAscii
-            ?? effective.FontHighAnsi
-            ?? effective.FontComplexScript;
-    }
-
-    private static string? PickComplexScript(EffectiveRunProperties effective)
-    {
-        return effective.FontComplexScript
-            ?? effective.FontAscii
-            ?? effective.FontHighAnsi
-            ?? effective.FontEastAsia;
+        Latin,
+        EastAsia,
+        ComplexScript
     }
 
     private static bool ContainsEastAsian(string text)

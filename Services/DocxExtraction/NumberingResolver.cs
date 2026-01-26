@@ -46,6 +46,16 @@ public class NumberingResolver
         var ind = pPr.GetFirstChild<Indentation>();
         if (ind != null)
         {
+            // Numbering-level indentation should override style indentation as a whole.
+            effective.IndentLeft = null;
+            effective.IndentRight = null;
+            effective.IndentFirstLine = null;
+            effective.IndentHanging = null;
+            effective.IndentStart = null;
+            effective.IndentEnd = null;
+            effective.IndentLeftChars = null;
+            effective.IndentRightChars = null;
+
             if (ind.Left?.Value != null) effective.IndentLeft = int.Parse(ind.Left.Value);
             if (ind.Right?.Value != null) effective.IndentRight = int.Parse(ind.Right.Value);
             if (ind.FirstLine?.Value != null) effective.IndentFirstLine = int.Parse(ind.FirstLine.Value);
@@ -79,8 +89,7 @@ public class NumberingResolver
     public static void MergeNumberingLevelRunProperties(
         EffectiveRunProperties effective, 
         NumberingSymbolRunProperties rPr, 
-        string source,
-        ThemeFontResolver? themeFontResolver = null)
+        string source)
     {
         effective.ResolvedFromStyle = source;
         
@@ -90,13 +99,56 @@ public class NumberingResolver
             var asciiTheme = GetRunFontsAttributeValue(fonts, "asciiTheme");
             var highAnsiTheme = GetRunFontsAttributeValue(fonts, "hAnsiTheme");
             var eastAsiaTheme = GetRunFontsAttributeValue(fonts, "eastAsiaTheme");
-            var complexTheme = GetRunFontsAttributeValue(fonts, "cstheme");
+            var complexTheme = GetRunFontsAttributeValue(fonts, "csTheme");
             var hint = GetRunFontsAttributeValue(fonts, "hint");
 
-            effective.FontAscii = ResolveFont(effective.FontAscii, fonts.Ascii?.Value, asciiTheme, themeFontResolver);
-            effective.FontHighAnsi = ResolveFont(effective.FontHighAnsi, fonts.HighAnsi?.Value, highAnsiTheme, themeFontResolver);
-            effective.FontEastAsia = ResolveFont(effective.FontEastAsia, fonts.EastAsia?.Value, eastAsiaTheme, themeFontResolver);
-            effective.FontComplexScript = ResolveFont(effective.FontComplexScript, fonts.ComplexScript?.Value, complexTheme, themeFontResolver);
+            var ascii = fonts.Ascii?.Value;
+            if (!string.IsNullOrWhiteSpace(ascii))
+            {
+                effective.FontAscii = ascii.Trim();
+                effective.FontAsciiTheme = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(asciiTheme))
+            {
+                effective.FontAscii = null;
+                effective.FontAsciiTheme = asciiTheme.Trim();
+            }
+
+            var highAnsi = fonts.HighAnsi?.Value;
+            if (!string.IsNullOrWhiteSpace(highAnsi))
+            {
+                effective.FontHighAnsi = highAnsi.Trim();
+                effective.FontHighAnsiTheme = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(highAnsiTheme))
+            {
+                effective.FontHighAnsi = null;
+                effective.FontHighAnsiTheme = highAnsiTheme.Trim();
+            }
+
+            var eastAsia = fonts.EastAsia?.Value;
+            if (!string.IsNullOrWhiteSpace(eastAsia))
+            {
+                effective.FontEastAsia = eastAsia.Trim();
+                effective.FontEastAsiaTheme = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(eastAsiaTheme))
+            {
+                effective.FontEastAsia = null;
+                effective.FontEastAsiaTheme = eastAsiaTheme.Trim();
+            }
+
+            var complex = fonts.ComplexScript?.Value;
+            if (!string.IsNullOrWhiteSpace(complex))
+            {
+                effective.FontComplexScript = complex.Trim();
+                effective.FontComplexScriptTheme = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(complexTheme))
+            {
+                effective.FontComplexScript = null;
+                effective.FontComplexScriptTheme = complexTheme.Trim();
+            }
             if (!string.IsNullOrWhiteSpace(hint))
                 effective.FontHint = hint;
         }
@@ -134,21 +186,6 @@ public class NumberingResolver
         var strike = rPr.GetFirstChild<Strike>();
         if (strike != null)
             effective.Strike = strike.Val?.Value ?? true;
-    }
-
-    private static string? ResolveFont(string? current, string? explicitFont, string? themeValue, ThemeFontResolver? themeFontResolver)
-    {
-        if (!string.IsNullOrWhiteSpace(explicitFont))
-            return explicitFont.Trim();
-
-        if (!string.IsNullOrWhiteSpace(themeValue))
-        {
-            var resolved = themeFontResolver?.ResolveThemeFont(themeValue);
-            if (!string.IsNullOrWhiteSpace(resolved))
-                return resolved;
-        }
-
-        return current;
     }
 
     private static void ApplyLanguages(EffectiveRunProperties effective, Languages? languages)

@@ -114,7 +114,7 @@ public class FieldFormatExtractor
                     else if (fldType == FieldCharValues.End)
                     {
                         currentIndex = i + 1;
-                        return (instrBuilder.ToString().Trim(), resultBuilder.ToString(), isLocked, isDirty);
+                        return (instrBuilder.ToString(), resultBuilder.ToString(), isLocked, isDirty);
                     }
                 }
                 else if (child is FieldCode instrText && inInstr)
@@ -129,6 +129,6 @@ public class FieldFormatExtractor
         }
         
         currentIndex = runList.Count;
-        return (instrBuilder.ToString().Trim(), resultBuilder.ToString(), isLocked, isDirty);
+        return (instrBuilder.ToString(), resultBuilder.ToString(), isLocked, isDirty);
     }
 }

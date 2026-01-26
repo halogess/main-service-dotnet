@@ -13,6 +13,12 @@ public class EffectiveRunProperties
     public string? FontEastAsia { get; set; }
     public string? FontComplexScript { get; set; }
     public string? FontHint { get; set; } // default, eastAsia, cs
+
+    // Theme font keys (asciiTheme, hAnsiTheme, eastAsiaTheme, csTheme)
+    public string? FontAsciiTheme { get; set; }
+    public string? FontHighAnsiTheme { get; set; }
+    public string? FontEastAsiaTheme { get; set; }
+    public string? FontComplexScriptTheme { get; set; }
     
     // Language hints (from w:lang)
     public string? LangLatin { get; set; }
@@ -91,7 +97,7 @@ public class EffectiveParagraphProperties
     public bool MirrorIndents { get; set; }
     public bool SuppressOverlap { get; set; }
     public bool ContextualSpacing { get; set; }
-    public bool WordWrap { get; set; }
+    public bool WordWrap { get; set; } = true; // Word wraps by default
     
     // Outline level (for headings)
     public int? OutlineLevel { get; set; }

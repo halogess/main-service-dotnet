@@ -560,7 +560,7 @@ public class StyleResolver
                 var levelRPr = level.NumberingSymbolRunProperties;
                 if (levelRPr != null)
                 {
-                    NumberingResolver.MergeNumberingLevelRunProperties(effective, levelRPr, $"lvl:{ilvl}", _themeFontResolver);
+                    NumberingResolver.MergeNumberingLevelRunProperties(effective, levelRPr, $"lvl:{ilvl}");
                 }
             }
         }
@@ -608,11 +608,7 @@ public class StyleResolver
         // Underline
         var underline = rPr.GetFirstChild<Underline>();
         if (underline != null)
-        {
-            var val = underline.Val?.Value;
-            effective.Underline = val != null && val != UnderlineValues.None;
-            effective.UnderlineStyle = val?.ToString()?.ToLower();
-        }
+            ApplyUnderline(effective, underline);
         
         // Strike
         var strike = rPr.GetFirstChild<Strike>();
@@ -687,11 +683,7 @@ public class StyleResolver
         
         var underline = rPr.GetFirstChild<Underline>();
         if (underline != null)
-        {
-            var val = underline.Val?.Value;
-            effective.Underline = val != null && val != UnderlineValues.None;
-            effective.UnderlineStyle = val?.ToString()?.ToLower();
-        }
+            ApplyUnderline(effective, underline);
         
         var strike = rPr.GetFirstChild<Strike>();
         if (strike != null)
@@ -748,6 +740,54 @@ public class StyleResolver
         var fontSizeCs = rPr.GetFirstChild<FontSizeComplexScript>();
         if (fontSizeCs?.Val?.Value != null && int.TryParse(fontSizeCs.Val.Value, out int szCs))
             effective.FontSizeCs = szCs;
+
+        var bold = rPr.GetFirstChild<Bold>();
+        if (bold != null)
+            effective.Bold = bold.Val?.Value ?? true;
+
+        var italic = rPr.GetFirstChild<Italic>();
+        if (italic != null)
+            effective.Italic = italic.Val?.Value ?? true;
+
+        var underline = rPr.GetFirstChild<Underline>();
+        if (underline != null)
+            ApplyUnderline(effective, underline);
+
+        var strike = rPr.GetFirstChild<Strike>();
+        if (strike != null)
+            effective.Strike = strike.Val?.Value ?? true;
+
+        var dblStrike = rPr.GetFirstChild<DoubleStrike>();
+        if (dblStrike != null)
+            effective.DoubleStrike = dblStrike.Val?.Value ?? true;
+
+        var vertAlign = rPr.GetFirstChild<VerticalTextAlignment>();
+        if (vertAlign?.Val?.Value != null)
+            effective.VerticalAlignment = vertAlign.Val.Value.ToString().ToLowerInvariant();
+
+        var color = rPr.GetFirstChild<Color>();
+        if (color?.Val?.Value != null)
+            effective.Color = color.Val.Value;
+
+        var highlight = rPr.GetFirstChild<Highlight>();
+        if (highlight?.Val?.Value != null)
+            effective.HighlightColor = highlight.Val.Value.ToString().ToLowerInvariant();
+
+        var caps = rPr.GetFirstChild<Caps>();
+        if (caps != null)
+            effective.Caps = caps.Val?.Value ?? true;
+
+        var smallCaps = rPr.GetFirstChild<SmallCaps>();
+        if (smallCaps != null)
+            effective.SmallCaps = smallCaps.Val?.Value ?? true;
+
+        var vanish = rPr.GetFirstChild<Vanish>();
+        if (vanish != null)
+            effective.Hidden = vanish.Val?.Value ?? true;
+
+        var spacing = rPr.GetFirstChild<Spacing>();
+        if (spacing?.Val?.Value != null)
+            effective.Spacing = spacing.Val.Value;
     }
     
     // ========================================================================
@@ -921,30 +961,58 @@ public class StyleResolver
         var asciiTheme = GetRunFontsAttributeValue(fonts, "asciiTheme");
         var highAnsiTheme = GetRunFontsAttributeValue(fonts, "hAnsiTheme");
         var eastAsiaTheme = GetRunFontsAttributeValue(fonts, "eastAsiaTheme");
-        var complexTheme = GetRunFontsAttributeValue(fonts, "cstheme");
+        var complexTheme = GetRunFontsAttributeValue(fonts, "csTheme");
         var hint = GetRunFontsAttributeValue(fonts, "hint");
 
-        effective.FontAscii = ResolveFont(effective.FontAscii, fonts.Ascii?.Value, asciiTheme);
-        effective.FontHighAnsi = ResolveFont(effective.FontHighAnsi, fonts.HighAnsi?.Value, highAnsiTheme);
-        effective.FontEastAsia = ResolveFont(effective.FontEastAsia, fonts.EastAsia?.Value, eastAsiaTheme);
-        effective.FontComplexScript = ResolveFont(effective.FontComplexScript, fonts.ComplexScript?.Value, complexTheme);
-        if (!string.IsNullOrWhiteSpace(hint))
-            effective.FontHint = hint;
-    }
-
-    private string? ResolveFont(string? current, string? explicitFont, string? themeValue)
-    {
-        if (!string.IsNullOrWhiteSpace(explicitFont))
-            return explicitFont.Trim();
-
-        if (!string.IsNullOrWhiteSpace(themeValue))
+        var ascii = fonts.Ascii?.Value;
+        if (!string.IsNullOrWhiteSpace(ascii))
         {
-            var resolved = _themeFontResolver?.ResolveThemeFont(themeValue);
-            if (!string.IsNullOrWhiteSpace(resolved))
-                return resolved;
+            effective.FontAscii = ascii.Trim();
+            effective.FontAsciiTheme = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(asciiTheme))
+        {
+            effective.FontAscii = null;
+            effective.FontAsciiTheme = asciiTheme.Trim();
         }
 
-        return current;
+        var highAnsi = fonts.HighAnsi?.Value;
+        if (!string.IsNullOrWhiteSpace(highAnsi))
+        {
+            effective.FontHighAnsi = highAnsi.Trim();
+            effective.FontHighAnsiTheme = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(highAnsiTheme))
+        {
+            effective.FontHighAnsi = null;
+            effective.FontHighAnsiTheme = highAnsiTheme.Trim();
+        }
+
+        var eastAsia = fonts.EastAsia?.Value;
+        if (!string.IsNullOrWhiteSpace(eastAsia))
+        {
+            effective.FontEastAsia = eastAsia.Trim();
+            effective.FontEastAsiaTheme = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(eastAsiaTheme))
+        {
+            effective.FontEastAsia = null;
+            effective.FontEastAsiaTheme = eastAsiaTheme.Trim();
+        }
+
+        var complex = fonts.ComplexScript?.Value;
+        if (!string.IsNullOrWhiteSpace(complex))
+        {
+            effective.FontComplexScript = complex.Trim();
+            effective.FontComplexScriptTheme = null;
+        }
+        else if (!string.IsNullOrWhiteSpace(complexTheme))
+        {
+            effective.FontComplexScript = null;
+            effective.FontComplexScriptTheme = complexTheme.Trim();
+        }
+        if (!string.IsNullOrWhiteSpace(hint))
+            effective.FontHint = hint;
     }
 
     private void ApplyLanguages(EffectiveRunProperties effective, Languages? languages)
@@ -974,5 +1042,26 @@ public class StyleResolver
     {
         var attr = fonts.GetAttributes().FirstOrDefault(a => a.LocalName == localName);
         return string.IsNullOrWhiteSpace(attr.Value) ? null : attr.Value;
+    }
+
+    private static void ApplyUnderline(EffectiveRunProperties effective, Underline underline)
+    {
+        var val = underline.Val?.Value;
+        if (!val.HasValue)
+        {
+            effective.Underline = true;
+            effective.UnderlineStyle = "single";
+            return;
+        }
+
+        if (val.Value == UnderlineValues.None)
+        {
+            effective.Underline = false;
+            effective.UnderlineStyle = "none";
+            return;
+        }
+
+        effective.Underline = true;
+        effective.UnderlineStyle = val.Value.ToString().ToLowerInvariant();
     }
 }

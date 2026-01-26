@@ -186,12 +186,12 @@ public class ParagraphFormatExtractor
         format.DfpWidowControl = !IsToggleOff(pPr.WidowControl);
         format.DfpSuppressLineNumbers = IsToggleOn(pPr.SuppressLineNumbers);
         format.DfpSuppressAutoHyphens = IsToggleOn(pPr.SuppressAutoHyphens);
-        format.DfpSnapToGrid = IsToggleOn(pPr.SnapToGrid);
-        format.DfpAdjustRightInd = IsToggleOn(pPr.AdjustRightIndent);
+        format.DfpSnapToGrid = pPr.SnapToGrid != null ? IsToggleOn(pPr.SnapToGrid) : true;
+        format.DfpAdjustRightInd = pPr.AdjustRightIndent != null ? IsToggleOn(pPr.AdjustRightIndent) : true;
         format.DfpMirrorIndents = IsToggleOn(pPr.MirrorIndents);
         format.DfpSuppressOverlap = IsToggleOn(pPr.SuppressOverlap);
         format.DfpContextualSpacing = IsToggleOn(pPr.ContextualSpacing);
-        format.DfpWordWrap = IsToggleOn(pPr.WordWrap);
+        format.DfpWordWrap = pPr.WordWrap != null ? IsToggleOn(pPr.WordWrap) : true;
         
         // Spacing
         var spacing = pPr.SpacingBetweenLines;

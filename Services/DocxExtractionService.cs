@@ -50,6 +50,7 @@ public class DocxExtractionService : IDocxExtractionService
             var styleResolver = new StyleResolver(stylesPart, stylesWithEffectsPart, themeResolver, numberingPart);
             _paragraphExtractor.SetStyleResolver(styleResolver);
             _paragraphExtractor.SetThemeFontLangResolver(themeLangResolver);
+            _paragraphExtractor.SetThemeFontResolver(themeResolver);
             _paragraphExtractor.SetDbContext(_db); // Enable inline format saving
             
             // Initialize TableStyleResolver for table format resolution

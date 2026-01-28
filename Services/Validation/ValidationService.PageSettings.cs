@@ -576,9 +576,8 @@ public partial class ValidationService
         if (!widthTwips.HasValue || !heightTwips.HasValue)
             return "UNKNOWN";
 
-        // Normalize to portrait orientation for comparison
-        var w = Math.Min(widthTwips.Value, heightTwips.Value);
-        var h = Math.Max(widthTwips.Value, heightTwips.Value);
+        var w = widthTwips.Value;
+        var h = heightTwips.Value;
 
         foreach (var (name, (expectedW, expectedH)) in PaperSizes)
         {

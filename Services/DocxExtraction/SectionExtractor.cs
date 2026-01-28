@@ -45,11 +45,32 @@ public static class SectionExtractor
         var pageSize = sectPr.GetFirstChild<PageSize>();
         if (pageSize != null)
         {
+            var orientation = pageSize.Orient?.Value == PageOrientationValues.Landscape ? "landscape" : "portrait";
+            uint? widthTwips = null;
+            uint? heightTwips = null;
+
             if (pageSize.Width != null && pageSize.Width.HasValue)
-                section.DsecPageWidthTwips = pageSize.Width.Value;
+                widthTwips = pageSize.Width.Value;
             if (pageSize.Height != null && pageSize.Height.HasValue)
-                section.DsecPageHeightTwips = pageSize.Height.Value;
-            section.DsecOrientation = pageSize.Orient?.Value == PageOrientationValues.Landscape ? "landscape" : "portrait";
+                heightTwips = pageSize.Height.Value;
+
+            if (widthTwips.HasValue && heightTwips.HasValue)
+            {
+                if (orientation == "landscape" && widthTwips.Value < heightTwips.Value)
+                {
+                    (widthTwips, heightTwips) = (heightTwips, widthTwips);
+                }
+                else if (orientation == "portrait" && widthTwips.Value > heightTwips.Value)
+                {
+                    (widthTwips, heightTwips) = (heightTwips, widthTwips);
+                }
+            }
+
+            if (widthTwips.HasValue)
+                section.DsecPageWidthTwips = widthTwips.Value;
+            if (heightTwips.HasValue)
+                section.DsecPageHeightTwips = heightTwips.Value;
+            section.DsecOrientation = orientation;
         }
         
         // Page Margins

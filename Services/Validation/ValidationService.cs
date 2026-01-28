@@ -573,7 +573,48 @@ public partial class ValidationService : IValidationService
         // - Table validation
         // etc.
 
+        NormalizeContentErrorCategories(result.Errors);
         return result;
+    }
+
+    private static void NormalizeContentErrorCategories(List<ValidationError> errors)
+    {
+        if (errors == null || errors.Count == 0)
+            return;
+
+        foreach (var error in errors)
+        {
+            if (!string.Equals(error.Category, "Isi Buku", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            error.Category = BuildCategoryFromField(error.Field);
+        }
+    }
+
+    private static string BuildCategoryFromField(string field)
+    {
+        var cleaned = field.Trim();
+        if (string.IsNullOrWhiteSpace(cleaned))
+            return "Konten";
+
+        var tokens = cleaned
+            .Replace('-', '_')
+            .Replace(' ', '_')
+            .Split('_', StringSplitOptions.RemoveEmptyEntries);
+
+        if (tokens.Length == 0)
+            return "Konten";
+
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            var token = tokens[i];
+            if (string.IsNullOrWhiteSpace(token))
+                continue;
+
+            tokens[i] = char.ToUpperInvariant(token[0]) + (token.Length > 1 ? token[1..] : string.Empty);
+        }
+
+        return string.Join(' ', tokens);
     }
 
     private sealed class ElementClassification
@@ -605,6 +646,8 @@ public partial class ValidationService : IValidationService
             bodyElements.Select(e => e.DelemenId),
             cancellationToken);
 
+        var listCandidates = new List<(BodyElementInfo Element, uint? ParagraphFormatId)>();
+
         foreach (var elem in bodyElements)
         {
             if (!labelMap.TryGetValue(elem.DelemenId, out var rawLabel))
@@ -625,13 +668,46 @@ public partial class ValidationService : IValidationService
 
             if (IsListLabel(normalized))
             {
-                classification.ListItemIds.Add(elem.DelemenId);
+                var content = ParseElementContent(elem.DelemenJsonTree);
+                listCandidates.Add((elem, content.ParagraphFormatId));
                 continue;
             }
 
             if (normalized == "paragraf")
             {
                 classification.ParagraphIds.Add(elem.DelemenId);
+            }
+        }
+
+        if (listCandidates.Count > 0)
+        {
+            var formatIds = listCandidates
+                .Where(c => c.ParagraphFormatId.HasValue)
+                .Select(c => c.ParagraphFormatId!.Value)
+                .Distinct()
+                .ToList();
+
+            var listFormats = formatIds.Count > 0
+                ? await _db.DokumenFormatParagrafs
+                    .Where(p => formatIds.Contains(p.DfpId))
+                    .ToDictionaryAsync(p => p.DfpId, cancellationToken)
+                : new Dictionary<uint, DokumenFormatParagraf>();
+
+            foreach (var (element, paragraphFormatId) in listCandidates)
+            {
+                var isListByType = IsListItemElement(element.DelemenType);
+                var isListByFormat = paragraphFormatId.HasValue &&
+                                     listFormats.TryGetValue(paragraphFormatId.Value, out var format) &&
+                                     format.DfpIsList;
+
+                if (isListByType || isListByFormat)
+                {
+                    classification.ListItemIds.Add(element.DelemenId);
+                }
+                else if (IsParagraphElement(element.DelemenType))
+                {
+                    classification.ParagraphIds.Add(element.DelemenId);
+                }
             }
         }
 

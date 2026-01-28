@@ -174,6 +174,8 @@ public partial class ValidationService
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
+        var pageNumbersById = await LoadPageNumbersAsync(orderedElementIds, cancellationToken);
+        var pagesWithParagraph = BuildPagesWithParagraph(bodyElements, labelMap, pageNumbersById);
 
         var contentCache = new Dictionary<ulong, ElementContentInfo>();
         ElementContentInfo GetContent(ulong elementId, string? json)
@@ -305,7 +307,7 @@ public partial class ValidationService
                 .ToDictionaryAsync(t => t.DftxId, cancellationToken)
             : new Dictionary<uint, DokumenFormatText>();
 
-        await MergeCaptionContinuationAsync(
+        var mergedCaptionPairs = await MergeCaptionContinuationAsync(
             bodyElements,
             captionContinuationCandidates,
             paragraphFormats,
@@ -313,6 +315,7 @@ public partial class ValidationService
             contentCache,
             cancellationToken);
 
+        var captionMergeGroups = BuildCaptionMergeGroups(mergedCaptionPairs);
         var usedCaptionIds = new HashSet<ulong>();
 
         for (var i = 0; i < imageBlocks.Count; i++)
@@ -326,7 +329,7 @@ public partial class ValidationService
             if (imageRule != null)
             {
                 ValidateImageParagraphFormat(result, imageRule, paragraphFormat, block.Evidence, locations);
-                ValidateImagePosition(result, imageRule, block, drawingFormats, pageLayoutsById, locations);
+                ValidateImagePosition(result, imageRule, block, drawingFormats, pageLayoutsById, pageNumbersById, pagesWithParagraph, locations);
             }
 
             var nextImageIndex = i + 1 < imageBlocks.Count ? imageBlocks[i + 1].OrderIndex : int.MaxValue;
@@ -428,7 +431,10 @@ public partial class ValidationService
                 if (captionRule != null)
                 {
                     paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId ?? 0, out var captionFormat);
-                    var captionLocations = await BuildElementLocationsAsync(selectedCaption.ElementId, cancellationToken);
+                    IEnumerable<ulong> captionLocationIds = captionMergeGroups.TryGetValue(selectedCaption.ElementId, out var mergedIds)
+                        ? mergedIds
+                        : new[] { selectedCaption.ElementId };
+                    var captionLocations = await BuildElementLocationsAsync(captionLocationIds, cancellationToken);
                     var captionErrorStart = result.Errors.Count;
 
                     ValidateCaptionFont(result, captionRule, selectedCaption, captionTextFormats, captionLocations);
@@ -458,6 +464,45 @@ public partial class ValidationService
         var pageNumbers = await LoadPageNumbersAsync(new[] { elementId }, cancellationToken);
         var pageBboxMap = await LoadPageBboxMapAsync(new[] { elementId }, cancellationToken);
         return CreateLocations(pageNumbers.Values, pageBboxMap);
+    }
+
+    private async Task<List<ErrorLocation>> BuildElementLocationsAsync(
+        IEnumerable<ulong> elementIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = elementIds?.Distinct().ToList() ?? new List<ulong>();
+        if (ids.Count == 0)
+            return new List<ErrorLocation>();
+
+        var pageNumbers = await LoadPageNumbersAsync(ids, cancellationToken);
+        var pageBboxMap = await LoadPageBboxMapAsync(ids, cancellationToken);
+        return CreateLocations(pageNumbers.Values, pageBboxMap);
+    }
+
+    private static HashSet<int> BuildPagesWithParagraph(
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        Dictionary<ulong, string> labelMap,
+        Dictionary<ulong, int> pageNumbersById)
+    {
+        var pages = new HashSet<int>();
+        if (bodyElements.Count == 0 || labelMap.Count == 0 || pageNumbersById.Count == 0)
+            return pages;
+
+        foreach (var element in bodyElements)
+        {
+            if (!pageNumbersById.TryGetValue(element.DelemenId, out var page) || page <= 0)
+                continue;
+
+            if (!labelMap.TryGetValue(element.DelemenId, out var label))
+                continue;
+
+            if (!NormalizeLabel(label).Equals("paragraf", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            pages.Add(page);
+        }
+
+        return pages;
     }
 
     private void ValidateImageParagraphFormat(
@@ -601,6 +646,8 @@ public partial class ValidationService
         ImageBlockInfo block,
         Dictionary<ulong, DokumenFormatDrawing> drawingFormats,
         Dictionary<ulong, PageLayoutSnapshot> pageLayouts,
+        Dictionary<ulong, int> pageNumbersById,
+        HashSet<int> pagesWithParagraph,
         List<ErrorLocation> locations)
     {
         if (rule.Position == null)
@@ -683,47 +730,26 @@ public partial class ValidationService
 
         if (rule.Position.CegahMemenuhiHalaman?.Value == true)
         {
-            result.TotalChecks++;
-            var mismatches = new List<string>();
-
-            if (pageLayouts.TryGetValue(block.ElementId, out var layout))
+            if (pageNumbersById.TryGetValue(block.ElementId, out var pageNumber) && pageNumber > 0)
             {
-                var availableHeight = GetAvailableHeightCm(layout);
-                if (availableHeight.HasValue && availableHeight.Value > 0)
+                result.TotalChecks++;
+                if (pagesWithParagraph.Contains(pageNumber))
                 {
-                    foreach (var item in block.ImageItems)
-                    {
-                        if (!item.DrawingFormatId.HasValue ||
-                            !drawingFormats.TryGetValue(item.DrawingFormatId.Value, out var format))
-                        {
-                            continue;
-                        }
-
-                        var heightCm = EmuToCm(format.DfdrCyEmu);
-                        if (heightCm.HasValue && heightCm.Value >= availableHeight.Value - 0.1m)
-                        {
-                            mismatches.Add($"{heightCm.Value:F2} cm (max {availableHeight.Value:F2} cm)");
-                        }
-                    }
+                    result.PassedChecks++;
                 }
-            }
-
-            if (mismatches.Count == 0)
-            {
-                result.PassedChecks++;
-            }
-            else
-            {
-                result.Errors.Add(new ValidationError
+                else
                 {
-                    Category = "Isi Buku",
-                    Field = "gambar",
-                    Message = "Tinggi gambar memenuhi halaman",
-                    Expected = "Tinggi < tinggi area teks",
-                    Actual = string.Join(", ", mismatches.Distinct()),
-                    Evidence = block.Evidence,
-                    Locations = locations
-                });
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "gambar",
+                        Message = "Halaman gambar tidak boleh hanya berisi gambar dan caption",
+                        Expected = "Ada paragraf lain di halaman",
+                        Actual = "Tidak ada paragraf lain",
+                        Evidence = block.Evidence,
+                        Locations = locations
+                    });
+                }
             }
         }
     }
@@ -1355,7 +1381,7 @@ public partial class ValidationService
         }
     }
 
-    private async Task MergeCaptionContinuationAsync(
+    private async Task<List<(ulong CaptionId, ulong NextId)>> MergeCaptionContinuationAsync(
         List<BodyElementInfo> bodyElements,
         List<CaptionContinuationCandidate> continuationCandidates,
         Dictionary<uint, DokumenFormatParagraf> paragraphFormats,
@@ -1363,8 +1389,9 @@ public partial class ValidationService
         Dictionary<ulong, ElementContentInfo> contentCache,
         CancellationToken cancellationToken)
     {
+        var mergedPairs = new List<(ulong CaptionId, ulong NextId)>();
         if (continuationCandidates.Count == 0)
-            return;
+            return mergedPairs;
 
         var updates = new Dictionary<ulong, string>();
         var mergedCaptionIds = new HashSet<ulong>();
@@ -1415,6 +1442,7 @@ public partial class ValidationService
             captionElement.DelemenJsonTree = mergedJson;
             updates[candidate.Caption.ElementId] = mergedJson;
             mergedCaptionIds.Add(candidate.Caption.ElementId);
+            mergedPairs.Add((candidate.Caption.ElementId, candidate.NextElement.DelemenId));
 
             var updatedContent = ParseElementContent(mergedJson);
             candidate.Caption.Content = updatedContent;
@@ -1423,7 +1451,7 @@ public partial class ValidationService
         }
 
         if (updates.Count == 0)
-            return;
+            return mergedPairs;
 
         foreach (var (id, json) in updates)
         {
@@ -1434,6 +1462,65 @@ public partial class ValidationService
         }
 
         await _db.SaveChangesAsync(cancellationToken);
+        return mergedPairs;
+    }
+
+    private static Dictionary<ulong, HashSet<ulong>> BuildCaptionMergeGroups(
+        IReadOnlyList<(ulong CaptionId, ulong NextId)> mergedPairs)
+    {
+        var groups = new Dictionary<ulong, HashSet<ulong>>();
+        if (mergedPairs == null || mergedPairs.Count == 0)
+            return groups;
+
+        var adjacency = new Dictionary<ulong, HashSet<ulong>>();
+        foreach (var pair in mergedPairs)
+        {
+            if (!adjacency.TryGetValue(pair.CaptionId, out var from))
+            {
+                from = new HashSet<ulong>();
+                adjacency[pair.CaptionId] = from;
+            }
+
+            if (!adjacency.TryGetValue(pair.NextId, out var to))
+            {
+                to = new HashSet<ulong>();
+                adjacency[pair.NextId] = to;
+            }
+
+            from.Add(pair.NextId);
+            to.Add(pair.CaptionId);
+        }
+
+        var visited = new HashSet<ulong>();
+        foreach (var node in adjacency.Keys)
+        {
+            if (!visited.Add(node))
+                continue;
+
+            var component = new HashSet<ulong>();
+            var stack = new Stack<ulong>();
+            stack.Push(node);
+
+            while (stack.Count > 0)
+            {
+                var current = stack.Pop();
+                component.Add(current);
+
+                if (!adjacency.TryGetValue(current, out var neighbors))
+                    continue;
+
+                foreach (var neighbor in neighbors)
+                {
+                    if (visited.Add(neighbor))
+                        stack.Push(neighbor);
+                }
+            }
+
+            foreach (var id in component)
+                groups[id] = component;
+        }
+
+        return groups;
     }
 
     private static bool TryGetElementBold(

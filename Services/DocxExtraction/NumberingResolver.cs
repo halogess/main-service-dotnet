@@ -46,15 +46,27 @@ public class NumberingResolver
         var ind = pPr.GetFirstChild<Indentation>();
         if (ind != null)
         {
-            // Numbering-level indentation should override style indentation as a whole.
-            effective.IndentLeft = null;
-            effective.IndentRight = null;
-            effective.IndentFirstLine = null;
-            effective.IndentHanging = null;
-            effective.IndentStart = null;
-            effective.IndentEnd = null;
-            effective.IndentLeftChars = null;
-            effective.IndentRightChars = null;
+            var hasAnyIndent = ind.Left?.Value != null ||
+                               ind.Right?.Value != null ||
+                               ind.FirstLine?.Value != null ||
+                               ind.Hanging?.Value != null ||
+                               ind.Start?.Value != null ||
+                               ind.End?.Value != null ||
+                               ind.LeftChars?.Value != null ||
+                               ind.RightChars?.Value != null;
+
+            if (hasAnyIndent)
+            {
+                // Numbering-level indentation overrides the entire indent group.
+                effective.IndentLeft = null;
+                effective.IndentRight = null;
+                effective.IndentFirstLine = null;
+                effective.IndentHanging = null;
+                effective.IndentStart = null;
+                effective.IndentEnd = null;
+                effective.IndentLeftChars = null;
+                effective.IndentRightChars = null;
+            }
 
             if (ind.Left?.Value != null) effective.IndentLeft = int.Parse(ind.Left.Value);
             if (ind.Right?.Value != null) effective.IndentRight = int.Parse(ind.Right.Value);

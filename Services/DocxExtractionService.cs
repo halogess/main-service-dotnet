@@ -74,6 +74,7 @@ public class DocxExtractionService : IDocxExtractionService
             
             var body = doc.MainDocumentPart!.Document.Body!;
             var numberingCounters = new Dictionary<int, Dictionary<int, int>>();
+            var defaultTabStopTwips = GetDefaultTabStopTwips(doc.MainDocumentPart?.DocumentSettingsPart);
             
             // Create ParagraphFormatExtractor with StyleResolver for effective property resolution
             var paragraphFormatExtractor = new ParagraphFormatExtractor(styleResolver, numberingPart);
@@ -170,7 +171,7 @@ public class DocxExtractionService : IDocxExtractionService
                         if (headerPartDoc?.Header != null)
                         {
                             await ExtractPartContent(headerPartDoc.Header, headerPart.DpartId, (uint)dokumenId, 
-                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor);
+                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips);
                         }
                     }
                 }
@@ -201,7 +202,7 @@ public class DocxExtractionService : IDocxExtractionService
                         if (footerPartDoc?.Footer != null)
                         {
                             await ExtractPartContent(footerPartDoc.Footer, footerPart.DpartId, (uint)dokumenId, 
-                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor);
+                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips);
                         }
                     }
                 }
@@ -246,11 +247,25 @@ public class DocxExtractionService : IDocxExtractionService
                     ? bodyPartId : 0;
                 
                 uint? dfpId = null;
+                List<(string type, JObject json)>? cachedItems = null;
                 // Extract paragraph format if this is a paragraph
                 if (elem is Paragraph para)
                 {
+                    cachedItems = (await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
+                        .ToList();
+
                     // Create format record for paragraph (with EFFECTIVE resolved properties)
                     var format = paragraphFormatExtractor.ExtractFormat(para);
+
+                    if (format.DfpIsList && numberingPart != null && format.DfpListNumId.HasValue && format.DfpListIlvl.HasValue)
+                    {
+                        var label = TryGetNumberingLabelFromItems(cachedItems);
+                        var level = NumberingResolver.GetNumberingLevel(numberingPart, (int)format.DfpListNumId.Value, (int)format.DfpListIlvl.Value);
+                        var effectiveHanging = NumberingLayoutHelper.TryComputeEffectiveHangingTwips(level, label, defaultTabStopTwips);
+                        if (effectiveHanging.HasValue)
+                            format.DfpIndHangingTwips = effectiveHanging.Value;
+                    }
+
                     _db.DokumenFormatParagrafs.Add(format);
                     await _db.SaveChangesAsync();
                     dfpId = format.DfpId;
@@ -272,7 +287,8 @@ public class DocxExtractionService : IDocxExtractionService
                 
                 try 
                 {
-                    foreach (var (type, json) in await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
+                    var items = cachedItems ?? (await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor)).ToList();
+                    foreach (var (type, json) in items)
                     {
                         // Add dfp_id to JSON for paragraph/list types - ensure it comes before content
                         if (dfpId.HasValue && (type.StartsWith("paragraph") || type.StartsWith("list-item") || type.StartsWith("h") || type == "title" || type == "subtitle"))
@@ -419,7 +435,8 @@ public class DocxExtractionService : IDocxExtractionService
         NumberingDefinitionsPart? numberingPart,
         Dictionary<int, Dictionary<int, int>> numberingCounters,
         ParagraphFormatExtractor paragraphFormatExtractor,
-        TableExtractor tableExtractor)
+        TableExtractor tableExtractor,
+        int defaultTabStopTwips)
     {
         int seq = 1;
         
@@ -427,13 +444,26 @@ public class DocxExtractionService : IDocxExtractionService
         {
             if (elem is Paragraph para)
             {
+                var items = (await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
+                    .ToList();
+
                 // Create format record for paragraph (with EFFECTIVE resolved properties)
                 var format = paragraphFormatExtractor.ExtractFormat(para);
+
+                if (format.DfpIsList && numberingPart != null && format.DfpListNumId.HasValue && format.DfpListIlvl.HasValue)
+                {
+                    var label = TryGetNumberingLabelFromItems(items);
+                    var level = NumberingResolver.GetNumberingLevel(numberingPart, (int)format.DfpListNumId.Value, (int)format.DfpListIlvl.Value);
+                    var effectiveHanging = NumberingLayoutHelper.TryComputeEffectiveHangingTwips(level, label, defaultTabStopTwips);
+                    if (effectiveHanging.HasValue)
+                        format.DfpIndHangingTwips = effectiveHanging.Value;
+                }
+
                 _db.DokumenFormatParagrafs.Add(format);
                 await _db.SaveChangesAsync();
                 uint? dfpId = format.DfpId;
-                
-                foreach (var (type, json) in await ConvertBodyElementToItemsAsync(elem, numberingPart, numberingCounters, tableExtractor))
+
+                foreach (var (type, json) in items)
                 {
                     // Reorder dfp_id to come before content
                     if (dfpId.HasValue)
@@ -532,6 +562,34 @@ public class DocxExtractionService : IDocxExtractionService
             return new[] { ("bookmarkEnd", new JObject { ["id"] = bookmarkEnd.Id?.Value ?? "" }) };
 
         return new[] { (elem.LocalName, new JObject { ["xml"] = elem.OuterXml }) };
+    }
+
+    private static int GetDefaultTabStopTwips(DocumentSettingsPart? settingsPart)
+    {
+        var defaultTab = settingsPart?.Settings?.Elements<DefaultTabStop>().FirstOrDefault();
+        return defaultTab?.Val?.Value ?? 720;
+    }
+
+    private static string? TryGetNumberingLabelFromItems(IEnumerable<(string type, JObject json)> items)
+    {
+        foreach (var (_, json) in items)
+        {
+            if (json["content"] is not JArray content || content.Count == 0)
+                continue;
+
+            foreach (var token in content)
+            {
+                if (token?["type"]?.ToString() != "text")
+                    continue;
+
+                var value = token?["value"]?.ToString();
+                if (!string.IsNullOrWhiteSpace(value))
+                    return value;
+                break;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

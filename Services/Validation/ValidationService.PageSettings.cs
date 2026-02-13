@@ -79,6 +79,9 @@ public partial class ValidationService
             }
         }
 
+        // Default rules when not provided in DB
+        gutterRule ??= new GutterRule { Gutter = 0m };
+
         var effectiveColumnRule = new ColumnRule { Count = 1 };
         if (columnRule?.Count == 1)
             effectiveColumnRule = columnRule;

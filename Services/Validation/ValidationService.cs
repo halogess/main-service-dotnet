@@ -63,6 +63,55 @@ public class FlexibleDecimalConverter : JsonConverter<decimal?>
     }
 }
 
+public class StringOrStringListConverter : JsonConverter<List<string>?>
+{
+    public override List<string>? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+            return null;
+
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            var value = reader.GetString();
+            return string.IsNullOrWhiteSpace(value) ? new List<string>() : new List<string> { value };
+        }
+
+        if (reader.TokenType == JsonTokenType.StartArray)
+        {
+            var list = new List<string>();
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray)
+                    break;
+
+                if (reader.TokenType == JsonTokenType.String)
+                {
+                    var item = reader.GetString();
+                    if (!string.IsNullOrWhiteSpace(item))
+                        list.Add(item);
+                }
+            }
+            return list;
+        }
+
+        throw new JsonException("Invalid string list value.");
+    }
+
+    public override void Write(Utf8JsonWriter writer, List<string>? value, JsonSerializerOptions options)
+    {
+        if (value == null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStartArray();
+        foreach (var item in value)
+            writer.WriteStringValue(item);
+        writer.WriteEndArray();
+    }
+}
+
 // Paper Size Rule
 public class PaperSectionRule
 {
@@ -430,6 +479,138 @@ public class CaptionNumberingRule
     public RuleValue<bool>? EnterAfterNumbering { get; set; }
 }
 
+public class FlexibleStringListRuleValue
+{
+    [JsonPropertyName("value")]
+    [JsonConverter(typeof(StringOrStringListConverter))]
+    public List<string>? Value { get; set; }
+
+    [JsonPropertyName("is_editable")]
+    public bool IsEditable { get; set; }
+}
+
+public class FlexibleCaptionNumberingRule
+{
+    [JsonPropertyName("number_format")]
+    public FlexibleStringListRuleValue? NumberFormat { get; set; }
+
+    [JsonPropertyName("case")]
+    public RuleValue<string>? Case { get; set; }
+
+    [JsonPropertyName("enter_after_numbering")]
+    public RuleValue<bool>? EnterAfterNumbering { get; set; }
+}
+
+// Table Rule (tabel)
+public class TableRule
+{
+    [JsonPropertyName("position")]
+    public TablePositionRule? Position { get; set; }
+
+    [JsonPropertyName("konten_tabel")]
+    public TableContentRule? KontenTabel { get; set; }
+
+    [JsonPropertyName("cegah_gambar_tabel")]
+    public RuleValue<bool>? CegahGambarTabel { get; set; }
+}
+
+public class TablePositionRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("indent_from_left")]
+    public DecimalRuleValue? IndentFromLeft { get; set; }
+
+    [JsonPropertyName("cegah_melebihi_margin")]
+    public RuleValue<bool>? CegahMelebihiMargin { get; set; }
+
+    [JsonPropertyName("cegah_memenuhi_halaman")]
+    public RuleValue<bool>? CegahMemenuhiHalaman { get; set; }
+}
+
+public class TableContentRule
+{
+    [JsonPropertyName("font")]
+    public ParagraphFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public TableContentParagraphRule? Paragraph { get; set; }
+}
+
+public class TableContentParagraphRule
+{
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class TableCaptionRule
+{
+    [JsonPropertyName("font")]
+    public TitleFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public TitleParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("numbering")]
+    public FlexibleCaptionNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("position")]
+    public RuleValue<string>? Position { get; set; }
+}
+
+// Code Rule (kode)
+public class CodeRule
+{
+    [JsonPropertyName("font")]
+    public TitleFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public CodeParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("numbering")]
+    public CodeNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("cegah_gambar_kode")]
+    public RuleValue<bool>? CegahGambarKode { get; set; }
+}
+
+public class CodeParagraphRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("indentation")]
+    public ListItemIndentationRule? Indentation { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class CodeNumberingRule
+{
+    [JsonPropertyName("use_numbering")]
+    public RuleValue<bool>? UseNumbering { get; set; }
+
+    [JsonPropertyName("number_format")]
+    public RuleValue<string>? NumberFormat { get; set; }
+}
+
+public class CodeTitleRule
+{
+    [JsonPropertyName("font")]
+    public TitleFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public TitleParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("numbering")]
+    public FlexibleCaptionNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("position")]
+    public RuleValue<string>? Position { get; set; }
+}
+
 #endregion
 
 #region Validation Result DTOs
@@ -569,9 +750,17 @@ public partial class ValidationService : IValidationService
         result.TotalChecks += imageResult.TotalChecks;
         result.PassedChecks += imageResult.PassedChecks;
 
-        // TODO: Add more validation categories here
-        // - Table validation
-        // etc.
+        // Validate tables
+        var tableResult = await ValidateTableAsync(dokumenId, cancellationToken);
+        result.Errors.AddRange(tableResult.Errors);
+        result.TotalChecks += tableResult.TotalChecks;
+        result.PassedChecks += tableResult.PassedChecks;
+
+        // Validate code blocks
+        var codeResult = await ValidateCodeAsync(dokumenId, cancellationToken);
+        result.Errors.AddRange(codeResult.Errors);
+        result.TotalChecks += codeResult.TotalChecks;
+        result.PassedChecks += codeResult.PassedChecks;
 
         NormalizeContentErrorCategories(result.Errors);
         return result;

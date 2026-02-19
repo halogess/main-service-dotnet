@@ -17,6 +17,7 @@ public class TableExtractor
     private readonly TableFormatExtractor _tableFormatExtractor;
     private readonly TableRowFormatExtractor _rowFormatExtractor;
     private readonly TableCellFormatExtractor _cellFormatExtractor;
+    private readonly ParagraphFormatExtractor? _paragraphFormatExtractor;
     private readonly Func<Paragraph, NumberingDefinitionsPart?, Dictionary<int, Dictionary<int, int>>?, JArray> _extractParagraphContent;
     private readonly Func<Paragraph, string> _detectParagraphType;
 
@@ -26,6 +27,7 @@ public class TableExtractor
         TableFormatExtractor tableFormatExtractor,
         TableRowFormatExtractor rowFormatExtractor,
         TableCellFormatExtractor cellFormatExtractor,
+        ParagraphFormatExtractor? paragraphFormatExtractor,
         Func<Paragraph, NumberingDefinitionsPart?, Dictionary<int, Dictionary<int, int>>?, JArray> extractParagraphContent,
         Func<Paragraph, string> detectParagraphType)
     {
@@ -34,6 +36,7 @@ public class TableExtractor
         _tableFormatExtractor = tableFormatExtractor;
         _rowFormatExtractor = rowFormatExtractor;
         _cellFormatExtractor = cellFormatExtractor;
+        _paragraphFormatExtractor = paragraphFormatExtractor;
         _extractParagraphContent = extractParagraphContent;
         _detectParagraphType = detectParagraphType;
     }
@@ -121,8 +124,23 @@ public class TableExtractor
                     {
                         var pType = _detectParagraphType(p);
                         var pContent = _extractParagraphContent(p, numberingPart, numberingCounters);
+                        uint? dfpId = null;
+                        if (_paragraphFormatExtractor != null)
+                        {
+                            var format = _paragraphFormatExtractor.ExtractFormat(p);
+                            _db.DokumenFormatParagrafs.Add(format);
+                            await _db.SaveChangesAsync();
+                            dfpId = format.DfpId;
+                        }
+
                         if (pContent.Count > 0)
-                            cellContent.Add(new JObject { ["type"] = pType, ["content"] = pContent });
+                        {
+                            var paragraphJson = new JObject { ["type"] = pType };
+                            if (dfpId.HasValue)
+                                paragraphJson["dfp_id"] = dfpId.Value;
+                            paragraphJson["content"] = pContent;
+                            cellContent.Add(paragraphJson);
+                        }
                     }
                     else if (element is Table nestedTable)
                     {

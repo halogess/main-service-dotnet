@@ -37,6 +37,10 @@ public class Dokumen
     [Column("dokumen_pdf_path")]
     public string? DokumenPdfPath { get; set; }
 
+    [Column("dokumen_report_path")]
+    [MaxLength(255)]
+    public string? DokumenReportPath { get; set; }
+
     [Column("dokumen_images_path")]
     [MaxLength(255)]
     public string? DokumenImagesPath { get; set; }

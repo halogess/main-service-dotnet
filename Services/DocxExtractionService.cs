@@ -58,6 +58,9 @@ public class DocxExtractionService : IDocxExtractionService
             var tableFormatExtractor = new TableFormatExtractor(tableStyleResolver);
             var rowFormatExtractor = new TableRowFormatExtractor(tableStyleResolver);
             var cellFormatExtractor = new TableCellFormatExtractor(tableStyleResolver);
+
+            // Create ParagraphFormatExtractor with StyleResolver for effective property resolution
+            var paragraphFormatExtractor = new ParagraphFormatExtractor(styleResolver, numberingPart);
             
             // Initialize TableExtractor with format extractors
             var tableExtractor = new TableExtractor(
@@ -66,6 +69,7 @@ public class DocxExtractionService : IDocxExtractionService
                 tableFormatExtractor,
                 rowFormatExtractor,
                 cellFormatExtractor,
+                paragraphFormatExtractor,
                 _paragraphExtractor.ExtractParagraphContentSorted,
                 _paragraphExtractor.DetectParagraphType);
             
@@ -75,9 +79,6 @@ public class DocxExtractionService : IDocxExtractionService
             var body = doc.MainDocumentPart!.Document.Body!;
             var numberingCounters = new Dictionary<int, Dictionary<int, int>>();
             var defaultTabStopTwips = GetDefaultTabStopTwips(doc.MainDocumentPart?.DocumentSettingsPart);
-            
-            // Create ParagraphFormatExtractor with StyleResolver for effective property resolution
-            var paragraphFormatExtractor = new ParagraphFormatExtractor(styleResolver, numberingPart);
             
             // === SECTION EXTRACTION ===
             // IMPORTANT: elemIndex must EXCLUDE SectionProperties to match elementIndexMap logic later

@@ -22,11 +22,16 @@ public class DokumenController : ControllerBase
 
     private readonly KorektorBukuDbContext _db;
     private readonly IDokumenService _dokumenService;
+    private readonly IValidationReportService _reportService;
 
-    public DokumenController(KorektorBukuDbContext db, IDokumenService dokumenService)
+    public DokumenController(
+        KorektorBukuDbContext db,
+        IDokumenService dokumenService,
+        IValidationReportService reportService)
     {
         _db = db;
         _dokumenService = dokumenService;
+        _reportService = reportService;
     }
 
     [HttpPost]
@@ -209,6 +214,37 @@ public class DokumenController : ControllerBase
             updated_at = dokumen.DokumenUpdatedAt,
             kesalahan = kesalahanData
         });
+    }
+
+    [HttpGet("{id}/report")]
+    public async Task<IActionResult> GetValidationReport(int id, [FromQuery] bool refresh = false)
+    {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
+
+        try
+        {
+            var report = await _reportService.GenerateDokumenReportAsync(
+                id,
+                nrp,
+                role,
+                refresh,
+                HttpContext.RequestAborted);
+
+            return File(report.Content, "application/pdf", report.FileName);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 
     [HttpGet("{dokumenId}/image/{page}")]

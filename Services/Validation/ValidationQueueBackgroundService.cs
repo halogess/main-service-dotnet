@@ -55,6 +55,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                 var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
                 var wsService = scope.ServiceProvider.GetRequiredService<IWebSocketService>();
                 var validationService = scope.ServiceProvider.GetRequiredService<IValidationService>();
+                var reportService = scope.ServiceProvider.GetRequiredService<IValidationReportService>();
 
                 var queue = await db.Antrians
                     .Where(a => a.AntrianValidationStatus == "in_queue")
@@ -108,6 +109,18 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         stoppingToken);
                                 }
 
+                                // Generate validation report before status updated
+                                await reportService.GenerateDokumenReportAsync(
+                                    (int)queue.DokumenId.Value,
+                                    dokumen.MhsNrp,
+                                    "admin",
+                                    refresh: true,
+                                    cancellationToken: stoppingToken);
+
+                                var isLolos = dokumen.DokumenJumlahKesalahan == 0;
+                                dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
+                                dokumen.DokumenUpdatedAt = DateTime.Now;
+
                                 // Notify: Completed
                                 await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "completed", 100);
                             }
@@ -133,9 +146,6 @@ public class ValidationQueueBackgroundService : BackgroundService
                             var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
                             if (dokumen != null)
                             {
-                                var isLolos = dokumen.DokumenJumlahKesalahan == 0;
-                                dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
-                                dokumen.DokumenUpdatedAt = DateTime.Now;
                                 await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, dokumen.DokumenStatus);
                                 
                                 // TODO: Email notification (disabled for now)

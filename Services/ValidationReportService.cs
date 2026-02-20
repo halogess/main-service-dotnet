@@ -46,9 +46,17 @@ public sealed class ValidationReportService : IValidationReportService
             !string.Equals(dokumen.MhsNrp, requesterNrp, StringComparison.OrdinalIgnoreCase))
             throw new UnauthorizedAccessException();
 
-        if (!string.Equals(dokumen.DokumenStatus, "lolos", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(dokumen.DokumenStatus, "tidak_lolos", StringComparison.OrdinalIgnoreCase))
+        var isValidatedStatus =
+            string.Equals(dokumen.DokumenStatus, "lolos", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(dokumen.DokumenStatus, "tidak_lolos", StringComparison.OrdinalIgnoreCase);
+        var hasValidationResult = dokumen.DokumenJumlahKesalahan.HasValue;
+
+        if (!isValidatedStatus && !hasValidationResult)
             throw new InvalidOperationException("Dokumen belum divalidasi");
+
+        var reportStatus = isValidatedStatus
+            ? dokumen.DokumenStatus
+            : (dokumen.DokumenJumlahKesalahan!.Value == 0 ? "lolos" : "tidak_lolos");
 
         var (reportFullPath, reportRelativePath, reportFileName) = ResolveReportPath(dokumen, dokumenId);
 
@@ -82,7 +90,7 @@ public sealed class ValidationReportService : IValidationReportService
             Nrp = dokumen.MhsNrp,
             Filename = dokumen.DokumenFilename,
             Tipe = dokumen.DokumenTipe,
-            Status = dokumen.DokumenStatus,
+            Status = reportStatus,
             Skor = dokumen.DokumenSkor,
             TotalKesalahan = dokumen.DokumenJumlahKesalahan,
             CreatedAt = dokumen.DokumenCreatedAt,

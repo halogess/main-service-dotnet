@@ -990,11 +990,13 @@ public partial class ValidationService
             idParam.ParameterName = "@id";
             idParam.Value = subchapterId;
             cmd.Parameters.Add(idParam);
-            using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-            if (await reader.ReadAsync(cancellationToken))
+            await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
             {
-                page = reader["dev_page"] != DBNull.Value ? Convert.ToInt32(reader["dev_page"]) : null;
-                y1 = reader["dev_bbox_y1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y1"]) : null;
+                if (await reader.ReadAsync(cancellationToken))
+                {
+                    page = reader["dev_page"] != DBNull.Value ? Convert.ToInt32(reader["dev_page"]) : null;
+                    y1 = reader["dev_bbox_y1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y1"]) : null;
+                }
             }
             if (!page.HasValue || !y1.HasValue)
                 return;

@@ -25,6 +25,13 @@ public partial class ValidationService
         public string Evidence { get; init; } = "Tabel";
     }
 
+    private sealed class TableStructuralViolationInfo
+    {
+        public ulong ElementId { get; init; }
+        public string? ElementType { get; init; }
+        public string Evidence { get; init; } = "Tabel";
+    }
+
     private async Task<ValidationResult> ValidateTableAsync(int dokumenId, CancellationToken cancellationToken)
     {
         var result = new ValidationResult();
@@ -158,6 +165,7 @@ public partial class ValidationService
         var captionPrefixes = BuildCaptionPrefixes(captionRule?.Numbering);
 
         var tableBlocks = new List<TableBlockInfo>();
+        var structuralViolations = new List<TableStructuralViolationInfo>();
         var captionCandidates = new List<CaptionInfo>();
 
         for (var index = 0; index < bodyElements.Count; index++)
@@ -167,7 +175,17 @@ public partial class ValidationService
                 ? NormalizeLabel(rawLabel)
                 : string.Empty;
 
-            if (IsTableElement(elem, normalizedLabel))
+            if (IsTableLabel(normalizedLabel) && IsTableImageElementType(elem.DelemenType))
+            {
+                structuralViolations.Add(new TableStructuralViolationInfo
+                {
+                    ElementId = elem.DelemenId,
+                    ElementType = elem.DelemenType
+                });
+                continue;
+            }
+
+            if (IsTableElement(normalizedLabel))
             {
                 var contentAggregate = ExtractTableContentAggregate(elem.DelemenJsonTree, out var tableFormatId);
                 var evidence = tableFormatId.HasValue ? $"Tabel (dft:{tableFormatId.Value})" : "Tabel";
@@ -181,27 +199,50 @@ public partial class ValidationService
                 });
             }
 
-            if (captionRule != null &&
-                IsParagraphElement(elem.DelemenType))
+            if (captionRule != null)
             {
+                if (normalizedLabel != "caption_tabel")
+                    continue;
+
                 var content = ParseElementContent(elem.DelemenJsonTree);
                 var normalizedText = NormalizeWhitespace(content.PlainText);
                 if (string.IsNullOrWhiteSpace(normalizedText))
                     continue;
 
-                var isCaptionLabel = normalizedLabel == "caption_tabel";
-                var isCaptionPrefix = captionPrefixes.Count > 0 && StartsWithAnyPrefix(normalizedText, captionPrefixes);
-                if (isCaptionLabel || isCaptionPrefix)
+                captionCandidates.Add(new CaptionInfo
                 {
-                    captionCandidates.Add(new CaptionInfo
-                    {
-                        ElementId = elem.DelemenId,
-                        OrderIndex = index,
-                        Content = content,
-                        NormalizedText = normalizedText
-                    });
-                }
+                    ElementId = elem.DelemenId,
+                    OrderIndex = index,
+                    Content = content,
+                    NormalizedText = normalizedText
+                });
             }
+        }
+
+        foreach (var violation in structuralViolations)
+        {
+            var errorStart = result.Errors.Count;
+            var locations = await BuildElementLocationsAsync(violation.ElementId, cancellationToken);
+
+            if (tableRule?.CegahGambarTabel?.Value == true)
+            {
+                result.TotalChecks++;
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "tabel",
+                    Message = "Tabel tidak boleh berupa gambar",
+                    Expected = "Elemen tabel bertipe tabel, bukan gambar",
+                    Actual = $"Tipe elemen: {violation.ElementType ?? "unknown"}",
+                    Evidence = violation.Evidence,
+                    Locations = locations
+                });
+            }
+
+            if (neighborContexts.TryGetValue(violation.ElementId, out var context))
+                ApplyContextToErrors(result.Errors, errorStart, context);
+
+            ApplyElementIdToErrors(result.Errors, errorStart, violation.ElementId);
         }
 
         if (tableBlocks.Count == 0)
@@ -262,7 +303,14 @@ public partial class ValidationService
                     var expectedAlignment = tableRule.Position.Alignment.Value;
                     result.TotalChecks++;
                     var actualAlignment = tableFormat.DftJc ?? "unknown";
-                    if (AreAlignmentsEquivalent(actualAlignment, expectedAlignment))
+                    pageLayoutsById.TryGetValue(block.ElementId, out var tableLayout);
+                    var isNearFullWidthCenterCase = IsCenterAlignmentSatisfiedByNearFullWidth(
+                        expectedAlignment,
+                        tableFormat,
+                        tableLayout,
+                        locations);
+
+                    if (AreAlignmentsEquivalent(actualAlignment, expectedAlignment) || isNearFullWidthCenterCase)
                     {
                         result.PassedChecks++;
                     }
@@ -321,7 +369,7 @@ public partial class ValidationService
 
                     var tableWidth = ResolveTableWidthCm(widthFormat, layout);
 
-                    if (tableWidth.HasValue && availableWidth.HasValue && tableWidth.Value > availableWidth.Value + 0.1m)
+                    if (tableWidth.HasValue && availableWidth.HasValue && tableWidth.Value > availableWidth.Value + 0.2m)
                     {
                         result.Errors.Add(new ValidationError
                         {
@@ -413,15 +461,22 @@ public partial class ValidationService
                 var nextTableIndex = i + 1 < tableBlocks.Count ? tableBlocks[i + 1].OrderIndex : int.MaxValue;
                 var prevTableIndex = i > 0 ? tableBlocks[i - 1].OrderIndex : -1;
 
-                CaptionInfo? captionAfter = captionCandidates.FirstOrDefault(c =>
-                    !usedCaptionIds.Contains(c.ElementId) &&
-                    c.OrderIndex > block.OrderIndex &&
-                    c.OrderIndex < nextTableIndex);
+                var captionAfterCandidates = captionCandidates
+                    .Where(c => !usedCaptionIds.Contains(c.ElementId) &&
+                                c.OrderIndex > block.OrderIndex &&
+                                c.OrderIndex < nextTableIndex)
+                    .OrderBy(c => c.OrderIndex)
+                    .ToList();
 
-                CaptionInfo? captionBefore = captionCandidates.LastOrDefault(c =>
-                    !usedCaptionIds.Contains(c.ElementId) &&
-                    c.OrderIndex < block.OrderIndex &&
-                    c.OrderIndex > prevTableIndex);
+                var captionBeforeCandidates = captionCandidates
+                    .Where(c => !usedCaptionIds.Contains(c.ElementId) &&
+                                c.OrderIndex < block.OrderIndex &&
+                                c.OrderIndex > prevTableIndex)
+                    .OrderBy(c => c.OrderIndex)
+                    .ToList();
+
+                CaptionInfo? captionAfter = SelectPreferredCaptionCandidate(captionAfterCandidates, captionPrefixes, preferNearestBefore: false);
+                CaptionInfo? captionBefore = SelectPreferredCaptionCandidate(captionBeforeCandidates, captionPrefixes, preferNearestBefore: true);
 
                 CaptionInfo? selectedCaption = null;
                 var positionRule = captionRule.Position?.Value?.Trim();
@@ -506,8 +561,23 @@ public partial class ValidationService
 
                 if (selectedCaption != null)
                 {
+                    var continuationCaption = SelectCaptionContinuationCandidate(
+                        selectedCaption,
+                        block.OrderIndex,
+                        captionBeforeCandidates,
+                        captionAfterCandidates,
+                        captionPrefixes,
+                        captionRule.Numbering);
+
                     usedCaptionIds.Add(selectedCaption.ElementId);
-                    var captionLocations = await BuildElementLocationsAsync(selectedCaption.ElementId, cancellationToken);
+                    if (continuationCaption != null)
+                        usedCaptionIds.Add(continuationCaption.ElementId);
+
+                    IEnumerable<ulong> captionLocationIds = continuationCaption != null
+                        ? new[] { selectedCaption.ElementId, continuationCaption.ElementId }
+                        : new[] { selectedCaption.ElementId };
+
+                    var captionLocations = await BuildElementLocationsAsync(captionLocationIds, cancellationToken);
                     var captionErrorStart = result.Errors.Count;
 
                     var captionTextFormats = selectedCaption.Content.TextFormatIds
@@ -520,10 +590,15 @@ public partial class ValidationService
                     if (selectedCaption.Content.ParagraphFormatId.HasValue &&
                         paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId.Value, out var captionFormat))
                     {
-                        ValidateCaptionParagraphFormat(result, captionRule.Paragraph, captionFormat, "caption_tabel", "caption tabel", selectedCaption.NormalizedText, captionLocations);
+                        pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
+                        ValidateCaptionParagraphFormat(result, captionRule.Paragraph, captionFormat, "caption_tabel", "caption tabel", selectedCaption.NormalizedText, captionLocations, captionPageLayout);
                     }
 
-                    ValidateCaptionNumbering(result, captionRule.Numbering, selectedCaption, "caption_tabel", "caption tabel", captionLocations);
+                    var numberingTextOverride = continuationCaption != null
+                        ? NormalizeWhitespace(selectedCaption.NormalizedText + " " + continuationCaption.NormalizedText)
+                        : null;
+
+                    ValidateCaptionNumbering(result, captionRule.Numbering, selectedCaption, "caption_tabel", "caption tabel", captionLocations, numberingTextOverride);
 
                     if (neighborContexts.TryGetValue(selectedCaption.ElementId, out var captionContext))
                         ApplyContextToErrors(result.Errors, captionErrorStart, captionContext);
@@ -541,12 +616,26 @@ public partial class ValidationService
         return result;
     }
 
-    private static bool IsTableElement(BodyElementInfo element, string normalizedLabel)
+    private static bool IsTableElement(string normalizedLabel)
     {
-        if (normalizedLabel == "tabel" || normalizedLabel == "table")
-            return true;
+        if (IsCodeLabel(normalizedLabel))
+            return false;
 
-        return string.Equals(element.DelemenType, "table", StringComparison.OrdinalIgnoreCase);
+        return normalizedLabel == "tabel" || normalizedLabel == "table";
+    }
+
+    private static bool IsTableLabel(string normalizedLabel)
+    {
+        return normalizedLabel == "tabel" || normalizedLabel == "table";
+    }
+
+    private static bool IsTableImageElementType(string? elementType)
+    {
+        if (string.IsNullOrWhiteSpace(elementType))
+            return false;
+
+        return elementType.Equals("gambar", StringComparison.OrdinalIgnoreCase) ||
+               IsImageType(elementType);
     }
 
     private static TableContentAggregate ExtractTableContentAggregate(string? json, out uint? tableFormatId)
@@ -707,6 +796,73 @@ public partial class ValidationService
         return null;
     }
 
+    private static bool IsCenterAlignmentSatisfiedByNearFullWidth(
+        string? expectedAlignment,
+        DokumenFormatTable tableFormat,
+        PageLayoutSnapshot? layout,
+        IReadOnlyList<ErrorLocation>? locations)
+    {
+        if (!string.Equals(NormalizeAlignmentValue(expectedAlignment), "center", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (layout == null)
+            return false;
+
+        var availableWidth = GetAvailableWidthCm(layout);
+        if (!availableWidth.HasValue || availableWidth.Value <= 0m)
+            return false;
+
+        var indentTwips = tableFormat.DftTblIndTwips ?? 0;
+        var indentCm = indentTwips / 1440.0m * 2.54m;
+        var effectiveAvailableWidth = Math.Max(0m, availableWidth.Value - Math.Max(0m, indentCm));
+        if (effectiveAvailableWidth <= 0m)
+            return false;
+
+        var tableWidth = ResolveTableWidthCm(tableFormat, layout);
+        if (!tableWidth.HasValue || tableWidth.Value <= 0m)
+            tableWidth = ResolveTableWidthFromLocationsCm(locations, layout);
+
+        if (!tableWidth.HasValue || tableWidth.Value <= 0m)
+            return false;
+
+        const decimal nearFullToleranceCm = 0.2m;
+        var remaining = effectiveAvailableWidth - tableWidth.Value;
+        return remaining >= 0m && remaining <= nearFullToleranceCm;
+    }
+
+    private static decimal? ResolveTableWidthFromLocationsCm(
+        IReadOnlyList<ErrorLocation>? locations,
+        PageLayoutSnapshot layout)
+    {
+        if (locations == null || locations.Count == 0 || !layout.WidthCm.HasValue || layout.WidthCm.Value <= 0m)
+            return null;
+
+        decimal? minX0 = null;
+        decimal? maxX1 = null;
+        foreach (var location in locations)
+        {
+            var bbox = location.Bbox;
+            if (bbox == null)
+                continue;
+
+            minX0 = !minX0.HasValue ? bbox.X0 : Math.Min(minX0.Value, bbox.X0);
+            maxX1 = !maxX1.HasValue ? bbox.X1 : Math.Max(maxX1.Value, bbox.X1);
+        }
+
+        if (!minX0.HasValue || !maxX1.HasValue)
+            return null;
+
+        if (!TryNormalizeHorizontalCoordinate(minX0.Value, layout, out var leftRatio) ||
+            !TryNormalizeHorizontalCoordinate(maxX1.Value, layout, out var rightRatio))
+            return null;
+
+        var widthRatio = rightRatio - leftRatio;
+        if (widthRatio <= 0m)
+            return null;
+
+        return Math.Round(layout.WidthCm.Value * widthRatio, 2);
+    }
+
     private static List<string> BuildCaptionPrefixes(FlexibleCaptionNumberingRule? numberingRule)
     {
         var prefixes = new List<string>();
@@ -736,14 +892,109 @@ public partial class ValidationService
         return prefix.Trim().TrimEnd('.', ':', '-', ' ');
     }
 
-    private static bool StartsWithAnyPrefix(string text, IReadOnlyList<string> prefixes)
+    private static CaptionInfo? SelectPreferredCaptionCandidate(
+        IReadOnlyList<CaptionInfo> candidates,
+        IReadOnlyList<string> prefixes,
+        bool preferNearestBefore)
     {
-        if (prefixes.Count == 0)
+        if (candidates.Count == 0)
+            return null;
+
+        if (prefixes.Count > 0)
+        {
+            if (preferNearestBefore)
+            {
+                for (var i = candidates.Count - 1; i >= 0; i--)
+                {
+                    if (MatchesCaptionNumbering(candidates[i].NormalizedText, prefixes))
+                        return candidates[i];
+                }
+            }
+            else
+            {
+                for (var i = 0; i < candidates.Count; i++)
+                {
+                    if (MatchesCaptionNumbering(candidates[i].NormalizedText, prefixes))
+                        return candidates[i];
+                }
+            }
+        }
+
+        return preferNearestBefore ? candidates[^1] : candidates[0];
+    }
+
+    private static CaptionInfo? SelectCaptionContinuationCandidate(
+        CaptionInfo selectedCaption,
+        int tableOrderIndex,
+        IReadOnlyList<CaptionInfo> beforeCandidates,
+        IReadOnlyList<CaptionInfo> afterCandidates,
+        IReadOnlyList<string> prefixes,
+        FlexibleCaptionNumberingRule? numberingRule)
+    {
+        if (numberingRule?.EnterAfterNumbering?.Value != true)
+            return null;
+
+        if (!TryParseCaptionNumberingWithPrefixes(selectedCaption.NormalizedText, prefixes, out var _parsedNumber, out var titleText))
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(titleText))
+            return null;
+
+        CaptionInfo? continuation = null;
+
+        if (selectedCaption.OrderIndex < tableOrderIndex)
+        {
+            continuation = beforeCandidates.FirstOrDefault(c =>
+                c.OrderIndex > selectedCaption.OrderIndex &&
+                c.ElementId != selectedCaption.ElementId);
+        }
+        else if (selectedCaption.OrderIndex > tableOrderIndex)
+        {
+            continuation = afterCandidates.FirstOrDefault(c =>
+                c.OrderIndex > selectedCaption.OrderIndex &&
+                c.ElementId != selectedCaption.ElementId);
+        }
+
+        if (continuation == null || string.IsNullOrWhiteSpace(continuation.NormalizedText))
+            return null;
+
+        if (MatchesCaptionNumbering(continuation.NormalizedText, prefixes))
+            return null;
+
+        return continuation;
+    }
+
+    private static bool MatchesCaptionNumbering(string text, IReadOnlyList<string> prefixes)
+    {
+        if (string.IsNullOrWhiteSpace(text) || prefixes.Count == 0)
             return false;
 
         foreach (var prefix in prefixes)
         {
-            if (text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (TryParseCaptionNumbering(text, prefix, out var _parsedNumber, out var _parsedTitle))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryParseCaptionNumberingWithPrefixes(
+        string text,
+        IReadOnlyList<string> prefixes,
+        out string numberText,
+        out string? titleText)
+    {
+        numberText = string.Empty;
+        titleText = null;
+
+        if (string.IsNullOrWhiteSpace(text) || prefixes.Count == 0)
+            return false;
+
+        foreach (var prefix in prefixes)
+        {
+            if (TryParseCaptionNumbering(text, prefix, out numberText, out titleText))
                 return true;
         }
 
@@ -1276,7 +1527,8 @@ public partial class ValidationService
         string field,
         string label,
         string evidenceText,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        PageLayoutSnapshot? pageLayout = null)
     {
         if (paragraphRule == null || format == null)
             return;
@@ -1286,7 +1538,8 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (AreAlignmentsEquivalent(actual, expectedAlignment))
+            var alignmentContext = CreateAlignmentContext(evidenceText, locations, pageLayout);
+            if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
                 result.PassedChecks++;
             }
@@ -1412,7 +1665,8 @@ public partial class ValidationService
         CaptionInfo caption,
         string field,
         string label,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        string? numberingTextOverride = null)
     {
         if (numberingRule == null)
             return;
@@ -1421,14 +1675,18 @@ public partial class ValidationService
         if (formats.Count == 0)
             return;
 
+        var textForNumbering = string.IsNullOrWhiteSpace(numberingTextOverride)
+            ? caption.NormalizedText
+            : NormalizeWhitespace(numberingTextOverride);
+
         var prefixes = formats
             .Select(ExtractCaptionPrefix)
             .Where(p => !string.IsNullOrWhiteSpace(p))
             .ToList();
 
-        var evidence = caption.NormalizedText.Length > 100
-            ? caption.NormalizedText[..100] + "..."
-            : caption.NormalizedText;
+        var evidence = textForNumbering.Length > 100
+            ? textForNumbering[..100] + "..."
+            : textForNumbering;
 
         string numberText;
         string? titleText;
@@ -1438,7 +1696,7 @@ public partial class ValidationService
 
         foreach (var prefix in prefixes)
         {
-            if (TryParseCaptionNumbering(caption.NormalizedText, prefix, out numberText, out titleText))
+            if (TryParseCaptionNumbering(textForNumbering, prefix, out numberText, out titleText))
             {
                 matched = true;
                 break;
@@ -1454,7 +1712,7 @@ public partial class ValidationService
                 Field = field,
                 Message = $"Format nomor {label} tidak sesuai",
                 Expected = string.Join(" / ", formats),
-                Actual = caption.NormalizedText,
+                Actual = textForNumbering,
                 Evidence = evidence,
                 Locations = locations
             });

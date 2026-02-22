@@ -13,8 +13,11 @@ namespace ValidasiTugasAkhir.MainService.Services;
 /// </summary>
 public partial class ValidationService
 {
-    // Regex pattern for subchapter numbering: X.X, X.X., X.X.X, X.X.X., etc. (with optional trailing dot)
-    private static readonly Regex SubchapterNumberPattern = new(@"^\d+(\.\d+)+\.?", RegexOptions.Compiled);
+    // Regex pattern for subchapter numbering: X.X, X.X., X.X.X, X.X.X., etc. (with optional spaces around dots and trailing dot)
+    private static readonly Regex SubchapterNumberPattern = new(@"^\d+(\s*\.\s*\d+)+\.?", RegexOptions.Compiled);
+    private static readonly Regex SubchapterNumberSeparatorPattern = new(@"\s*\.\s*", RegexOptions.Compiled);
+    private static readonly Regex ChapterTokenPattern = new(@"\bBAB\s+([IVXLCDM]+|\d+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex NumberTokenPattern = new(@"\b([IVXLCDM]+|\d+)\b", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private async Task<ValidationResult> ValidateSubchapterTitleAsync(
         int dokumenId,
@@ -92,7 +95,12 @@ public partial class ValidationService
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
             where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
-            select new { e.DelemenId, e.DelemenType, e.DelemenJsonTree })
+            select new BodyElementInfo
+            {
+                DelemenId = e.DelemenId,
+                DelemenType = e.DelemenType,
+                DelemenJsonTree = e.DelemenJsonTree
+            })
             .ToListAsync(cancellationToken);
 
         if (bodyElements.Count == 0)
@@ -109,6 +117,7 @@ public partial class ValidationService
         var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => (string?)e.DelemenJsonTree);
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
+        var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
 
         // Find subchapter label elements
         var labelSubchapterIds = labelMap
@@ -120,9 +129,6 @@ public partial class ValidationService
             resolvedSubchapterIds = labelSubchapterIds.Count > 0 ? labelSubchapterIds : null;
         if (resolvedSubchapterIds == null || resolvedSubchapterIds.Count == 0)
             return result;
-
-        // Build element lookup
-        var elementsById = bodyElements.ToDictionary(e => e.DelemenId);
 
         // Find subchapter titles (label judul_subbab only)
         var subchapterElements = new List<(ulong Id, ElementContentInfo Content)>();
@@ -146,7 +152,17 @@ public partial class ValidationService
 
         // --- Validate sequence completeness (based on struktur_konten rule) ---
         var preventSingleSubchapter = rule?.StrukturKonten?.CegahSubbabTunggal?.Value ?? true;
-        ValidateSubchapterSequence(result, subchapterElements, preventSingleSubchapter, neighborContexts);
+        var expectedChapterNumber = TryExtractExpectedChapterNumber(bodyElements, labelMap);
+        var sequenceLocationsByElementId = await BuildElementLocationsMapAsync(
+            subchapterElements.Select(e => e.Id),
+            cancellationToken);
+        ValidateSubchapterSequence(
+            result,
+            subchapterElements,
+            preventSingleSubchapter,
+            neighborContexts,
+            expectedChapterNumber,
+            sequenceLocationsByElementId);
 
         // --- Validate paragraph after subchapter (based on struktur_konten rule) ---
         var requireParagraphAfter = rule?.StrukturKonten?.MinimalSatuParagrafSetelah?.Value ?? true;
@@ -194,7 +210,9 @@ public partial class ValidationService
         {
             var plainText = content.PlainText?.Trim() ?? string.Empty;
             var match = SubchapterNumberPattern.Match(plainText);
-            var subchapterNumber = match.Success ? match.Value : string.Empty;
+            var subchapterNumber = match.Success
+                ? NormalizeSubchapterNumber(match.Value)
+                : string.Empty;
             var subchapterTitle = match.Success ? plainText[match.Length..].Trim() : plainText;
             var errorStart = result.Errors.Count;
 
@@ -217,12 +235,13 @@ public partial class ValidationService
 
             // Create locations for error reporting
             var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
+            pageLayoutsById.TryGetValue(elementId, out var pageLayout);
 
             // --- Font Validations ---
             ValidateSubchapterFont(result, rule!, elementTextFormats!, content.TextRuns, plainText, locations);
 
             // --- Paragraph Validations ---
-            ValidateSubchapterParagraph(result, rule!, paragraphFormat, plainText, locations);
+            ValidateSubchapterParagraph(result, rule!, paragraphFormat, plainText, locations, pageLayout);
 
             // --- Numbering Validation ---
             ValidateSubchapterNumbering(result, rule!, subchapterNumber, subchapterTitle, plainText, locations);
@@ -546,7 +565,8 @@ public partial class ValidationService
         SubchapterTitleRule rule,
         DokumenFormatParagraf? format,
         string evidence,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        PageLayoutSnapshot? pageLayout)
     {
         if (format == null)
             return;
@@ -557,7 +577,8 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (AreAlignmentsEquivalent(actual, expectedAlignment))
+            var alignmentContext = CreateAlignmentContext(evidence, locations, pageLayout);
+            if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
                 result.PassedChecks++;
             }
@@ -843,6 +864,151 @@ public partial class ValidationService
         return hasLetter;
     }
 
+    private static string NormalizeSubchapterNumber(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return string.Empty;
+
+        var cleaned = raw.Trim().TrimEnd('.');
+        return SubchapterNumberSeparatorPattern.Replace(cleaned, ".");
+    }
+
+    private static int CompareSubchapterParts(int[] left, int[] right)
+    {
+        var minLength = Math.Min(left.Length, right.Length);
+        for (var i = 0; i < minLength; i++)
+        {
+            var cmp = left[i].CompareTo(right[i]);
+            if (cmp != 0)
+                return cmp;
+        }
+
+        return left.Length.CompareTo(right.Length);
+    }
+
+    private static int? TryExtractExpectedChapterNumber(
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        Dictionary<ulong, string> labelMap)
+    {
+        foreach (var element in bodyElements)
+        {
+            if (!labelMap.TryGetValue(element.DelemenId, out var label))
+                continue;
+
+            if (!string.Equals(NormalizeLabel(label), "judul_bab", StringComparison.Ordinal))
+                continue;
+
+            var content = ParseElementContent(element.DelemenJsonTree);
+            var chapterNumber = TryExtractChapterNumberFromTitle(content.PlainText);
+            if (chapterNumber.HasValue)
+                return chapterNumber.Value;
+        }
+
+        return null;
+    }
+
+    private static int? TryExtractChapterNumberFromTitle(string? chapterTitleText)
+    {
+        if (string.IsNullOrWhiteSpace(chapterTitleText))
+            return null;
+
+        var normalizedText = NormalizeWhitespace(chapterTitleText.Replace('\r', ' ').Replace('\n', ' '));
+        if (string.IsNullOrWhiteSpace(normalizedText))
+            return null;
+
+        var chapterMatch = ChapterTokenPattern.Match(normalizedText);
+        if (chapterMatch.Success)
+            return TryParseChapterNumberToken(chapterMatch.Groups[1].Value);
+
+        var fallbackMatch = NumberTokenPattern.Match(normalizedText);
+        if (fallbackMatch.Success)
+            return TryParseChapterNumberToken(fallbackMatch.Groups[1].Value);
+
+        return null;
+    }
+
+    private static int? TryParseChapterNumberToken(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric) && numeric > 0)
+            return numeric;
+
+        return TryParseRomanNumeral(token);
+    }
+
+    private static int? TryParseRomanNumeral(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        var roman = token.Trim().ToUpperInvariant();
+        if (roman.Length == 0)
+            return null;
+
+        var values = new Dictionary<char, int>
+        {
+            ['I'] = 1,
+            ['V'] = 5,
+            ['X'] = 10,
+            ['L'] = 50,
+            ['C'] = 100,
+            ['D'] = 500,
+            ['M'] = 1000
+        };
+
+        var total = 0;
+        var previous = 0;
+
+        for (var i = roman.Length - 1; i >= 0; i--)
+        {
+            if (!values.TryGetValue(roman[i], out var value))
+                return null;
+
+            if (value < previous)
+                total -= value;
+            else
+            {
+                total += value;
+                previous = value;
+            }
+        }
+
+        if (total <= 0 || total > 3999)
+            return null;
+
+        var canonical = ToRoman(total);
+        return string.Equals(canonical, roman, StringComparison.Ordinal) ? total : null;
+    }
+
+    private static string ToRoman(int number)
+    {
+        if (number <= 0 || number > 3999)
+            return string.Empty;
+
+        var numerals = new (int Value, string Symbol)[]
+        {
+            (1000, "M"), (900, "CM"), (500, "D"), (400, "CD"),
+            (100, "C"), (90, "XC"), (50, "L"), (40, "XL"),
+            (10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")
+        };
+
+        var sb = new StringBuilder();
+        var remaining = number;
+
+        foreach (var (value, symbol) in numerals)
+        {
+            while (remaining >= value)
+            {
+                sb.Append(symbol);
+                remaining -= value;
+            }
+        }
+
+        return sb.ToString();
+    }
+
     private async Task ValidateParagraphAfterSubchapterAsync(
         ValidationResult result,
         List<ulong> bodyElementIds,
@@ -1073,11 +1239,12 @@ public partial class ValidationService
         ValidationResult result,
         List<(ulong Id, ElementContentInfo Content)> subchapterElements,
         bool preventSingleSubchapter,
-        Dictionary<ulong, ElementNeighborContext> contextById)
+        Dictionary<ulong, ElementNeighborContext> contextById,
+        int? expectedChapterNumber,
+        IReadOnlyDictionary<ulong, List<ErrorLocation>> locationsByElementId)
     {
-        // Extract all subchapter numbers
+        // Extract all subchapter numbers in document order.
         var numbersWithEvidence = new List<(ulong Id, int[] Parts, string Number, string Evidence)>();
-
         foreach (var (id, content) in subchapterElements)
         {
             var plainText = content.PlainText?.Trim() ?? string.Empty;
@@ -1085,136 +1252,269 @@ public partial class ValidationService
             if (!match.Success)
                 continue;
 
-            var numberStr = match.Value.TrimEnd('.');
-            var parts = numberStr.Split('.').Select(int.Parse).ToArray();
+            var numberStr = NormalizeSubchapterNumber(match.Value);
+            var parts = numberStr
+                .Split('.', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => int.Parse(p, CultureInfo.InvariantCulture))
+                .ToArray();
 
             if (parts.Length >= 2) // Must have at least X.X format
-            {
                 numbersWithEvidence.Add((id, parts, numberStr, plainText));
-            }
         }
 
         if (numbersWithEvidence.Count == 0)
             return;
 
+        var emittedErrorKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        bool TryAddError(ValidationError error, ElementNeighborContext? context)
+        {
+            var errorKey = string.Join(
+                "|",
+                error.Field,
+                error.Message,
+                error.DokumenElemenId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                error.Expected ?? string.Empty,
+                error.Actual ?? string.Empty);
+
+            if (!emittedErrorKeys.Add(errorKey))
+                return false;
+
+            if (context != null)
+                ApplyContext(error, context);
+
+            result.Errors.Add(error);
+            return true;
+        }
+
+        var duplicateIds = new HashSet<ulong>();
+        result.TotalChecks++;
+        var hasDuplicateError = false;
+
+        foreach (var duplicateGroup in numbersWithEvidence
+                     .GroupBy(n => n.Number)
+                     .Where(g => g.Count() > 1))
+        {
+            var first = duplicateGroup.First();
+            foreach (var duplicate in duplicateGroup)
+                duplicateIds.Add(duplicate.Id);
+
+            var context = contextById.TryGetValue(first.Id, out var found) ? found : null;
+            var error = new ValidationError
+            {
+                Category = "Isi Buku",
+                Field = "judul_subbab",
+                Message = $"Nomor subbab {first.Number} duplikat",
+                Expected = "Nomor subbab harus unik",
+                Actual = $"Ditemukan {duplicateGroup.Count()} kali",
+                Evidence = first.Evidence,
+                Locations = GetLocationsForElement(first.Id, locationsByElementId),
+                DokumenElemenId = first.Id
+            };
+
+            if (TryAddError(error, context))
+                hasDuplicateError = true;
+        }
+
+        if (!hasDuplicateError)
+            result.PassedChecks++;
+
+        if (expectedChapterNumber.HasValue)
+        {
+            result.TotalChecks++;
+            var hasChapterMismatch = false;
+            var expectedChapterText = expectedChapterNumber.Value.ToString(CultureInfo.InvariantCulture);
+
+            foreach (var mismatch in numbersWithEvidence
+                         .Where(n => n.Parts[0] != expectedChapterNumber.Value)
+                         .GroupBy(n => n.Number)
+                         .Select(g => g.First()))
+            {
+                var context = contextById.TryGetValue(mismatch.Id, out var found) ? found : null;
+                var error = new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "judul_subbab",
+                    Message = $"Subbab {mismatch.Number} tidak sesuai dengan judul bab {expectedChapterText}",
+                    Expected = $"Awalan nomor subbab harus {expectedChapterText}.x",
+                    Actual = mismatch.Number,
+                    Evidence = mismatch.Evidence,
+                    Locations = GetLocationsForElement(mismatch.Id, locationsByElementId),
+                    DokumenElemenId = mismatch.Id
+                };
+
+                if (TryAddError(error, context))
+                    hasChapterMismatch = true;
+            }
+
+            if (!hasChapterMismatch)
+                result.PassedChecks++;
+        }
+
+        var candidates = expectedChapterNumber.HasValue
+            ? numbersWithEvidence.Where(n => n.Parts[0] == expectedChapterNumber.Value).ToList()
+            : numbersWithEvidence;
+
+        if (candidates.Count == 0)
+            return;
+
         // Group by chapter (first number)
-        var byChapter = numbersWithEvidence
+        var byChapter = candidates
             .GroupBy(n => n.Parts[0])
             .OrderBy(g => g.Key)
             .ToList();
 
         foreach (var chapterGroup in byChapter)
         {
-            var chapterNum = chapterGroup.Key;
-            var subchapters = chapterGroup.OrderBy(n => string.Join(".", n.Parts)).ToList();
+            var subchapters = chapterGroup
+                .GroupBy(s => s.Number)
+                .Select(g => g.First())
+                .ToList();
 
-            // Build a set of all existing numbers for quick lookup
-            var existingNumbers = new HashSet<string>(subchapters.Select(s => string.Join(".", s.Parts)));
-
-            result.TotalChecks++;
-            var hasSequenceError = false;
+            // Build hierarchical nodes so each prefix is validated once.
+            // Example: 5.3.1 contributes node 5.3 and 5.3.1.
+            var hierarchicalNodes = new List<(ulong Id, int[] Parts, string NodeNumber, string FullNumber, string Evidence)>();
+            var existingNodeNumbers = new HashSet<string>(StringComparer.Ordinal);
 
             foreach (var (id, parts, number, evidence) in subchapters)
             {
-                var context = contextById.TryGetValue(id, out var found) ? found : null;
-
-                // Check 1: Parent must exist (e.g., if 1.2.1 exists, 1.2 must exist)
-                if (parts.Length > 2)
+                for (var depth = 2; depth <= parts.Length; depth++)
                 {
-                    var parentParts = parts.Take(parts.Length - 1).ToArray();
-                    var parentNumber = string.Join(".", parentParts);
+                    var nodeParts = parts.Take(depth).ToArray();
+                    var nodeNumber = string.Join(".", nodeParts);
+                    if (!existingNodeNumbers.Add(nodeNumber))
+                        continue;
 
-                    if (!existingNumbers.Contains(parentNumber))
-                    {
-                        hasSequenceError = true;
-                        var error = new ValidationError
-                        {
-                            Category = "Isi Buku",
-                            Field = "judul_subbab",
-                            Message = $"Subbab {number} tidak memiliki parent {parentNumber}",
-                            Expected = parentNumber,
-                            Actual = number,
-                            Evidence = evidence,
-                            DokumenElemenId = id
-                        };
-                        if (context != null)
-                            ApplyContext(error, context);
-                        result.Errors.Add(error);
-                    }
-                }
-
-                // Check 2: Previous sibling should exist (e.g., if 1.3 exists, 1.2 must exist)
-                var lastPart = parts[^1];
-                if (lastPart > 1)
-                {
-                    var prevParts = parts.ToArray();
-                    prevParts[^1] = lastPart - 1;
-                    var prevNumber = string.Join(".", prevParts);
-
-                    if (!existingNumbers.Contains(prevNumber))
-                    {
-                        hasSequenceError = true;
-                        var error = new ValidationError
-                        {
-                            Category = "Isi Buku",
-                            Field = "judul_subbab",
-                            Message = $"Subbab {prevNumber} tidak ditemukan sebelum {number}",
-                            Expected = prevNumber,
-                            Actual = $"Loncat ke {number}",
-                            Evidence = evidence,
-                            DokumenElemenId = id
-                        };
-                        if (context != null)
-                            ApplyContext(error, context);
-                        result.Errors.Add(error);
-                    }
+                    hierarchicalNodes.Add((id, nodeParts, nodeNumber, number, evidence));
                 }
             }
 
-            // Check 3: No single subchapter (if 1.1 exists, 1.2 must also exist)
+            hierarchicalNodes.Sort((left, right) => CompareSubchapterParts(left.Parts, right.Parts));
+
+            result.TotalChecks++;
+            var hasSequenceError = false;
+            var sequenceErrorIds = new HashSet<ulong>();
+
+            foreach (var (id, parts, _, fullNumber, evidence) in hierarchicalNodes)
+            {
+                if (sequenceErrorIds.Contains(id) || duplicateIds.Contains(id))
+                    continue;
+
+                var lastPart = parts[^1];
+                if (lastPart <= 1)
+                    continue;
+
+                var prevParts = parts.ToArray();
+                prevParts[^1] = lastPart - 1;
+                var prevNumber = string.Join(".", prevParts);
+
+                if (existingNodeNumbers.Contains(prevNumber))
+                    continue;
+
+                hasSequenceError = true;
+                sequenceErrorIds.Add(id);
+
+                var context = contextById.TryGetValue(id, out var found) ? found : null;
+                var error = new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "judul_subbab",
+                    Message = $"Subbab {prevNumber} tidak ditemukan sebelum {fullNumber}",
+                    Expected = prevNumber,
+                    Actual = $"Loncat ke {fullNumber}",
+                    Evidence = evidence,
+                    Locations = GetLocationsForElement(id, locationsByElementId),
+                    DokumenElemenId = id
+                };
+
+                if (TryAddError(error, context))
+                    hasSequenceError = true;
+            }
+
+            // Check 2: No single subchapter (if 1.1 exists, 1.2 must also exist)
             if (preventSingleSubchapter)
             {
-                // Group subchapters by their parent path
                 var subchaptersByParent = subchapters
+                    .Where(s => !duplicateIds.Contains(s.Id))
                     .GroupBy(s => string.Join(".", s.Parts.Take(s.Parts.Length - 1)))
                     .ToList();
 
                 foreach (var parentGroup in subchaptersByParent)
                 {
-                    var siblingCount = parentGroup.Count();
-                    if (siblingCount == 1)
-                    {
-                        var singleSubchapter = parentGroup.First();
-                        hasSequenceError = true;
-                        var context = contextById.TryGetValue(singleSubchapter.Id, out var found) ? found : null;
-                        
-                        // Suggest what should exist
-                        var nextNumber = singleSubchapter.Parts.ToArray();
-                        nextNumber[^1] = nextNumber[^1] + 1;
-                        var nextNumberStr = string.Join(".", nextNumber);
+                    if (parentGroup.Count() != 1)
+                        continue;
 
-                        var error = new ValidationError
-                        {
-                            Category = "Isi Buku",
-                            Field = "judul_subbab",
-                            Message = $"Subbab {singleSubchapter.Number} tidak boleh berdiri sendiri, harus ada minimal {nextNumberStr}",
-                            Expected = $"Minimal 2 subbab pada level yang sama",
-                            Actual = $"Hanya {singleSubchapter.Number} yang ditemukan",
-                            Evidence = singleSubchapter.Evidence,
-                            DokumenElemenId = singleSubchapter.Id
-                        };
-                        if (context != null)
-                            ApplyContext(error, context);
-                        result.Errors.Add(error);
-                    }
+                    var singleSubchapter = parentGroup.First();
+
+                    // Avoid cascading noise when this exact element already has a sequence error.
+                    if (sequenceErrorIds.Contains(singleSubchapter.Id))
+                        continue;
+
+                    hasSequenceError = true;
+                    var context = contextById.TryGetValue(singleSubchapter.Id, out var found) ? found : null;
+
+                    var nextNumber = singleSubchapter.Parts.ToArray();
+                    nextNumber[^1] = nextNumber[^1] + 1;
+                    var nextNumberStr = string.Join(".", nextNumber);
+
+                    var error = new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "judul_subbab",
+                        Message = $"Subbab {singleSubchapter.Number} tidak boleh berdiri sendiri, harus ada minimal {nextNumberStr}",
+                        Expected = "Minimal 2 subbab pada level yang sama",
+                        Actual = $"Hanya {singleSubchapter.Number} yang ditemukan",
+                        Evidence = singleSubchapter.Evidence,
+                        Locations = GetLocationsForElement(singleSubchapter.Id, locationsByElementId),
+                        DokumenElemenId = singleSubchapter.Id
+                    };
+                    if (TryAddError(error, context))
+                        hasSequenceError = true;
                 }
             }
 
             if (!hasSequenceError)
-            {
                 result.PassedChecks++;
-            }
         }
+    }
+
+    private async Task<Dictionary<ulong, List<ErrorLocation>>> BuildElementLocationsMapAsync(
+        IEnumerable<ulong> elementIds,
+        CancellationToken cancellationToken)
+    {
+        var result = new Dictionary<ulong, List<ErrorLocation>>();
+        foreach (var elementId in elementIds.Distinct())
+        {
+            var pageNumbers = await LoadPageNumbersAsync(new[] { elementId }, cancellationToken);
+            var pageBboxMap = await LoadPageBboxMapAsync(new[] { elementId }, cancellationToken);
+            result[elementId] = CreateLocations(pageNumbers.Values, pageBboxMap);
+        }
+
+        return result;
+    }
+
+    private static List<ErrorLocation> GetLocationsForElement(
+        ulong elementId,
+        IReadOnlyDictionary<ulong, List<ErrorLocation>> locationsByElementId)
+    {
+        if (!locationsByElementId.TryGetValue(elementId, out var locations) || locations.Count == 0)
+            return new List<ErrorLocation>();
+
+        return locations
+            .Select(loc => new ErrorLocation
+            {
+                HalamanKe = loc.HalamanKe,
+                Bbox = loc.Bbox == null
+                    ? null
+                    : new ErrorBbox
+                    {
+                        X0 = loc.Bbox.X0,
+                        Y0 = loc.Bbox.Y0,
+                        X1 = loc.Bbox.X1,
+                        Y1 = loc.Bbox.Y1
+                    }
+            })
+            .ToList();
     }
 }
 

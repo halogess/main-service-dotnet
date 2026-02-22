@@ -3,6 +3,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using DocumentFormat.OpenXml;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using System.Xml.Linq;
 using ValidasiTugasAkhir.MainService.Models;
 using ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 
@@ -75,10 +76,12 @@ public class DocxExtractionService : IDocxExtractionService
             
             // Inject table extraction callback into ParagraphExtractor for handling nested tables in textboxes
             _paragraphExtractor.SetTableExtractor(tableExtractor.ConvertTableToJsonAsync);
+            _paragraphExtractor.ResetNumberingState();
             
             var body = doc.MainDocumentPart!.Document.Body!;
             var numberingCounters = new Dictionary<int, Dictionary<int, int>>();
             var defaultTabStopTwips = GetDefaultTabStopTwips(doc.MainDocumentPart?.DocumentSettingsPart);
+            var useHangingIndentTabStop = ShouldUseHangingIndentTabStop(doc.MainDocumentPart?.DocumentSettingsPart);
             
             // === SECTION EXTRACTION ===
             // IMPORTANT: elemIndex must EXCLUDE SectionProperties to match elementIndexMap logic later
@@ -172,7 +175,7 @@ public class DocxExtractionService : IDocxExtractionService
                         if (headerPartDoc?.Header != null)
                         {
                             await ExtractPartContent(headerPartDoc.Header, headerPart.DpartId, (uint)dokumenId, 
-                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips);
+                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips, useHangingIndentTabStop);
                         }
                     }
                 }
@@ -203,7 +206,7 @@ public class DocxExtractionService : IDocxExtractionService
                         if (footerPartDoc?.Footer != null)
                         {
                             await ExtractPartContent(footerPartDoc.Footer, footerPart.DpartId, (uint)dokumenId, 
-                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips);
+                                numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips, useHangingIndentTabStop);
                         }
                     }
                 }
@@ -236,6 +239,7 @@ public class DocxExtractionService : IDocxExtractionService
             }
             
             int seq = 1;
+            _paragraphExtractor.ResetNumberingState();
             
             // Track which sequence contains footnote/endnote references
             // Key: (kind, refId), Value: sequence number
@@ -262,9 +266,17 @@ public class DocxExtractionService : IDocxExtractionService
                     {
                         var label = TryGetNumberingLabelFromItems(cachedItems);
                         var level = NumberingResolver.GetNumberingLevel(numberingPart, (int)format.DfpListNumId.Value, (int)format.DfpListIlvl.Value);
-                        var effectiveHanging = NumberingLayoutHelper.TryComputeEffectiveHangingTwips(level, label, defaultTabStopTwips);
+                        var effectiveHanging = NumberingLayoutHelper.TryComputeEffectiveHangingTwips(
+                            level,
+                            label,
+                            defaultTabStopTwips,
+                            useHangingIndentTabStop);
                         if (effectiveHanging.HasValue)
-                            format.DfpIndHangingTwips = effectiveHanging.Value;
+                        {
+                            var existingHanging = format.DfpIndHangingTwips ?? 0;
+                            if (effectiveHanging.Value > existingHanging)
+                                format.DfpIndHangingTwips = effectiveHanging.Value;
+                        }
                     }
 
                     _db.DokumenFormatParagrafs.Add(format);
@@ -437,9 +449,11 @@ public class DocxExtractionService : IDocxExtractionService
         Dictionary<int, Dictionary<int, int>> numberingCounters,
         ParagraphFormatExtractor paragraphFormatExtractor,
         TableExtractor tableExtractor,
-        int defaultTabStopTwips)
+        int defaultTabStopTwips,
+        bool useHangingIndentTabStop)
     {
         int seq = 1;
+        _paragraphExtractor.ResetNumberingState();
         
         async Task ProcessPartElement(OpenXmlElement elem)
         {
@@ -455,9 +469,17 @@ public class DocxExtractionService : IDocxExtractionService
                 {
                     var label = TryGetNumberingLabelFromItems(items);
                     var level = NumberingResolver.GetNumberingLevel(numberingPart, (int)format.DfpListNumId.Value, (int)format.DfpListIlvl.Value);
-                    var effectiveHanging = NumberingLayoutHelper.TryComputeEffectiveHangingTwips(level, label, defaultTabStopTwips);
+                    var effectiveHanging = NumberingLayoutHelper.TryComputeEffectiveHangingTwips(
+                        level,
+                        label,
+                        defaultTabStopTwips,
+                        useHangingIndentTabStop);
                     if (effectiveHanging.HasValue)
-                        format.DfpIndHangingTwips = effectiveHanging.Value;
+                    {
+                        var existingHanging = format.DfpIndHangingTwips ?? 0;
+                        if (effectiveHanging.Value > existingHanging)
+                            format.DfpIndHangingTwips = effectiveHanging.Value;
+                    }
                 }
 
                 _db.DokumenFormatParagrafs.Add(format);
@@ -571,6 +593,53 @@ public class DocxExtractionService : IDocxExtractionService
         return defaultTab?.Val?.Value ?? 720;
     }
 
+    private static bool ShouldUseHangingIndentTabStop(DocumentSettingsPart? settingsPart)
+    {
+        var settingsXml = settingsPart?.Settings?.OuterXml;
+        if (string.IsNullOrWhiteSpace(settingsXml))
+            return true;
+
+        try
+        {
+            var doc = XDocument.Parse(settingsXml);
+            var root = doc.Root;
+            if (root == null)
+                return true;
+
+            var wordNs = root.GetDefaultNamespace();
+            if (wordNs == XNamespace.None)
+                wordNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            var compat = root.Element(wordNs + "compat");
+            if (compat == null)
+                return true;
+
+            var disableIndentAsNumberingTabStop = compat
+                .Elements(wordNs + "doNotUseIndentAsNumberingTabStop")
+                .Any(e => IsOnOffEnabled(e, wordNs));
+            var disableHangingVirtualTabStop = compat
+                .Elements(wordNs + "noTabHangInd")
+                .Any(e => IsOnOffEnabled(e, wordNs));
+
+            return !(disableIndentAsNumberingTabStop || disableHangingVirtualTabStop);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private static bool IsOnOffEnabled(XElement element, XNamespace wordNs)
+    {
+        var val = element.Attribute(wordNs + "val")?.Value ?? element.Attribute("val")?.Value;
+        if (string.IsNullOrWhiteSpace(val))
+            return true;
+
+        return !string.Equals(val, "0", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(val, "false", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(val, "off", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string? TryGetNumberingLabelFromItems(IEnumerable<(string type, JObject json)> items)
     {
         foreach (var (_, json) in items)
@@ -601,6 +670,7 @@ public class DocxExtractionService : IDocxExtractionService
         NumberingDefinitionsPart? numberingPart,
         Dictionary<int, Dictionary<int, int>> numberingCounters)
     {
+        _paragraphExtractor.ResetNumberingState();
         var content = new JArray();
         
         foreach (var elem in noteElement.Elements())

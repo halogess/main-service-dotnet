@@ -238,22 +238,32 @@ public class TextFormatExtractor
         if (normalizedHint == "cs" || normalizedHint == "bidi")
             return ScriptCategory.ComplexScript;
 
-        if (!string.IsNullOrWhiteSpace(effective.LangBidi))
-            return ScriptCategory.ComplexScript;
-        if (!string.IsNullOrWhiteSpace(effective.LangEastAsia))
-            return ScriptCategory.EastAsia;
-
         if (!string.IsNullOrEmpty(text))
         {
             if (ContainsComplexScript(text))
                 return ScriptCategory.ComplexScript;
             if (ContainsEastAsian(text))
                 return ScriptCategory.EastAsia;
+
+            // For non-complex, non-East-Asian visible text (e.g. Latin code),
+            // prioritize Latin font slots (ascii/hAnsi) over cs.
+            return ScriptCategory.Latin;
         }
 
-        if (themeFontLangResolver?.HasBidi == true)
+        // No visible text: only fall back to script-specific language metadata
+        // when there is no explicit Latin language.
+        if (!string.IsNullOrWhiteSpace(effective.LangBidi) &&
+            string.IsNullOrWhiteSpace(effective.LangLatin))
             return ScriptCategory.ComplexScript;
-        if (themeFontLangResolver?.HasEastAsia == true)
+        if (!string.IsNullOrWhiteSpace(effective.LangEastAsia) &&
+            string.IsNullOrWhiteSpace(effective.LangLatin))
+            return ScriptCategory.EastAsia;
+
+        if (themeFontLangResolver?.HasBidi == true &&
+            string.IsNullOrWhiteSpace(themeFontLangResolver.LatinLang))
+            return ScriptCategory.ComplexScript;
+        if (themeFontLangResolver?.HasEastAsia == true &&
+            string.IsNullOrWhiteSpace(themeFontLangResolver.LatinLang))
             return ScriptCategory.EastAsia;
 
         return ScriptCategory.Latin;

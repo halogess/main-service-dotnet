@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
@@ -148,55 +149,36 @@ public class DokumenController : ControllerBase
                 .Where(k => k.KesalahanRefTipe == Models.KesalahanRefTipe.dokumen && k.KesalahanRefId == (uint)id)
                 .ToListAsync();
 
-            // Group by halaman_ke (each Kesalahan = 1 elemen)
+            var orderedKesalahan = kesalahanList
+                .Select(k =>
+                {
+                    var (halamanKe, yTerkecil) = ParseSortKey(k.KesalahanLokasi);
+                    return new
+                    {
+                        Kesalahan = k,
+                        HalamanKe = halamanKe,
+                        YTerkecil = yTerkecil
+                    };
+                })
+                .OrderBy(x => NormalizeSortPage(x.HalamanKe))
+                .ThenBy(x => x.YTerkecil)
+                .ThenBy(x => x.Kesalahan.KesalahanId)
+                .ToList();
+
+            // Convert to response format, ordered by halaman_ke then y terkecil
             // Use -1 to represent null/unknown halaman
-            var pageGroups = new Dictionary<int, List<object>>();
-
-            foreach (var kesalahan in kesalahanList)
-            {
-                // Parse lokasi to extract halaman_ke
-                int halamanKe = -1; // -1 means unknown page
-                if (!string.IsNullOrEmpty(kesalahan.KesalahanLokasi))
-                {
-                    try
-                    {
-                        using var doc = System.Text.Json.JsonDocument.Parse(kesalahan.KesalahanLokasi);
-                        if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0)
-                        {
-                            var firstLoc = doc.RootElement[0];
-                            if (firstLoc.TryGetProperty("halaman_ke", out var halamanEl) && halamanEl.ValueKind == System.Text.Json.JsonValueKind.Number)
-                            {
-                                halamanKe = halamanEl.GetInt32();
-                            }
-                        }
-                    }
-                    catch
-                    {
-                        // Ignore JSON parsing errors
-                    }
-                }
-
-                if (!pageGroups.ContainsKey(halamanKe))
-                {
-                    pageGroups[halamanKe] = new List<object>();
-                }
-
-                // Each Kesalahan represents 1 elemen (details via /api/kesalahan/{id})
-                pageGroups[halamanKe].Add(new
-                {
-                    kesalahan_id = kesalahan.KesalahanId,
-                    kategori = kesalahan.KesalahanKategori,
-                    lokasi = kesalahan.KesalahanLokasi
-                });
-            }
-
-            // Convert to response format, ordered by halaman_ke (-1 means unknown, sort last)
-            kesalahanData = pageGroups
-                .OrderBy(g => g.Key == -1 ? int.MaxValue : g.Key)
+            kesalahanData = orderedKesalahan
+                .GroupBy(x => x.HalamanKe)
+                .OrderBy(g => NormalizeSortPage(g.Key))
                 .Select(g => new
                 {
                     halaman_ke = g.Key == -1 ? (int?)null : g.Key,
-                    elemen = g.Value  // list of Kesalahan, each represents 1 elemen
+                    elemen = g.Select(x => new
+                    {
+                        kesalahan_id = x.Kesalahan.KesalahanId,
+                        kategori = x.Kesalahan.KesalahanKategori,
+                        lokasi = x.Kesalahan.KesalahanLokasi
+                    }).ToList() // each Kesalahan represents 1 elemen (details via /api/kesalahan/{id})
                 })
                 .ToList();
         }
@@ -332,5 +314,65 @@ public class DokumenController : ControllerBase
 
         var digits = name[start..];
         return int.TryParse(digits, out var number) ? number : null;
+    }
+
+    private static int NormalizeSortPage(int halamanKe)
+        => halamanKe <= 0 ? int.MaxValue : halamanKe;
+
+    private static (int HalamanKe, double YTerkecil) ParseSortKey(string? lokasiJson)
+    {
+        if (string.IsNullOrWhiteSpace(lokasiJson))
+            return (-1, double.MaxValue);
+
+        var hasValue = false;
+        var bestPage = -1;
+        var bestY = double.MaxValue;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(lokasiJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return (-1, double.MaxValue);
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var halamanKe = -1;
+                if (item.TryGetProperty("halaman_ke", out var halamanEl) &&
+                    halamanEl.ValueKind == JsonValueKind.Number &&
+                    halamanEl.TryGetInt32(out var parsedPage) &&
+                    parsedPage > 0)
+                {
+                    halamanKe = parsedPage;
+                }
+
+                var yTerkecil = double.MaxValue;
+                if (item.TryGetProperty("bbox", out var bboxEl) &&
+                    bboxEl.ValueKind == JsonValueKind.Object &&
+                    bboxEl.TryGetProperty("y0", out var y0El) &&
+                    y0El.ValueKind == JsonValueKind.Number &&
+                    y0El.TryGetDouble(out var parsedY))
+                {
+                    yTerkecil = parsedY;
+                }
+
+                if (!hasValue ||
+                    NormalizeSortPage(halamanKe) < NormalizeSortPage(bestPage) ||
+                    (NormalizeSortPage(halamanKe) == NormalizeSortPage(bestPage) && yTerkecil < bestY))
+                {
+                    hasValue = true;
+                    bestPage = halamanKe;
+                    bestY = yTerkecil;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore parsing errors
+        }
+
+        return hasValue ? (bestPage, bestY) : (-1, double.MaxValue);
     }
 }

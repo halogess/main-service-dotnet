@@ -101,6 +101,7 @@ public partial class ValidationService
         var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => (string?)e.DelemenJsonTree);
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
+        var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
 
         var listItemElements = new List<(ulong Id, string? Type, string? Label, ElementContentInfo Content)>();
         foreach (var elem in bodyElements)
@@ -150,6 +151,9 @@ public partial class ValidationService
                 .ToDictionaryAsync(t => t.DftxId, cancellationToken)
             : new Dictionary<uint, DokumenFormatText>();
 
+        var listItemErrorStart = result.Errors.Count;
+        var listLevelByElementId = new Dictionary<ulong, string>(listItemElements.Count);
+
         foreach (var (elementId, elementType, elementLabel, content) in listItemElements)
         {
             var plainText = content.PlainText?.Trim() ?? string.Empty;
@@ -170,11 +174,14 @@ public partial class ValidationService
             var pageNumbers = await LoadPageNumbersAsync(new[] { elementId }, cancellationToken);
             var pageBboxMap = await LoadPageBboxMapAsync(new[] { elementId }, cancellationToken);
             var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
+            pageLayoutsById.TryGetValue(elementId, out var pageLayout);
 
             var level = TryParseListItemLevel(elementType, paragraphFormat, elementLabel);
+            var mergeSet = level.HasValue ? $"list_level_{level.Value + 1}" : "list_level_unknown";
+            listLevelByElementId[elementId] = mergeSet;
 
             ValidateListItemFont(result, rule, elementTextFormats!, content.TextRuns, evidence, locations);
-            ValidateListItemParagraph(result, rule, paragraphFormat, level, evidence, locations);
+            ValidateListItemParagraph(result, rule, paragraphFormat, level, evidence, locations, plainText, pageLayout);
 
             if (neighborContexts.TryGetValue(elementId, out var context))
                 ApplyContextToErrors(result.Errors, errorStart, context);
@@ -182,7 +189,144 @@ public partial class ValidationService
             ApplyElementIdToErrors(result.Errors, errorStart, elementId);
         }
 
+        MergeIdenticalListItemErrorsByLevel(result.Errors, listItemErrorStart, listLevelByElementId);
+
         return result;
+    }
+
+    private readonly record struct ListItemErrorMergeKey(
+        string SetKey,
+        int PageNumber,
+        string Category,
+        string Field,
+        string Message,
+        string Expected,
+        string Actual,
+        string DiffType,
+        string Cause,
+        bool? HasNumbering,
+        string StyleName,
+        string StyleId,
+        string ToolRequirement,
+        string FeatureName,
+        string ScopeHint,
+        string PageRange,
+        string AllowedActions,
+        string DisallowedActions,
+        bool IsRequired);
+
+    private static void MergeIdenticalListItemErrorsByLevel(
+        List<ValidationError> errors,
+        int startIndex,
+        IReadOnlyDictionary<ulong, string> listLevelByElementId)
+    {
+        if (errors.Count == 0 || startIndex >= errors.Count || listLevelByElementId.Count == 0)
+            return;
+
+        var merged = new List<ValidationError>();
+        var grouped = new Dictionary<ListItemErrorMergeKey, int>();
+
+        for (var i = startIndex; i < errors.Count; i++)
+        {
+            var error = errors[i];
+            var mergeKey = TryBuildListItemErrorMergeKey(error, listLevelByElementId);
+            if (!mergeKey.HasValue)
+            {
+                merged.Add(error);
+                continue;
+            }
+
+            if (!grouped.TryGetValue(mergeKey.Value, out var mergedIndex))
+            {
+                grouped[mergeKey.Value] = merged.Count;
+                merged.Add(error);
+                continue;
+            }
+
+            var target = merged[mergedIndex];
+            target.Locations = AppendErrorLocations(target.Locations, error.Locations);
+
+            if (!target.DokumenElemenId.HasValue && error.DokumenElemenId.HasValue)
+                target.DokumenElemenId = error.DokumenElemenId;
+        }
+
+        errors.RemoveRange(startIndex, errors.Count - startIndex);
+        errors.AddRange(merged);
+    }
+
+    private static ListItemErrorMergeKey? TryBuildListItemErrorMergeKey(
+        ValidationError error,
+        IReadOnlyDictionary<ulong, string> listLevelByElementId)
+    {
+        if (!string.Equals(error.Field, "item_daftar", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!error.DokumenElemenId.HasValue ||
+            !listLevelByElementId.TryGetValue(error.DokumenElemenId.Value, out var setKey))
+            return null;
+
+        var pageNumber = TryGetSingleLocationPage(error.Locations);
+        if (!pageNumber.HasValue)
+            return null;
+
+        return new ListItemErrorMergeKey(
+            setKey,
+            pageNumber.Value,
+            error.Category ?? string.Empty,
+            error.Field ?? string.Empty,
+            error.Message ?? string.Empty,
+            error.Expected ?? string.Empty,
+            error.Actual ?? string.Empty,
+            error.DiffType ?? string.Empty,
+            error.Cause ?? string.Empty,
+            error.HasNumbering,
+            error.StyleName ?? string.Empty,
+            error.StyleId ?? string.Empty,
+            error.ToolRequirement ?? string.Empty,
+            error.FeatureName ?? string.Empty,
+            error.ScopeHint ?? string.Empty,
+            error.PageRange ?? string.Empty,
+            BuildActionToken(error.AllowedActions),
+            BuildActionToken(error.DisallowedActions),
+            error.IsRequired);
+    }
+
+    private static List<ErrorLocation> AppendErrorLocations(
+        IReadOnlyList<ErrorLocation> first,
+        IReadOnlyList<ErrorLocation> second)
+    {
+        var combined = new List<ErrorLocation>();
+        AddLocations(combined, first);
+        AddLocations(combined, second);
+        return combined;
+    }
+
+    private static void AddLocations(
+        List<ErrorLocation> target,
+        IReadOnlyList<ErrorLocation> source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var loc in source)
+        {
+            if (loc == null)
+                continue;
+
+            target.Add(new ErrorLocation
+            {
+                HalamanKe = loc.HalamanKe,
+                Bbox = loc.Bbox == null
+                    ? null
+                    : new ErrorBbox
+                    {
+                        X0 = loc.Bbox.X0,
+                        Y0 = loc.Bbox.Y0,
+                        X1 = loc.Bbox.X1,
+                        Y1 = loc.Bbox.Y1
+                    }
+            });
+        }
     }
 
     private void ValidateListItemFont(
@@ -319,7 +463,9 @@ public partial class ValidationService
         DokumenFormatParagraf? format,
         int? level,
         string evidence,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        string paragraphText,
+        PageLayoutSnapshot? pageLayout)
     {
         if (format == null)
             return;
@@ -329,7 +475,8 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (AreAlignmentsEquivalent(actual, expectedAlignment))
+            var alignmentContext = CreateAlignmentContext(paragraphText, locations, pageLayout);
+            if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
                 result.PassedChecks++;
             }
@@ -384,7 +531,7 @@ public partial class ValidationService
                 ? format.DfpIndLeftTwips.Value
                 : format.DfpIndStartTwips ?? 0;
             var leftCm = leftTwips / 1440.0m * 2.54m;
-            var alignedLeftCm = expectedHanging.HasValue ? leftCm - hangingCm : leftCm;
+            var normalizedLeftCm = Math.Max(0m, leftCm - hangingCm);
 
             var expectedLeftCm = expectedLeftIndent.Value;
             if (expectedHanging.HasValue && levelValue > 0)
@@ -392,7 +539,7 @@ public partial class ValidationService
                 expectedLeftCm += levelValue * expectedHanging.Value;
             }
 
-            if (Math.Abs(alignedLeftCm - expectedLeftCm) <= 0.05m)
+            if (Math.Abs(normalizedLeftCm - expectedLeftCm) <= 0.05m)
             {
                 result.PassedChecks++;
             }
@@ -405,7 +552,7 @@ public partial class ValidationService
                     Field = "item_daftar",
                     Message = "Left indent item daftar tidak sesuai" + levelSuffix,
                     Expected = expectedLeftCm.ToString(CultureInfo.InvariantCulture) + " cm",
-                    Actual = alignedLeftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                    Actual = normalizedLeftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                     Evidence = evidence,
                     Locations = locations
                 });
@@ -428,6 +575,26 @@ public partial class ValidationService
                 Message = "First line indent item daftar harus 0",
                 Expected = "0 cm",
                 Actual = firstLineCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                Evidence = evidence,
+                Locations = locations
+            });
+        }
+
+        result.TotalChecks++;
+        var rightCm = GetRightIndentCm(format);
+        if (Math.Abs(rightCm) <= 0.05m)
+        {
+            result.PassedChecks++;
+        }
+        else
+        {
+            result.Errors.Add(new ValidationError
+            {
+                Category = "Isi Buku",
+                Field = "item_daftar",
+                Message = "Right indent item daftar harus 0",
+                Expected = "0 cm",
+                Actual = rightCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                 Evidence = evidence,
                 Locations = locations
             });

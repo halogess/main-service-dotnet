@@ -573,6 +573,9 @@ public class CodeRule
 
     [JsonPropertyName("cegah_gambar_kode")]
     public RuleValue<bool>? CegahGambarKode { get; set; }
+
+    [JsonPropertyName("cegah_tabel_kode")]
+    public RuleValue<bool>? CegahTabelKode { get; set; }
 }
 
 public class CodeParagraphRule
@@ -609,6 +612,115 @@ public class CodeTitleRule
 
     [JsonPropertyName("position")]
     public RuleValue<string>? Position { get; set; }
+}
+
+// Formula Rule (rumus)
+public class FormulaRule
+{
+    [JsonPropertyName("font")]
+    public ParagraphFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public FormulaParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("tabs")]
+    public FormulaTabsRule? Tabs { get; set; }
+
+    [JsonPropertyName("numbering")]
+    public FormulaNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("position")]
+    public FormulaPositionRule? Position { get; set; }
+
+    [JsonPropertyName("struktur_halaman")]
+    public FormulaPageStructureRule? StrukturHalaman { get; set; }
+}
+
+public class FormulaParagraphRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("indentation")]
+    public FormulaIndentationRule? Indentation { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class FormulaIndentationRule
+{
+    [JsonPropertyName("first_line_indent")]
+    public DecimalRuleValue? FirstLineIndent { get; set; }
+
+    [JsonPropertyName("first_line_indent_cm")]
+    public DecimalRuleValue? FirstLineIndentCm { get; set; }
+
+    [JsonPropertyName("left_indent")]
+    public DecimalRuleValue? LeftIndent { get; set; }
+
+    [JsonPropertyName("left_indent_cm")]
+    public DecimalRuleValue? LeftIndentCm { get; set; }
+
+    [JsonPropertyName("left_cm")]
+    public DecimalRuleValue? LeftCm { get; set; }
+}
+
+public class FormulaTabsRule
+{
+    [JsonPropertyName("left_tab")]
+    public FormulaTabRule? LeftTab { get; set; }
+
+    [JsonPropertyName("right_tab")]
+    public FormulaTabRule? RightTab { get; set; }
+}
+
+public class FormulaTabRule
+{
+    [JsonPropertyName("distance_from_equation_cm")]
+    public DecimalRuleValue? DistanceFromEquationCm { get; set; }
+
+    [JsonPropertyName("position_cm")]
+    public DecimalRuleValue? PositionCm { get; set; }
+
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("leader_style")]
+    public RuleValue<string>? LeaderStyle { get; set; }
+
+    [JsonPropertyName("depends_on_equation_length")]
+    public RuleValue<bool>? DependsOnEquationLength { get; set; }
+}
+
+public class FormulaNumberingRule
+{
+    [JsonPropertyName("number_format")]
+    public RuleValue<string>? NumberFormat { get; set; }
+}
+
+public class FormulaPositionRule
+{
+    [JsonPropertyName("cegah_memenuhi_halaman")]
+    public RuleValue<bool>? CegahMemenuhiHalaman { get; set; }
+
+    [JsonPropertyName("equation_alignment")]
+    public RuleValue<string>? EquationAlignment { get; set; }
+
+    [JsonPropertyName("overall_indent_cm")]
+    public DecimalRuleValue? OverallIndentCm { get; set; }
+
+    [JsonPropertyName("paragraph_alignment")]
+    public RuleValue<string>? ParagraphAlignment { get; set; }
+}
+
+public class FormulaPageStructureRule
+{
+    [JsonPropertyName("cegah_memenuhi_halaman")]
+    public RuleValue<bool>? CegahMemenuhiHalaman { get; set; }
+
+    [JsonPropertyName("minimal_satu_paragraf_di_halaman")]
+    public RuleValue<bool>? MinimalSatuParagrafDiHalaman { get; set; }
 }
 
 #endregion
@@ -755,6 +867,12 @@ public partial class ValidationService : IValidationService
         result.Errors.AddRange(tableResult.Errors);
         result.TotalChecks += tableResult.TotalChecks;
         result.PassedChecks += tableResult.PassedChecks;
+
+        // Validate formulas
+        var formulaResult = await ValidateFormulaAsync(dokumenId, cancellationToken);
+        result.Errors.AddRange(formulaResult.Errors);
+        result.TotalChecks += formulaResult.TotalChecks;
+        result.PassedChecks += formulaResult.PassedChecks;
 
         // Validate code blocks
         var codeResult = await ValidateCodeAsync(dokumenId, cancellationToken);
@@ -1334,19 +1452,373 @@ public partial class ValidationService : IValidationService
         var normalized = alignment.Trim().ToLowerInvariant();
         if (normalized == "both")
             return "justify";
+        if (normalized == "start")
+            return "left";
+        if (normalized == "end")
+            return "right";
 
         return normalized;
     }
 
-    private static bool AreAlignmentsEquivalent(string? actual, string? expected)
+    private sealed class AlignmentValidationContext
+    {
+        public string? Text { get; init; }
+        public IReadOnlyList<ErrorLocation>? Locations { get; init; }
+        public PageLayoutSnapshot? PageLayout { get; init; }
+        public decimal? FontSizePt { get; init; }
+    }
+
+    private static AlignmentValidationContext? CreateAlignmentContext(
+        string? text,
+        IReadOnlyList<ErrorLocation>? locations,
+        PageLayoutSnapshot? pageLayout,
+        decimal? fontSizePt = null)
+    {
+        if (string.IsNullOrWhiteSpace(text) &&
+            (locations == null || locations.Count == 0) &&
+            pageLayout == null &&
+            !fontSizePt.HasValue)
+        {
+            return null;
+        }
+
+        return new AlignmentValidationContext
+        {
+            Text = text,
+            Locations = locations,
+            PageLayout = pageLayout,
+            FontSizePt = fontSizePt
+        };
+    }
+
+    private static bool AreAlignmentsEquivalent(
+        string? actual,
+        string? expected,
+        AlignmentValidationContext? context = null)
     {
         if (string.IsNullOrWhiteSpace(expected))
             return false;
 
-        return string.Equals(
-            NormalizeAlignmentValue(actual),
-            NormalizeAlignmentValue(expected),
-            StringComparison.OrdinalIgnoreCase);
+        var normalizedActual = NormalizeAlignmentValue(actual);
+        var normalizedExpected = NormalizeAlignmentValue(expected);
+        if (string.Equals(normalizedActual, normalizedExpected, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (!IsLeftJustifyPair(normalizedActual, normalizedExpected))
+            return false;
+
+        if (context == null)
+            return false;
+
+        if (normalizedExpected == "left" && normalizedActual == "justify")
+            return IsJustifyVisuallyEquivalentToLeft(context);
+
+        if (normalizedExpected == "justify" && normalizedActual == "left")
+            return IsLeftVisuallyEquivalentToJustify(context);
+
+        return false;
+    }
+
+    private static bool IsLeftJustifyPair(string normalizedActual, string normalizedExpected)
+    {
+        return (normalizedActual == "left" && normalizedExpected == "justify") ||
+               (normalizedActual == "justify" && normalizedExpected == "left");
+    }
+
+    private static bool IsJustifyVisuallyEquivalentToLeft(AlignmentValidationContext context)
+    {
+        if (context.PageLayout == null)
+            return false;
+
+        if (!TryGetTextAreaHorizontalBoundsRatio(context.PageLayout, out var _textAreaLeft, out var textAreaRight))
+            return false;
+
+        if (!TryGetBboxHorizontalBoundsRatio(context.Locations, context.PageLayout, out var _bboxLeft, out var bboxRight))
+            return false;
+
+        // Consider "touching right margin" if the box right edge is within ~1% page width from text boundary.
+        return bboxRight < textAreaRight - 0.01m;
+    }
+
+    private static bool IsLeftVisuallyEquivalentToJustify(AlignmentValidationContext context)
+    {
+        if (context.PageLayout == null)
+            return false;
+
+        var text = NormalizeWhitespace(context.Text ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        if (!TryGetTextAreaWidthPoints(context.PageLayout, out var availableWidthPt))
+            return false;
+
+        if (availableWidthPt <= 0m)
+            return false;
+
+        var estimatedLines = EstimateWrappedLineCount(text, availableWidthPt, context.FontSizePt);
+        return estimatedLines <= 1;
+    }
+
+    private static bool TryGetTextAreaHorizontalBoundsRatio(
+        PageLayoutSnapshot layout,
+        out decimal leftRatio,
+        out decimal rightRatio)
+    {
+        leftRatio = 0m;
+        rightRatio = 0m;
+
+        if (!layout.WidthCm.HasValue || layout.WidthCm.Value <= 0m)
+            return false;
+
+        var pageWidthCm = layout.WidthCm.Value;
+        var marginLeftCm = Math.Max(0m, layout.MarginLeftCm ?? 0m);
+        var marginRightCm = Math.Max(0m, layout.MarginRightCm ?? 0m);
+
+        leftRatio = ClampRatio(marginLeftCm / pageWidthCm);
+        rightRatio = ClampRatio(1m - (marginRightCm / pageWidthCm));
+        return rightRatio > leftRatio;
+    }
+
+    private static bool TryGetBboxHorizontalBoundsRatio(
+        IReadOnlyList<ErrorLocation>? locations,
+        PageLayoutSnapshot layout,
+        out decimal leftRatio,
+        out decimal rightRatio)
+    {
+        leftRatio = 0m;
+        rightRatio = 0m;
+
+        if (locations == null || locations.Count == 0)
+            return false;
+
+        decimal? minX0 = null;
+        decimal? maxX1 = null;
+        foreach (var location in locations)
+        {
+            var bbox = location.Bbox;
+            if (bbox == null)
+                continue;
+
+            minX0 = !minX0.HasValue ? bbox.X0 : Math.Min(minX0.Value, bbox.X0);
+            maxX1 = !maxX1.HasValue ? bbox.X1 : Math.Max(maxX1.Value, bbox.X1);
+        }
+
+        if (!minX0.HasValue || !maxX1.HasValue)
+            return false;
+
+        if (!TryNormalizeHorizontalCoordinate(minX0.Value, layout, out leftRatio))
+            return false;
+
+        if (!TryNormalizeHorizontalCoordinate(maxX1.Value, layout, out rightRatio))
+            return false;
+
+        return rightRatio >= leftRatio;
+    }
+
+    private static bool TryNormalizeHorizontalCoordinate(
+        decimal coordinate,
+        PageLayoutSnapshot layout,
+        out decimal ratio)
+    {
+        ratio = 0m;
+        if (coordinate < 0m || !layout.WidthCm.HasValue || layout.WidthCm.Value <= 0m)
+            return false;
+
+        if (coordinate <= 1.5m)
+        {
+            ratio = ClampRatio(coordinate);
+            return true;
+        }
+
+        var pageWidthCm = layout.WidthCm.Value;
+        var pageWidthPt = CmToPoints(pageWidthCm);
+        var pageWidthTwips = pageWidthCm * TwipsPerCm;
+        var pageWidthEmu = pageWidthCm * EmusPerCm;
+
+        decimal rawRatio;
+        if (coordinate <= pageWidthCm * 1.2m)
+        {
+            rawRatio = coordinate / pageWidthCm;
+        }
+        else if (coordinate <= pageWidthPt * 1.2m)
+        {
+            rawRatio = coordinate / pageWidthPt;
+        }
+        else if (coordinate <= pageWidthTwips * 1.2m)
+        {
+            rawRatio = coordinate / pageWidthTwips;
+        }
+        else if (coordinate <= pageWidthEmu * 1.2m)
+        {
+            rawRatio = coordinate / pageWidthEmu;
+        }
+        else
+        {
+            var candidates = new[]
+            {
+                coordinate / pageWidthCm,
+                coordinate / pageWidthPt,
+                coordinate / pageWidthTwips,
+                coordinate / pageWidthEmu
+            };
+
+            var validCandidates = candidates
+                .Where(c => c >= 0m && c <= 1.5m)
+                .ToList();
+
+            if (validCandidates.Count == 0)
+                return false;
+
+            rawRatio = validCandidates.OrderBy(c => Math.Abs(1m - c)).First();
+        }
+
+        ratio = ClampRatio(rawRatio);
+        return true;
+    }
+
+    private static bool TryGetTextAreaWidthPoints(PageLayoutSnapshot layout, out decimal widthPt)
+    {
+        widthPt = 0m;
+        if (!layout.WidthCm.HasValue || layout.WidthCm.Value <= 0m)
+            return false;
+
+        var leftCm = Math.Max(0m, layout.MarginLeftCm ?? 0m);
+        var rightCm = Math.Max(0m, layout.MarginRightCm ?? 0m);
+        var textAreaCm = layout.WidthCm.Value - leftCm - rightCm;
+        if (textAreaCm <= 0m)
+            return false;
+
+        widthPt = CmToPoints(textAreaCm);
+        return widthPt > 0m;
+    }
+
+    private static int EstimateWrappedLineCount(string text, decimal availableWidthPt, decimal? fontSizePt)
+    {
+        if (availableWidthPt <= 0m)
+            return int.MaxValue;
+
+        var normalizedText = text?.Replace('\r', '\n') ?? string.Empty;
+        var paragraphs = normalizedText.Split('\n', StringSplitOptions.None);
+        if (paragraphs.Length == 0)
+            return 0;
+
+        var effectiveFontSize = fontSizePt.HasValue && fontSizePt.Value > 0m
+            ? fontSizePt.Value
+            : 12m;
+
+        var totalLines = 0;
+        foreach (var paragraph in paragraphs)
+        {
+            var normalizedParagraph = NormalizeWhitespace(paragraph);
+            if (string.IsNullOrWhiteSpace(normalizedParagraph))
+            {
+                totalLines += 1;
+                continue;
+            }
+
+            totalLines += EstimateWrappedLineCountSingleParagraph(
+                normalizedParagraph,
+                availableWidthPt,
+                effectiveFontSize);
+        }
+
+        return Math.Max(totalLines, 1);
+    }
+
+    private static int EstimateWrappedLineCountSingleParagraph(
+        string paragraph,
+        decimal availableWidthPt,
+        decimal fontSizePt)
+    {
+        var words = paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length == 0)
+            return 1;
+
+        var lines = 1;
+        var currentLineWidth = 0m;
+        var spaceWidth = fontSizePt * 0.33m;
+
+        foreach (var word in words)
+        {
+            var wordWidth = EstimateWordWidthPoints(word, fontSizePt);
+            if (wordWidth <= 0m)
+                continue;
+
+            if (currentLineWidth <= 0m)
+            {
+                if (wordWidth <= availableWidthPt)
+                {
+                    currentLineWidth = wordWidth;
+                }
+                else
+                {
+                    var wrappedLines = (int)Math.Ceiling(wordWidth / availableWidthPt);
+                    lines += Math.Max(0, wrappedLines - 1);
+                    var remainder = wordWidth % availableWidthPt;
+                    currentLineWidth = remainder > 0m ? remainder : availableWidthPt;
+                }
+                continue;
+            }
+
+            var candidateWidth = currentLineWidth + spaceWidth + wordWidth;
+            if (candidateWidth <= availableWidthPt)
+            {
+                currentLineWidth = candidateWidth;
+                continue;
+            }
+
+            lines++;
+            if (wordWidth <= availableWidthPt)
+            {
+                currentLineWidth = wordWidth;
+            }
+            else
+            {
+                var wrappedLines = (int)Math.Ceiling(wordWidth / availableWidthPt);
+                lines += Math.Max(0, wrappedLines - 1);
+                var remainder = wordWidth % availableWidthPt;
+                currentLineWidth = remainder > 0m ? remainder : availableWidthPt;
+            }
+        }
+
+        return Math.Max(lines, 1);
+    }
+
+    private static decimal EstimateWordWidthPoints(string word, decimal fontSizePt)
+    {
+        var width = 0m;
+        foreach (var ch in word)
+        {
+            decimal factor;
+            if (char.IsUpper(ch))
+                factor = 0.62m;
+            else if (char.IsLower(ch))
+                factor = 0.53m;
+            else if (char.IsDigit(ch))
+                factor = 0.55m;
+            else if (char.IsPunctuation(ch))
+                factor = 0.28m;
+            else
+                factor = 0.5m;
+
+            width += factor * fontSizePt;
+        }
+
+        return width;
+    }
+
+    private static decimal ClampRatio(decimal ratio)
+    {
+        if (ratio < 0m)
+            return 0m;
+        if (ratio > 1.5m)
+            return 1.5m;
+        return ratio;
+    }
+
+    private static decimal CmToPoints(decimal cm)
+    {
+        return cm / 2.54m * 72m;
     }
 
 }

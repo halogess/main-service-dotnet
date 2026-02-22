@@ -15,6 +15,15 @@ public partial class ValidationService
         public ElementContentInfo Content { get; init; } = new();
     }
 
+    private sealed class CodeStructuralViolationInfo
+    {
+        public ulong ElementId { get; init; }
+        public string? ElementType { get; init; }
+        public ElementContentInfo Content { get; init; } = new();
+        public bool IsTableType { get; init; }
+        public bool IsImageType { get; init; }
+    }
+
     private sealed class CodeBlockInfo
     {
         public int StartIndex { get; init; }
@@ -119,62 +128,138 @@ public partial class ValidationService
         var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => (string?)e.DelemenJsonTree);
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
+        var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
 
-        var captionPrefixes = BuildCaptionPrefixes(titleRule?.Numbering);
         var codeElements = new List<CodeElementInfo>();
+        var structuralViolations = new List<CodeStructuralViolationInfo>();
         var captionCandidates = new List<CaptionInfo>();
 
         for (var index = 0; index < bodyElements.Count; index++)
         {
             var elem = bodyElements[index];
-            if (!IsParagraphElement(elem.DelemenType))
-                continue;
-
             var normalizedLabel = labelMap.TryGetValue(elem.DelemenId, out var rawLabel)
                 ? NormalizeLabel(rawLabel)
                 : string.Empty;
+            var parsedContent = false;
+            ElementContentInfo content = new();
 
-            var content = ParseElementContent(elem.DelemenJsonTree);
-            var normalizedText = NormalizeWhitespace(content.PlainText);
+            ElementContentInfo GetContent()
+            {
+                if (!parsedContent)
+                {
+                    content = ParseElementContent(elem.DelemenJsonTree);
+                    parsedContent = true;
+                }
+
+                return content;
+            }
 
             if (IsCodeLabel(normalizedLabel))
             {
-                if (string.IsNullOrWhiteSpace(normalizedText) && !content.HasNonTextContent)
+                var isTableType = IsCodeTableElementType(elem.DelemenType);
+                var isImageType = IsCodeImageElementType(elem.DelemenType);
+                if (isTableType || isImageType)
+                {
+                    structuralViolations.Add(new CodeStructuralViolationInfo
+                    {
+                        ElementId = elem.DelemenId,
+                        ElementType = elem.DelemenType,
+                        Content = GetContent(),
+                        IsTableType = isTableType,
+                        IsImageType = isImageType
+                    });
+                    continue;
+                }
+
+                var codeContent = GetContent();
+                var normalizedText = NormalizeWhitespace(codeContent.PlainText);
+                if (string.IsNullOrWhiteSpace(normalizedText) && !codeContent.HasNonTextContent)
                     continue;
 
                 codeElements.Add(new CodeElementInfo
                 {
                     ElementId = elem.DelemenId,
                     OrderIndex = index,
-                    Content = content
+                    Content = codeContent
                 });
             }
 
             if (titleRule != null)
             {
-                var isCaptionLabel = IsCodeCaptionLabel(normalizedLabel);
-                var isCaptionPrefix = !string.IsNullOrWhiteSpace(normalizedText) &&
-                    captionPrefixes.Count > 0 &&
-                    StartsWithAnyPrefix(normalizedText, captionPrefixes);
+                if (!IsCodeCaptionLabel(normalizedLabel))
+                    continue;
 
-                if (isCaptionLabel || isCaptionPrefix)
+                var captionContent = GetContent();
+                var normalizedText = NormalizeWhitespace(captionContent.PlainText);
+                if (string.IsNullOrWhiteSpace(normalizedText))
+                    continue;
+
+                captionCandidates.Add(new CaptionInfo
                 {
-                    if (string.IsNullOrWhiteSpace(normalizedText))
-                        continue;
-
-                    captionCandidates.Add(new CaptionInfo
-                    {
-                        ElementId = elem.DelemenId,
-                        OrderIndex = index,
-                        Content = content,
-                        NormalizedText = normalizedText
-                    });
-                }
+                    ElementId = elem.DelemenId,
+                    OrderIndex = index,
+                    Content = captionContent,
+                    NormalizedText = normalizedText
+                });
             }
+        }
+
+        foreach (var violation in structuralViolations)
+        {
+            var errorStart = result.Errors.Count;
+            var locations = await BuildElementLocationsAsync(violation.ElementId, cancellationToken);
+            var evidence = BuildCodeEvidence(violation.Content);
+            var actualType = GetCodeElementTypeDisplay(violation.ElementType);
+
+            if (violation.IsTableType && codeRule?.CegahTabelKode?.Value == true)
+            {
+                result.TotalChecks++;
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "kode",
+                    Message = "Kode tidak boleh berupa tabel",
+                    Expected = "Elemen kode bertipe paragraf/teks, bukan tabel",
+                    Actual = $"Tipe elemen: {actualType}",
+                    Evidence = evidence,
+                    Locations = locations
+                });
+            }
+
+            if (violation.IsImageType && codeRule?.CegahGambarKode?.Value == true)
+            {
+                result.TotalChecks++;
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "kode",
+                    Message = "Kode tidak boleh berupa gambar",
+                    Expected = "Elemen kode bertipe paragraf/teks, bukan gambar",
+                    Actual = $"Tipe elemen: {actualType}",
+                    Evidence = evidence,
+                    Locations = locations
+                });
+            }
+
+            if (neighborContexts.TryGetValue(violation.ElementId, out var context))
+                ApplyContextToErrors(result.Errors, errorStart, context);
+
+            ApplyElementIdToErrors(result.Errors, errorStart, violation.ElementId);
         }
 
         if (codeElements.Count == 0)
             return result;
+
+        var listLevelByElementId = await LoadCodeListLevelsFromVisualAsync(
+            codeElements.Select(e => e.ElementId),
+            cancellationToken);
+
+        var codeBlocks = BuildCodeBlocks(codeElements);
+        var codeBlockIndexByElementId = BuildCodeBlockIndexMap(codeBlocks);
+        var codeMergeSetKeyByElementId = BuildCodeMergeSetKeyMap(
+            codeElements,
+            codeBlockIndexByElementId,
+            listLevelByElementId);
 
         var paragraphFormatIds = codeElements
             .Where(e => e.Content.ParagraphFormatId.HasValue)
@@ -203,6 +288,8 @@ public partial class ValidationService
                 .ToDictionaryAsync(t => t.DftxId, cancellationToken)
             : new Dictionary<uint, DokumenFormatText>();
 
+        var codeErrorStart = result.Errors.Count;
+
         foreach (var codeElement in codeElements)
         {
             var errorStart = result.Errors.Count;
@@ -220,15 +307,22 @@ public partial class ValidationService
                 .ToList();
 
             var locations = await BuildElementLocationsAsync(codeElement.ElementId, cancellationToken);
+            pageLayoutsById.TryGetValue(codeElement.ElementId, out var codePageLayout);
 
             if (codeRule?.Font != null)
                 ValidateCodeFont(result, codeRule.Font, elementTextFormats!, content.TextRuns, evidence, locations);
 
             if (codeRule?.Paragraph != null)
-                ValidateCodeParagraphFormat(result, codeRule.Paragraph, paragraphFormat, evidence, locations);
+                ValidateCodeParagraphFormat(result, codeRule.Paragraph, paragraphFormat, evidence, locations, plainText, codePageLayout);
 
             if (codeRule?.Numbering != null)
                 ValidateCodeNumbering(result, codeRule.Numbering, content, paragraphFormat, evidence, locations);
+
+            if (codeRule?.CegahTabelKode?.Value == true)
+            {
+                result.TotalChecks++;
+                result.PassedChecks++;
+            }
 
             if (codeRule?.CegahGambarKode?.Value == true)
             {
@@ -258,10 +352,14 @@ public partial class ValidationService
             ApplyElementIdToErrors(result.Errors, errorStart, codeElement.ElementId);
         }
 
+        MergeIdenticalCodeLineErrorsWithinBlockPage(
+            result.Errors,
+            codeErrorStart,
+            codeMergeSetKeyByElementId);
+
         if (titleRule == null)
             return result;
 
-        var codeBlocks = BuildCodeBlocks(codeElements);
         var usedCaptionIds = new HashSet<ulong>();
 
         for (var i = 0; i < codeBlocks.Count; i++)
@@ -379,7 +477,8 @@ public partial class ValidationService
                 if (selectedCaption.Content.ParagraphFormatId.HasValue &&
                     paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId.Value, out var captionFormat))
                 {
-                    ValidateCaptionParagraphFormat(result, titleRule.Paragraph, captionFormat, "judul_kode", "judul kode", selectedCaption.NormalizedText, captionLocations);
+                    pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
+                    ValidateCaptionParagraphFormat(result, titleRule.Paragraph, captionFormat, "judul_kode", "judul kode", selectedCaption.NormalizedText, captionLocations, captionPageLayout);
                 }
 
                 ValidateCaptionNumbering(result, titleRule.Numbering, selectedCaption, "judul_kode", "judul kode", captionLocations);
@@ -399,9 +498,309 @@ public partial class ValidationService
         return normalizedLabel == "kode" || normalizedLabel == "code";
     }
 
+    private static bool IsCodeTableElementType(string? elementType)
+    {
+        if (string.IsNullOrWhiteSpace(elementType))
+            return false;
+
+        return elementType.Equals("table", StringComparison.OrdinalIgnoreCase) ||
+               elementType.Equals("tabel", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCodeImageElementType(string? elementType)
+    {
+        if (string.IsNullOrWhiteSpace(elementType))
+            return false;
+
+        return elementType.Equals("gambar", StringComparison.OrdinalIgnoreCase) ||
+               IsImageType(elementType);
+    }
+
+    private static string GetCodeElementTypeDisplay(string? elementType)
+    {
+        if (string.IsNullOrWhiteSpace(elementType))
+            return "unknown";
+
+        return elementType.Trim();
+    }
+
     private static bool IsCodeCaptionLabel(string normalizedLabel)
     {
-        return normalizedLabel == "judul_kode" || normalizedLabel == "caption_kode";
+        return normalizedLabel == "judul_kode";
+    }
+
+    private readonly record struct CodeLineErrorMergeKey(
+        string SetKey,
+        int PageNumber,
+        string Category,
+        string Field,
+        string Message,
+        string Expected,
+        string Actual,
+        string DiffType,
+        string Cause,
+        bool? HasNumbering,
+        string StyleName,
+        string StyleId,
+        string ToolRequirement,
+        string FeatureName,
+        string ScopeHint,
+        string PageRange,
+        string AllowedActions,
+        string DisallowedActions,
+        bool IsRequired);
+
+    private async Task<Dictionary<ulong, int>> LoadCodeListLevelsFromVisualAsync(
+        IEnumerable<ulong> elementIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = elementIds.Distinct().ToList();
+        var levels = new Dictionary<ulong, int>();
+        if (ids.Count == 0)
+            return levels;
+
+        var (idColumn, labelColumn) = await ResolveVisualColumnsAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(idColumn) || string.IsNullOrWhiteSpace(labelColumn))
+            return levels;
+
+        var connection = _db.Database.GetDbConnection();
+        var shouldClose = connection.State != System.Data.ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+
+        try
+        {
+            foreach (var chunk in ids.Chunk(500))
+            {
+                var idList = string.Join(",", chunk);
+                var sql = $"SELECT `{idColumn}` AS delemen_id, `{labelColumn}` AS label " +
+                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList})";
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = sql;
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    if (reader["delemen_id"] == DBNull.Value || reader["label"] == DBNull.Value)
+                        continue;
+
+                    var elementId = Convert.ToUInt64(reader["delemen_id"]);
+                    var label = reader["label"]?.ToString();
+                    var level = TryParseListLabelLevel(label);
+                    if (!level.HasValue)
+                        continue;
+
+                    var normalizedLevel = level.Value + 1;
+                    if (!levels.TryGetValue(elementId, out var existing) || normalizedLevel < existing)
+                        levels[elementId] = normalizedLevel;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load list levels for kode from dokumen_elemen_visual");
+        }
+        finally
+        {
+            if (shouldClose && connection.State == System.Data.ConnectionState.Open)
+                await connection.CloseAsync();
+        }
+
+        return levels;
+    }
+
+    private static Dictionary<ulong, int> BuildCodeBlockIndexMap(IReadOnlyList<CodeBlockInfo> codeBlocks)
+    {
+        var map = new Dictionary<ulong, int>();
+        for (var i = 0; i < codeBlocks.Count; i++)
+        {
+            foreach (var elementId in codeBlocks[i].ElementIds)
+                map[elementId] = i;
+        }
+
+        return map;
+    }
+
+    private static Dictionary<ulong, string> BuildCodeMergeSetKeyMap(
+        IReadOnlyList<CodeElementInfo> codeElements,
+        IReadOnlyDictionary<ulong, int> codeBlockIndexByElementId,
+        IReadOnlyDictionary<ulong, int> listLevelByElementId)
+    {
+        var map = new Dictionary<ulong, string>(codeElements.Count);
+        foreach (var codeElement in codeElements)
+        {
+            if (listLevelByElementId.TryGetValue(codeElement.ElementId, out var listLevel))
+            {
+                map[codeElement.ElementId] = $"list_level_{listLevel}";
+                continue;
+            }
+
+            if (codeBlockIndexByElementId.TryGetValue(codeElement.ElementId, out var blockIndex))
+            {
+                map[codeElement.ElementId] = $"block_{blockIndex}";
+            }
+        }
+
+        return map;
+    }
+
+    private static void MergeIdenticalCodeLineErrorsWithinBlockPage(
+        List<ValidationError> errors,
+        int startIndex,
+        IReadOnlyDictionary<ulong, string> codeMergeSetKeyByElementId)
+    {
+        if (errors.Count == 0 || startIndex >= errors.Count || codeMergeSetKeyByElementId.Count == 0)
+            return;
+
+        var merged = new List<ValidationError>();
+        var grouped = new Dictionary<CodeLineErrorMergeKey, int>();
+
+        for (var i = startIndex; i < errors.Count; i++)
+        {
+            var error = errors[i];
+            var mergeKey = TryBuildCodeLineErrorMergeKey(error, codeMergeSetKeyByElementId);
+            if (!mergeKey.HasValue)
+            {
+                merged.Add(error);
+                continue;
+            }
+
+            if (!grouped.TryGetValue(mergeKey.Value, out var mergedIndex))
+            {
+                grouped[mergeKey.Value] = merged.Count;
+                merged.Add(error);
+                continue;
+            }
+
+            var target = merged[mergedIndex];
+            target.Locations = MergeErrorLocations(target.Locations, error.Locations);
+
+            if (!target.DokumenElemenId.HasValue && error.DokumenElemenId.HasValue)
+                target.DokumenElemenId = error.DokumenElemenId;
+        }
+
+        errors.RemoveRange(startIndex, errors.Count - startIndex);
+        errors.AddRange(merged);
+    }
+
+    private static CodeLineErrorMergeKey? TryBuildCodeLineErrorMergeKey(
+        ValidationError error,
+        IReadOnlyDictionary<ulong, string> codeMergeSetKeyByElementId)
+    {
+        if (!string.Equals(error.Field, "kode", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!error.DokumenElemenId.HasValue ||
+            !codeMergeSetKeyByElementId.TryGetValue(error.DokumenElemenId.Value, out var setKey))
+            return null;
+
+        var pageNumber = TryGetSingleLocationPage(error.Locations);
+        if (!pageNumber.HasValue)
+            return null;
+
+        return new CodeLineErrorMergeKey(
+            setKey,
+            pageNumber.Value,
+            error.Category ?? string.Empty,
+            error.Field ?? string.Empty,
+            error.Message ?? string.Empty,
+            error.Expected ?? string.Empty,
+            error.Actual ?? string.Empty,
+            error.DiffType ?? string.Empty,
+            error.Cause ?? string.Empty,
+            error.HasNumbering,
+            error.StyleName ?? string.Empty,
+            error.StyleId ?? string.Empty,
+            error.ToolRequirement ?? string.Empty,
+            error.FeatureName ?? string.Empty,
+            error.ScopeHint ?? string.Empty,
+            error.PageRange ?? string.Empty,
+            BuildActionToken(error.AllowedActions),
+            BuildActionToken(error.DisallowedActions),
+            error.IsRequired);
+    }
+
+    private static int? TryGetSingleLocationPage(IReadOnlyList<ErrorLocation> locations)
+    {
+        if (locations == null || locations.Count == 0)
+            return null;
+
+        var pages = locations
+            .Select(loc => loc.HalamanKe)
+            .Where(page => page > 0)
+            .Distinct()
+            .OrderBy(page => page)
+            .ToList();
+
+        return pages.Count == 1 ? pages[0] : null;
+    }
+
+    private static string BuildActionToken(IReadOnlyList<string>? actions)
+    {
+        if (actions == null || actions.Count == 0)
+            return string.Empty;
+
+        return string.Join("|", actions.Select(action => action?.Trim() ?? string.Empty));
+    }
+
+    private static List<ErrorLocation> MergeErrorLocations(
+        IReadOnlyList<ErrorLocation> first,
+        IReadOnlyList<ErrorLocation> second)
+    {
+        var merged = new List<ErrorLocation>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        AddDistinctLocations(merged, seen, first);
+        AddDistinctLocations(merged, seen, second);
+
+        return merged
+            .OrderBy(loc => loc.HalamanKe)
+            .ThenBy(loc => loc.Bbox?.Y0 ?? decimal.MinValue)
+            .ThenBy(loc => loc.Bbox?.X0 ?? decimal.MinValue)
+            .ToList();
+    }
+
+    private static void AddDistinctLocations(
+        List<ErrorLocation> target,
+        HashSet<string> seen,
+        IReadOnlyList<ErrorLocation> source)
+    {
+        if (source == null || source.Count == 0)
+            return;
+
+        foreach (var loc in source)
+        {
+            var token = BuildLocationToken(loc);
+            if (!seen.Add(token))
+                continue;
+
+            target.Add(new ErrorLocation
+            {
+                HalamanKe = loc.HalamanKe,
+                Bbox = loc.Bbox == null
+                    ? null
+                    : new ErrorBbox
+                    {
+                        X0 = loc.Bbox.X0,
+                        Y0 = loc.Bbox.Y0,
+                        X1 = loc.Bbox.X1,
+                        Y1 = loc.Bbox.Y1
+                    }
+            });
+        }
+    }
+
+    private static string BuildLocationToken(ErrorLocation loc)
+    {
+        if (loc.Bbox == null)
+            return loc.HalamanKe.ToString(CultureInfo.InvariantCulture) + "|null";
+
+        return string.Join("|",
+            loc.HalamanKe.ToString(CultureInfo.InvariantCulture),
+            loc.Bbox.X0.ToString(CultureInfo.InvariantCulture),
+            loc.Bbox.Y0.ToString(CultureInfo.InvariantCulture),
+            loc.Bbox.X1.ToString(CultureInfo.InvariantCulture),
+            loc.Bbox.Y1.ToString(CultureInfo.InvariantCulture));
     }
 
     private static List<CodeBlockInfo> BuildCodeBlocks(List<CodeElementInfo> codeElements)
@@ -750,7 +1149,9 @@ public partial class ValidationService
         CodeParagraphRule rule,
         DokumenFormatParagraf? format,
         string evidence,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        string paragraphText,
+        PageLayoutSnapshot? pageLayout)
     {
         if (format == null)
             return;
@@ -760,7 +1161,8 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (AreAlignmentsEquivalent(actual, expectedAlignment))
+            var alignmentContext = CreateAlignmentContext(paragraphText, locations, pageLayout);
+            if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
                 result.PassedChecks++;
             }
@@ -781,14 +1183,32 @@ public partial class ValidationService
 
         var expectedLeftIndent = rule.Indentation?.LeftIndent?.Value;
         var expectedHanging = rule.Indentation?.Hanging?.Value;
+        const decimal indentToleranceCm = 0.1m;
+
+        var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
+            ? format.DfpIndLeftTwips.Value
+            : format.DfpIndStartTwips ?? 0;
 
         var hangingTwips = format.DfpIndHangingTwips ?? 0;
+        var hasNumbering = format.DfpIsList || (format.DfpListNumId ?? 0) > 0;
+        if (hasNumbering &&
+            expectedLeftIndent.HasValue &&
+            Math.Abs(expectedLeftIndent.Value) <= indentToleranceCm &&
+            leftTwips > 0 &&
+            hangingTwips > leftTwips)
+        {
+            // List paragraphs can expose effective tab-stop hanging that exceeds
+            // paragraph left indent (visual layout). For kode rule we validate
+            // format indent value, so normalize to left indent in this case.
+            hangingTwips = leftTwips;
+        }
+
         var hangingCm = hangingTwips / 1440.0m * 2.54m;
 
         if (expectedHanging.HasValue)
         {
             result.TotalChecks++;
-            if (Math.Abs(hangingCm - expectedHanging.Value) <= 0.05m)
+            if (Math.Abs(hangingCm - expectedHanging.Value) <= indentToleranceCm)
             {
                 result.PassedChecks++;
             }
@@ -810,13 +1230,12 @@ public partial class ValidationService
         if (expectedLeftIndent.HasValue)
         {
             result.TotalChecks++;
-            var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
-                ? format.DfpIndLeftTwips.Value
-                : format.DfpIndStartTwips ?? 0;
             var leftCm = leftTwips / 1440.0m * 2.54m;
-            var alignedLeftCm = expectedHanging.HasValue ? leftCm - hangingCm : leftCm;
+            var alignedLeftCm = expectedHanging.HasValue
+                ? Math.Max(0m, leftCm - hangingCm)
+                : leftCm;
 
-            if (Math.Abs(alignedLeftCm - expectedLeftIndent.Value) <= 0.05m)
+            if (Math.Abs(alignedLeftCm - expectedLeftIndent.Value) <= indentToleranceCm)
             {
                 result.PassedChecks++;
             }
@@ -833,6 +1252,26 @@ public partial class ValidationService
                     Locations = locations
                 });
             }
+        }
+
+        result.TotalChecks++;
+        var rightCm = GetRightIndentCm(format);
+        if (Math.Abs(rightCm) <= indentToleranceCm)
+        {
+            result.PassedChecks++;
+        }
+        else
+        {
+            result.Errors.Add(new ValidationError
+            {
+                Category = "Isi Buku",
+                Field = "kode",
+                Message = "Right indent kode harus 0",
+                Expected = "0 cm",
+                Actual = rightCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                Evidence = evidence,
+                Locations = locations
+            });
         }
 
         var spacingRule = rule.Spacing;

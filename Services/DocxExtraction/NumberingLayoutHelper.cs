@@ -1,6 +1,5 @@
-using System.Drawing;
-using System.Drawing.Text;
 using DocumentFormat.OpenXml.Wordprocessing;
+using SkiaSharp;
 
 namespace ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 
@@ -12,7 +11,8 @@ internal static class NumberingLayoutHelper
     public static uint? TryComputeEffectiveHangingTwips(
         Level? level,
         string? numberingLabelWithSuffix,
-        int defaultTabStopTwips)
+        int defaultTabStopTwips,
+        bool useHangingIndentTabStop = true)
     {
         if (level == null || string.IsNullOrWhiteSpace(numberingLabelWithSuffix))
             return null;
@@ -25,20 +25,26 @@ internal static class NumberingLayoutHelper
         if (string.IsNullOrWhiteSpace(label))
             return null;
 
-        var tabStop = GetNumberTabStop(level) ?? defaultTabStopTwips;
-        if (tabStop <= 0)
-            return null;
-
         var (fontName, fontPt, bold) = GetNumberingFont(level);
         var widthTwips = MeasureLabelWidthTwips(label, fontName, fontPt, bold);
         if (!widthTwips.HasValue)
             return null;
 
-        var effective = widthTwips.Value > tabStop
-            ? NextTabStop(widthTwips.Value, defaultTabStopTwips)
-            : tabStop;
+        var hangingTabStop = useHangingIndentTabStop
+            ? GetHangingIndentTabStop(level)
+            : null;
+        var numberTabStop = GetNumberTabStop(level);
 
-        return (uint)effective;
+        var effective = ResolveEffectiveTabStop(
+            widthTwips.Value,
+            hangingTabStop,
+            numberTabStop,
+            defaultTabStopTwips);
+
+        if (!effective.HasValue || effective.Value <= 0)
+            return null;
+
+        return (uint)effective.Value;
     }
 
     private static int? GetNumberTabStop(Level level)
@@ -61,6 +67,75 @@ internal static class NumberingLayoutHelper
         }
 
         return null;
+    }
+
+    private static int? GetHangingIndentTabStop(Level level)
+    {
+        var pPr = level.PreviousParagraphProperties;
+        var ind = pPr?.GetFirstChild<Indentation>();
+        if (ind?.Hanging?.Value == null)
+            return null;
+
+        return int.TryParse(ind.Hanging.Value, out var hanging) && hanging > 0
+            ? hanging
+            : null;
+    }
+
+    private static int? ResolveEffectiveTabStop(
+        int labelWidthTwips,
+        int? hangingTabStopTwips,
+        int? numberTabStopTwips,
+        int defaultTabStopTwips)
+    {
+        var initialStop = hangingTabStopTwips.HasValue && hangingTabStopTwips.Value > 0
+            ? hangingTabStopTwips.Value
+            : numberTabStopTwips.HasValue && numberTabStopTwips.Value > 0
+                ? numberTabStopTwips.Value
+                : defaultTabStopTwips;
+
+        if (initialStop <= 0)
+            return null;
+
+        if (labelWidthTwips <= initialStop)
+            return initialStop;
+
+        return FindNextStop(
+            initialStop,
+            labelWidthTwips,
+            numberTabStopTwips,
+            defaultTabStopTwips);
+    }
+
+    private static int? FindNextStop(
+        int currentStopTwips,
+        int labelWidthTwips,
+        int? numberTabStopTwips,
+        int defaultTabStopTwips)
+    {
+        var stop = currentStopTwips;
+
+        while (labelWidthTwips > stop)
+        {
+            int? nextStop = null;
+
+            if (numberTabStopTwips.HasValue && numberTabStopTwips.Value > stop)
+            {
+                nextStop = numberTabStopTwips.Value;
+            }
+            else if (defaultTabStopTwips > 0)
+            {
+                var autoStop = NextTabStop(stop + 1, defaultTabStopTwips);
+                if (autoStop > stop)
+                    nextStop = autoStop;
+            }
+
+            if (!nextStop.HasValue || nextStop.Value <= stop)
+                return null;
+
+            stop = nextStop.Value;
+        }
+
+        return stop;
     }
 
     private static (string FontName, float FontPt, bool Bold) GetNumberingFont(Level level)
@@ -99,14 +174,21 @@ internal static class NumberingLayoutHelper
 
         try
         {
-            var pxSize = Math.Max(1, (int)Math.Round(fontPt * DefaultDpi / 72f));
-            using var bmp = new System.Drawing.Bitmap(1, 1);
-            using var g = System.Drawing.Graphics.FromImage(bmp);
-            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            using var font = new System.Drawing.Font(fontName, pxSize, bold ? System.Drawing.FontStyle.Bold : System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Pixel);
-            using var format = new System.Drawing.StringFormat(System.Drawing.StringFormat.GenericTypographic);
-            var size = g.MeasureString(text, font, int.MaxValue, format);
-            var widthPx = size.Width;
+            var pxSize = Math.Max(1f, fontPt * DefaultDpi / 72f);
+            var style = bold ? SKFontStyle.Bold : SKFontStyle.Normal;
+
+            using var typeface = SKTypeface.FromFamilyName(fontName, style) ?? SKTypeface.Default;
+            using var paint = new SKPaint
+            {
+                Typeface = typeface,
+                TextSize = pxSize,
+                IsAntialias = true,
+                LcdRenderText = true,
+                SubpixelText = true,
+                IsStroke = false
+            };
+
+            var widthPx = paint.MeasureText(text);
             var widthTwips = (int)Math.Round(widthPx * TwipsPerInch / (float)DefaultDpi);
             return widthTwips;
         }

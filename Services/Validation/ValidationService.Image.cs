@@ -200,6 +200,9 @@ public partial class ValidationService
                 ? NormalizeLabel(rawLabel)
                 : string.Empty;
 
+            if (IsCodeLabel(normalizedLabel))
+                continue;
+
             var imageItems = ExtractImageItems(elem.DelemenJsonTree);
             if (imageItems.Count > 0 && string.IsNullOrWhiteSpace(normalizedText) && normalizedLabel == "gambar")
             {
@@ -325,11 +328,22 @@ public partial class ValidationService
 
             paragraphFormats.TryGetValue(block.ParagraphFormatId ?? 0, out var paragraphFormat);
             var locations = await BuildElementLocationsAsync(block.ElementId, cancellationToken);
+            pageLayoutsById.TryGetValue(block.ElementId, out var imagePageLayout);
 
             if (imageRule != null)
             {
-                ValidateImageParagraphFormat(result, imageRule, paragraphFormat, block.Evidence, locations);
-                ValidateImagePosition(result, imageRule, block, drawingFormats, pageLayoutsById, pageNumbersById, pagesWithParagraph, locations);
+                var hasInlineLayoutViolation = HasInlineLayoutViolation(imageRule, block, drawingFormats);
+                ValidateImageParagraphFormat(
+                    result,
+                    imageRule,
+                    paragraphFormat,
+                    block.Evidence,
+                    locations,
+                    imagePageLayout,
+                    hasInlineLayoutViolation,
+                    block,
+                    drawingFormats);
+                ValidateImagePosition(result, imageRule, block, drawingFormats, pageLayoutsById, pageNumbersById, pagesWithParagraph, locations, hasInlineLayoutViolation);
             }
 
             var nextImageIndex = i + 1 < imageBlocks.Count ? imageBlocks[i + 1].OrderIndex : int.MaxValue;
@@ -436,9 +450,10 @@ public partial class ValidationService
                         : new[] { selectedCaption.ElementId };
                     var captionLocations = await BuildElementLocationsAsync(captionLocationIds, cancellationToken);
                     var captionErrorStart = result.Errors.Count;
+                    pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
 
                     ValidateCaptionFont(result, captionRule, selectedCaption, captionTextFormats, captionLocations);
-                    ValidateCaptionParagraphFormat(result, captionRule, captionFormat, selectedCaption.NormalizedText, captionLocations);
+                    ValidateCaptionParagraphFormat(result, captionRule, captionFormat, selectedCaption.NormalizedText, captionLocations, captionPageLayout);
                     ValidateCaptionNumbering(result, captionRule, selectedCaption, captionLocations);
 
                     if (neighborContexts.TryGetValue(selectedCaption.ElementId, out var captionContext))
@@ -510,17 +525,31 @@ public partial class ValidationService
         ImageRule rule,
         DokumenFormatParagraf? format,
         string evidence,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        PageLayoutSnapshot? pageLayout,
+        bool skipAlignmentAndLineSpacing,
+        ImageBlockInfo block,
+        IReadOnlyDictionary<ulong, DokumenFormatDrawing> drawingFormats)
     {
         if (format == null || rule.Paragraph == null)
             return;
 
         var expectedAlignment = rule.Paragraph.Alignment?.Value;
-        if (!string.IsNullOrWhiteSpace(expectedAlignment))
+        if (!skipAlignmentAndLineSpacing && !string.IsNullOrWhiteSpace(expectedAlignment))
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (AreAlignmentsEquivalent(actual, expectedAlignment))
+            var alignmentContext = CreateAlignmentContext(evidence, locations, pageLayout);
+            var isNearFullWidthCenterCase = IsImageCenterAlignmentSatisfiedByNearFullWidth(
+                expectedAlignment,
+                actual,
+                format,
+                block,
+                drawingFormats,
+                pageLayout,
+                locations);
+
+            if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext) || isNearFullWidthCenterCase)
             {
                 result.PassedChecks++;
             }
@@ -564,7 +593,7 @@ public partial class ValidationService
         }
 
         var spacingRule = rule.Paragraph.Spacing;
-        if (spacingRule?.LineSpacing?.Value.HasValue == true)
+        if (!skipAlignmentAndLineSpacing && spacingRule?.LineSpacing?.Value.HasValue == true)
         {
             result.TotalChecks++;
             var expected = spacingRule.LineSpacing.Value.Value;
@@ -640,6 +669,130 @@ public partial class ValidationService
         }
     }
 
+    private static bool IsImageCenterAlignmentSatisfiedByNearFullWidth(
+        string? expectedAlignment,
+        string? actualAlignment,
+        DokumenFormatParagraf format,
+        ImageBlockInfo block,
+        IReadOnlyDictionary<ulong, DokumenFormatDrawing> drawingFormats,
+        PageLayoutSnapshot? layout,
+        IReadOnlyList<ErrorLocation>? locations)
+    {
+        if (!string.Equals(NormalizeAlignmentValue(expectedAlignment), "center", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var normalizedActual = NormalizeAlignmentValue(actualAlignment);
+        var isLeftOrJustify =
+            string.Equals(normalizedActual, "left", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalizedActual, "justify", StringComparison.OrdinalIgnoreCase);
+        if (!isLeftOrJustify)
+            return false;
+
+        if (layout == null)
+            return false;
+
+        var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
+            ? format.DfpIndLeftTwips.Value
+            : format.DfpIndStartTwips ?? 0;
+        var leftIndentCm = leftTwips / 1440.0m * 2.54m;
+        if (Math.Abs(leftIndentCm) > 0.05m)
+            return false;
+
+        var availableWidth = GetAvailableWidthCm(layout);
+        if (!availableWidth.HasValue || availableWidth.Value <= 0m)
+            return false;
+
+        var imageWidth = ResolveImageWidthCm(block, drawingFormats, layout, locations);
+        if (!imageWidth.HasValue || imageWidth.Value <= 0m)
+            return false;
+
+        const decimal nearFullToleranceCm = 0.2m;
+        var remaining = availableWidth.Value - imageWidth.Value;
+        return remaining >= 0m && remaining <= nearFullToleranceCm;
+    }
+
+    private static decimal? ResolveImageWidthCm(
+        ImageBlockInfo block,
+        IReadOnlyDictionary<ulong, DokumenFormatDrawing> drawingFormats,
+        PageLayoutSnapshot layout,
+        IReadOnlyList<ErrorLocation>? locations)
+    {
+        decimal? maxDrawingWidth = null;
+        foreach (var item in block.ImageItems)
+        {
+            if (!item.DrawingFormatId.HasValue)
+                continue;
+
+            if (!drawingFormats.TryGetValue(item.DrawingFormatId.Value, out var format))
+                continue;
+
+            var widthCm = EmuToCm(format.DfdrCxEmu);
+            if (!widthCm.HasValue || widthCm.Value <= 0m)
+                continue;
+
+            maxDrawingWidth = !maxDrawingWidth.HasValue
+                ? widthCm.Value
+                : Math.Max(maxDrawingWidth.Value, widthCm.Value);
+        }
+
+        if (maxDrawingWidth.HasValue && maxDrawingWidth.Value > 0m)
+            return maxDrawingWidth;
+
+        return ResolveImageWidthFromLocationsCm(locations, layout);
+    }
+
+    private static decimal? ResolveImageWidthFromLocationsCm(
+        IReadOnlyList<ErrorLocation>? locations,
+        PageLayoutSnapshot layout)
+    {
+        if (locations == null || locations.Count == 0 || !layout.WidthCm.HasValue || layout.WidthCm.Value <= 0m)
+            return null;
+
+        decimal? minX0 = null;
+        decimal? maxX1 = null;
+        foreach (var location in locations)
+        {
+            var bbox = location.Bbox;
+            if (bbox == null)
+                continue;
+
+            minX0 = !minX0.HasValue ? bbox.X0 : Math.Min(minX0.Value, bbox.X0);
+            maxX1 = !maxX1.HasValue ? bbox.X1 : Math.Max(maxX1.Value, bbox.X1);
+        }
+
+        if (!minX0.HasValue || !maxX1.HasValue)
+            return null;
+
+        if (!TryNormalizeHorizontalCoordinate(minX0.Value, layout, out var leftRatio) ||
+            !TryNormalizeHorizontalCoordinate(maxX1.Value, layout, out var rightRatio))
+            return null;
+
+        var widthRatio = rightRatio - leftRatio;
+        if (widthRatio <= 0m)
+            return null;
+
+        return Math.Round(layout.WidthCm.Value * widthRatio, 2);
+    }
+
+    private static bool HasInlineLayoutViolation(
+        ImageRule rule,
+        ImageBlockInfo block,
+        IReadOnlyDictionary<ulong, DokumenFormatDrawing> drawingFormats)
+    {
+        var layoutOption = rule.Position?.LayoutOption?.Value;
+        if (string.IsNullOrWhiteSpace(layoutOption) ||
+            !layoutOption.Equals("inline_with_text", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return block.ImageItems
+            .Select(i => i.DrawingFormatId)
+            .Any(id => id.HasValue &&
+                       drawingFormats.TryGetValue(id.Value, out var format) &&
+                       !format.DfdrIsInline);
+    }
+
     private void ValidateImagePosition(
         ValidationResult result,
         ImageRule rule,
@@ -648,7 +801,8 @@ public partial class ValidationService
         Dictionary<ulong, PageLayoutSnapshot> pageLayouts,
         Dictionary<ulong, int> pageNumbersById,
         HashSet<int> pagesWithParagraph,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        bool hasInlineLayoutViolation)
     {
         if (rule.Position == null)
             return;
@@ -658,12 +812,7 @@ public partial class ValidationService
             layoutOption.Equals("inline_with_text", StringComparison.OrdinalIgnoreCase))
         {
             result.TotalChecks++;
-            var nonInline = block.ImageItems
-                .Select(i => i.DrawingFormatId)
-                .Where(id => id.HasValue && drawingFormats.TryGetValue(id.Value, out var format) && !format.DfdrIsInline)
-                .ToList();
-
-            if (nonInline.Count == 0)
+            if (!hasInlineLayoutViolation)
             {
                 result.PassedChecks++;
             }
@@ -1069,7 +1218,8 @@ public partial class ValidationService
         CaptionImageRule rule,
         DokumenFormatParagraf? format,
         string evidence,
-        List<ErrorLocation> locations)
+        List<ErrorLocation> locations,
+        PageLayoutSnapshot? pageLayout)
     {
         if (format == null || rule.Paragraph == null)
             return;
@@ -1079,7 +1229,8 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (AreAlignmentsEquivalent(actual, expectedAlignment))
+            var alignmentContext = CreateAlignmentContext(evidence, locations, pageLayout);
+            if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
                 result.PassedChecks++;
             }
@@ -1664,9 +1815,44 @@ public partial class ValidationService
 
         var prefix = string.IsNullOrWhiteSpace(expectedPrefix) ? "Gambar" : expectedPrefix.Trim();
         prefix = NormalizeWhitespace(prefix);
+        var normalizedText = NormalizeWhitespace(text);
 
-        var pattern = "^" + Regex.Escape(prefix) + "\\s+(\\d+)\\.(\\d+)\\s*(.*)$";
-        var match = Regex.Match(text, pattern, RegexOptions.IgnoreCase);
+        var pattern = "^" + Regex.Escape(prefix) + "\\s+(\\d+)\\.\\s*(\\d+)\\s*(.*)$";
+        var match = Regex.Match(normalizedText, pattern, RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            // Backward compatibility for old extracted data that accidentally prepended list numbering,
+            // e.g. "8Gambar 3.8 Judul".
+            var cleanedText = Regex.Replace(
+                normalizedText,
+                "^\\d+\\s*(?=" + Regex.Escape(prefix) + "\\b)",
+                string.Empty,
+                RegexOptions.IgnoreCase);
+
+            if (!string.Equals(cleanedText, normalizedText, StringComparison.Ordinal))
+                match = Regex.Match(cleanedText, pattern, RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                // Backward compatibility for old extracted data where SEQ field value is moved in front,
+                // e.g. "8Gambar 3. Judul" should be interpreted as "Gambar 3.8 Judul".
+                var movedSeqPattern = "^(\\d+)\\s*" + Regex.Escape(prefix) + "\\s+(\\d+)\\.\\s*(.*)$";
+                var movedSeqMatch = Regex.Match(normalizedText, movedSeqPattern, RegexOptions.IgnoreCase);
+                if (movedSeqMatch.Success)
+                {
+                    numberText = $"{prefix} {movedSeqMatch.Groups[2].Value}.{movedSeqMatch.Groups[1].Value}".Trim();
+                    var movedRest = movedSeqMatch.Groups[3].Value?.Trim() ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(movedRest))
+                    {
+                        movedRest = movedRest.TrimStart(' ', '-', ':', '.');
+                        titleText = movedRest.Trim();
+                    }
+
+                    return true;
+                }
+            }
+        }
+
         if (!match.Success)
             return false;
 
@@ -1690,27 +1876,47 @@ public partial class ValidationService
         if (matches.Count == 0)
             return true;
 
+        var minorWords = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "dan", "atau", "yang", "di", "ke", "dari", "untuk", "dengan", "pada", "dalam",
+            "and", "or", "the", "a", "an", "in", "on", "at", "to", "for", "of", "with"
+        };
+
+        var allWordsAllCaps = true;
+        var wordIndex = 0;
+
         foreach (Match match in matches)
         {
             var word = match.Value;
             if (string.IsNullOrWhiteSpace(word))
                 continue;
 
-            if (word.All(char.IsUpper))
-                continue;
+            if (!word.All(char.IsUpper))
+                allWordsAllCaps = false;
 
-            if (!char.IsUpper(word[0]))
-                return false;
-
-            if (word.Length > 1)
+            var isMinorWord = wordIndex > 0 && minorWords.Contains(word);
+            if (isMinorWord)
             {
-                var rest = word.Substring(1);
-                if (!rest.All(char.IsLower))
+                // Minor words may stay lowercase or start with uppercase; reject odd mixed casing.
+                if (word == word.ToLowerInvariant())
+                {
+                    // valid: lowercase minor word (e.g. "dan", "untuk")
+                }
+                else if (!char.IsUpper(word[0]))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                if (!char.IsUpper(word[0]))
                     return false;
             }
+
+            wordIndex++;
         }
 
-        return true;
+        return !allWordsAllCaps;
     }
 
     private static string BuildImageEvidence(IReadOnlyList<ImageItemInfo> items)

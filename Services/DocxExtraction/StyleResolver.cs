@@ -465,6 +465,7 @@ public class StyleResolver
         
         // 2. Get paragraph style and apply basedOn chain
         var directPPr = paragraph.ParagraphProperties;
+        var hasDirectIndentation = HasAnyIndentationValue(directPPr);
         var hasDirectStyle = directPPr?.ParagraphStyleId?.Val?.Value != null;
         var styleId = directPPr?.ParagraphStyleId?.Val?.Value
             ?? _defaultParagraphStyleId
@@ -519,7 +520,14 @@ public class StyleResolver
                 var levelPPr = level.PreviousParagraphProperties;
                 if (levelPPr != null)
                 {
+                    var styleIndentBeforeNumbering = CaptureIndentSnapshot(effective);
                     NumberingResolver.MergeNumberingLevelParagraphProperties(effective, levelPPr);
+                    if (!hasDirectIndentation)
+                    {
+                        RestoreStyleIndentWhenNumberingShrinksHanging(
+                            effective,
+                            styleIndentBeforeNumbering);
+                    }
                 }
             }
         }
@@ -531,6 +539,65 @@ public class StyleResolver
         }
         
         return effective;
+    }
+
+    private readonly record struct ParagraphIndentSnapshot(
+        int? Left,
+        int? Right,
+        int? FirstLine,
+        int? Hanging,
+        int? Start,
+        int? End,
+        int? LeftChars,
+        int? RightChars);
+
+    private static ParagraphIndentSnapshot CaptureIndentSnapshot(EffectiveParagraphProperties effective)
+    {
+        return new ParagraphIndentSnapshot(
+            effective.IndentLeft,
+            effective.IndentRight,
+            effective.IndentFirstLine,
+            effective.IndentHanging,
+            effective.IndentStart,
+            effective.IndentEnd,
+            effective.IndentLeftChars,
+            effective.IndentRightChars);
+    }
+
+    private static bool HasAnyIndentationValue(ParagraphProperties? pPr)
+    {
+        var ind = pPr?.GetFirstChild<Indentation>();
+        if (ind == null)
+            return false;
+
+        return ind.Left?.Value != null ||
+               ind.Right?.Value != null ||
+               ind.FirstLine?.Value != null ||
+               ind.Hanging?.Value != null ||
+               ind.Start?.Value != null ||
+               ind.End?.Value != null ||
+               ind.LeftChars?.Value != null ||
+               ind.RightChars?.Value != null;
+    }
+
+    private static void RestoreStyleIndentWhenNumberingShrinksHanging(
+        EffectiveParagraphProperties effective,
+        ParagraphIndentSnapshot styleIndent)
+    {
+        if (!styleIndent.Hanging.HasValue || !effective.IndentHanging.HasValue)
+            return;
+
+        if (effective.IndentHanging.Value >= styleIndent.Hanging.Value)
+            return;
+
+        effective.IndentLeft = styleIndent.Left;
+        effective.IndentRight = styleIndent.Right;
+        effective.IndentFirstLine = styleIndent.FirstLine;
+        effective.IndentHanging = styleIndent.Hanging;
+        effective.IndentStart = styleIndent.Start;
+        effective.IndentEnd = styleIndent.End;
+        effective.IndentLeftChars = styleIndent.LeftChars;
+        effective.IndentRightChars = styleIndent.RightChars;
     }
     
     /// <summary>

@@ -11,6 +11,20 @@ namespace ValidasiTugasAkhir.MainService.Services;
 /// </summary>
 public partial class ValidationService
 {
+    private sealed class ParagraphListBlockContext
+    {
+        public int StartIndex { get; init; }
+        public int ListEndIndex { get; init; }
+        public int AfterParagraphEndIndex { get; init; }
+        public List<ulong> ListItemIds { get; init; } = new();
+        public List<ulong> ParagraphsAfter { get; init; } = new();
+        public uint? LastFormatId { get; init; }
+        public ulong LastElementId { get; init; }
+        public string? LastElementType { get; init; }
+        public string? LastLabel { get; init; }
+        public int SetId { get; set; }
+    }
+
     private async Task<ValidationResult> ValidateParagraphAsync(
         int dokumenId,
         HashSet<ulong>? paragraphIds,
@@ -127,6 +141,7 @@ public partial class ValidationService
         var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => (string?)e.DelemenJsonTree);
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
+        var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
 
         var contentCache = new Dictionary<ulong, ElementContentInfo>();
         ElementContentInfo GetContent(ulong elementId, string? json)
@@ -198,7 +213,7 @@ public partial class ValidationService
         var paragraphIdSet = new HashSet<ulong>(paragraphElements.Select(e => e.Id));
         var listItemFormatIds = new HashSet<uint>();
         var listItemTextFormatIds = new HashSet<uint>();
-        var listBlocks = new List<(List<ulong> ListItemIds, List<ulong> ParagraphsAfter, uint? LastFormatId, ulong LastElementId, string? LastElementType, string? LastLabel)>();
+        var listBlocks = new List<ParagraphListBlockContext>();
 
         for (var i = 0; i < bodyElements.Count; i++)
         {
@@ -245,9 +260,47 @@ public partial class ValidationService
                     paragraphsAfter.Add(nextElem.DelemenId);
             }
 
-            listBlocks.Add((listBlockItemIds, paragraphsAfter, listFormatId, lastListElement.DelemenId, lastListElement.DelemenType, lastListLabel));
+            var afterParagraphEndIndex = paragraphsAfter.Count > 0
+                ? listEnd + paragraphsAfter.Count - 1
+                : listEnd - 1;
+            listBlocks.Add(new ParagraphListBlockContext
+            {
+                StartIndex = i,
+                ListEndIndex = listEnd - 1,
+                AfterParagraphEndIndex = afterParagraphEndIndex,
+                ListItemIds = listBlockItemIds,
+                ParagraphsAfter = paragraphsAfter,
+                LastFormatId = listFormatId,
+                LastElementId = lastListElement.DelemenId,
+                LastElementType = lastListElement.DelemenType,
+                LastLabel = lastListLabel
+            });
 
             i = listEnd - 1;
+        }
+
+        var singleParagraphExplanationBySetId = new Dictionary<int, bool>();
+        if (listBlocks.Count > 0)
+        {
+            var currentSetId = 0;
+            for (var i = 0; i < listBlocks.Count; i++)
+            {
+                if (i > 0 && listBlocks[i].StartIndex > listBlocks[i - 1].AfterParagraphEndIndex + 1)
+                    currentSetId++;
+
+                listBlocks[i].SetId = currentSetId;
+            }
+
+            singleParagraphExplanationBySetId = listBlocks
+                .GroupBy(b => b.SetId)
+                .ToDictionary(
+                    g => g.Key,
+                    g =>
+                    {
+                        var totalItems = g.Count();
+                        var withExplanation = g.Count(b => b.ParagraphsAfter.Count > 0);
+                        return totalItems > 1 && withExplanation * 2 > totalItems;
+                    });
         }
 
         // Collect all paragraph format IDs for batch loading
@@ -278,7 +331,6 @@ public partial class ValidationService
         var listHangingIndentByParagraphId = new Dictionary<ulong, decimal>();
         if (listBlocks.Count > 0)
         {
-            var emptyLocations = new List<ErrorLocation>();
             var expectedListHanging = listRule?.Paragraph?.Indentation?.Hanging?.Value;
             var expectedListLeft = listRule?.Paragraph?.Indentation?.LeftIndent?.Value;
 
@@ -286,6 +338,13 @@ public partial class ValidationService
             {
                 if (block.ParagraphsAfter.Count == 0)
                     continue;
+
+                var hasSingleParagraphAfter = block.ParagraphsAfter.Count == 1;
+                if (hasSingleParagraphAfter &&
+                    (!singleParagraphExplanationBySetId.TryGetValue(block.SetId, out var treatAsExplanation) || !treatAsExplanation))
+                {
+                    continue;
+                }
 
                 DokumenFormatParagraf? listFormat = null;
                 if (block.LastFormatId.HasValue)
@@ -327,7 +386,9 @@ public partial class ValidationService
         var skipSentenceCountParagraphIds = new HashSet<ulong>();
         foreach (var block in listBlocks)
         {
-            if (block.ParagraphsAfter.Count < 2)
+            if (block.ParagraphsAfter.Count == 1 &&
+                singleParagraphExplanationBySetId.TryGetValue(block.SetId, out var treatAsExplanation) &&
+                treatAsExplanation)
             {
                 foreach (var paragraphId in block.ParagraphsAfter)
                     skipSentenceCountParagraphIds.Add(paragraphId);
@@ -388,6 +449,7 @@ public partial class ValidationService
             var listHangingOverride = listHangingIndentByParagraphId.TryGetValue(elementId, out var listHangingCm)
                 ? listHangingCm
                 : (decimal?)null;
+            pageLayoutsById.TryGetValue(elementId, out var pageLayout);
             ValidateParagraphFormat(
                 result,
                 rule,
@@ -396,7 +458,9 @@ public partial class ValidationService
                 locations,
                 listIndentOverride,
                 listFirstLineOverride,
-                listHangingOverride);
+                listHangingOverride,
+                plainText,
+                pageLayout);
 
             // --- Sentence Count Suggestion (non-required) ---
             if (!skipSentenceCountParagraphIds.Contains(elementId))
@@ -548,7 +612,9 @@ public partial class ValidationService
         List<ErrorLocation> locations,
         decimal? leftIndentOverrideCm,
         decimal? firstLineIndentOverrideCm,
-        decimal? hangingIndentOverrideCm)
+        decimal? hangingIndentOverrideCm,
+        string paragraphText,
+        PageLayoutSnapshot? pageLayout)
     {
         if (format == null)
             return;
@@ -559,7 +625,8 @@ public partial class ValidationService
         {
             result.TotalChecks++;
             var actual = format.DfpJc ?? "unknown";
-            if (AreAlignmentsEquivalent(actual, expectedAlignment))
+            var alignmentContext = CreateAlignmentContext(paragraphText, locations, pageLayout);
+            if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
                 result.PassedChecks++;
             }
@@ -658,6 +725,26 @@ public partial class ValidationService
                     Locations = locations
                 });
             }
+        }
+
+        result.TotalChecks++;
+        var rightCm = GetRightIndentCm(format);
+        if (Math.Abs(rightCm) <= 0.05m)
+        {
+            result.PassedChecks++;
+        }
+        else
+        {
+            result.Errors.Add(new ValidationError
+            {
+                Category = "Isi Buku",
+                Field = "paragraf",
+                Message = "Right indent paragraf harus 0",
+                Expected = "0 cm",
+                Actual = rightCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                Evidence = evidence,
+                Locations = locations
+            });
         }
 
         // Line Spacing

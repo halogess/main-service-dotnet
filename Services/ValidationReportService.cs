@@ -93,8 +93,6 @@ public sealed class ValidationReportService : IValidationReportService
             Status = reportStatus,
             Skor = dokumen.DokumenSkor,
             TotalKesalahan = dokumen.DokumenJumlahKesalahan,
-            CreatedAt = dokumen.DokumenCreatedAt,
-            UpdatedAt = dokumen.DokumenUpdatedAt,
             Summary = summary,
             Rows = rows
         };
@@ -135,7 +133,7 @@ public sealed class ValidationReportService : IValidationReportService
         {
             var pages = ParsePages(kesalahan.KesalahanLokasi);
             var pagesText = FormatPageRanges(pages);
-            var firstPage = pages.FirstOrDefault();
+            var (firstPage, firstY) = ParseLocationSortKey(kesalahan.KesalahanLokasi);
 
             foreach (var detail in kesalahan.Details.OrderBy(d => d.KesalahanDetailId))
             {
@@ -143,16 +141,19 @@ public sealed class ValidationReportService : IValidationReportService
                 {
                     Category = kesalahan.KesalahanKategori,
                     Title = detail.KesalahanDetailJudul,
-                    Explanation = BuildExplanation(detail.KesalahanDetailPenjelasan, detail.KesalahanDetailSteps),
+                    Explanation = FormatNullableText(detail.KesalahanDetailPenjelasan),
+                    Steps = FormatSteps(detail.KesalahanDetailSteps),
                     Pages = pagesText,
                     FirstPage = firstPage,
+                    FirstY = firstY,
                     IsRequired = detail.KesalahanIsRequired
                 });
             }
         }
 
         return rows
-            .OrderBy(r => r.FirstPage == 0 ? int.MaxValue : r.FirstPage)
+            .OrderBy(r => NormalizeSortPage(r.FirstPage))
+            .ThenBy(r => r.FirstY)
             .ThenBy(r => r.Category)
             .ThenBy(r => r.Title)
             .Select((row, index) => row with { Index = index + 1 })
@@ -210,6 +211,66 @@ public sealed class ValidationReportService : IValidationReportService
 
         return pages.Distinct().OrderBy(p => p).ToList();
     }
+
+    private static (int FirstPage, double FirstY) ParseLocationSortKey(string? lokasiJson)
+    {
+        if (string.IsNullOrWhiteSpace(lokasiJson))
+            return (0, double.MaxValue);
+
+        var hasValue = false;
+        var bestPage = 0;
+        var bestY = double.MaxValue;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(lokasiJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return (0, double.MaxValue);
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var halamanKe = 0;
+                if (item.TryGetProperty("halaman_ke", out var halamanEl) &&
+                    halamanEl.ValueKind == JsonValueKind.Number &&
+                    halamanEl.TryGetInt32(out var parsedPage) &&
+                    parsedPage > 0)
+                {
+                    halamanKe = parsedPage;
+                }
+
+                var yTerkecil = double.MaxValue;
+                if (item.TryGetProperty("bbox", out var bboxEl) &&
+                    bboxEl.ValueKind == JsonValueKind.Object &&
+                    bboxEl.TryGetProperty("y0", out var y0El) &&
+                    y0El.ValueKind == JsonValueKind.Number &&
+                    y0El.TryGetDouble(out var parsedY))
+                {
+                    yTerkecil = parsedY;
+                }
+
+                if (!hasValue ||
+                    NormalizeSortPage(halamanKe) < NormalizeSortPage(bestPage) ||
+                    (NormalizeSortPage(halamanKe) == NormalizeSortPage(bestPage) && yTerkecil < bestY))
+                {
+                    hasValue = true;
+                    bestPage = halamanKe;
+                    bestY = yTerkecil;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Ignore parsing errors
+        }
+
+        return hasValue ? (bestPage, bestY) : (0, double.MaxValue);
+    }
+
+    private static int NormalizeSortPage(int page)
+        => page <= 0 ? int.MaxValue : page;
 
     private static List<int> ParsePagesFromFormatted(string? pagesText)
     {
@@ -270,14 +331,16 @@ public sealed class ValidationReportService : IValidationReportService
         return string.Join(", ", ranges);
     }
 
-    private static string BuildExplanation(string? explanation, string? stepsJson)
+    private static string FormatNullableText(string? text)
+        => string.IsNullOrWhiteSpace(text) ? "-" : text.Trim();
+
+    private static string FormatSteps(string? stepsJson)
     {
-        var text = string.IsNullOrWhiteSpace(explanation) ? "-" : explanation.Trim();
         var steps = ParseSteps(stepsJson);
         if (steps.Count == 0)
-            return text;
+            return "-";
 
-        return text + "\nLangkah: " + string.Join("; ", steps);
+        return string.Join("; ", steps);
     }
 
     private static List<string> ParseSteps(string? stepsJson)
@@ -305,8 +368,10 @@ public sealed record ValidationReportRow
     public string Category { get; init; } = string.Empty;
     public string Title { get; init; } = string.Empty;
     public string Explanation { get; init; } = string.Empty;
+    public string Steps { get; init; } = "-";
     public string Pages { get; init; } = "-";
     public int FirstPage { get; init; }
+    public double FirstY { get; init; } = double.MaxValue;
     public bool IsRequired { get; init; }
 }
 
@@ -328,8 +393,6 @@ public sealed record ValidationReportData
     public string? Status { get; init; }
     public int? Skor { get; init; }
     public int? TotalKesalahan { get; init; }
-    public DateTime? CreatedAt { get; init; }
-    public DateTime? UpdatedAt { get; init; }
     public ValidationReportSummary Summary { get; init; } = new();
     public IReadOnlyList<ValidationReportRow> Rows { get; init; } = new List<ValidationReportRow>();
 }
@@ -351,13 +414,12 @@ internal sealed class ValidationReportDocument : IDocument
         container.Page(page =>
         {
             page.Size(PageSizes.A4);
-            page.Margin(2, Unit.Centimetre);
-            page.DefaultTextStyle(x => x.FontSize(11));
+            page.Margin(1.27f, Unit.Centimetre);
+            page.DefaultTextStyle(x => x.FontSize(9));
 
             page.Content().Column(column =>
             {
-                column.Item().AlignCenter().Text("Laporan Validasi Dokumen").FontSize(18).SemiBold();
-                column.Item().AlignRight().Text($"Tanggal laporan: {FormatDateTime(_data.GeneratedAt)}").FontSize(9);
+                column.Item().AlignCenter().Text("Laporan Validasi Dokumen").FontSize(16).SemiBold();
 
                 column.Item().PaddingVertical(8).LineHorizontal(1);
 
@@ -376,7 +438,6 @@ internal sealed class ValidationReportDocument : IDocument
                     AddInfoRow(table, "Nama file", _data.Filename, "Tipe", _data.Tipe);
                     AddInfoRow(table, "Status", _data.Status, "Skor", _data.Skor?.ToString(CultureInfo.InvariantCulture));
                     AddInfoRow(table, "Jumlah kesalahan", _data.TotalKesalahan?.ToString(CultureInfo.InvariantCulture), "Halaman terdampak", _data.Summary.PagesText);
-                    AddInfoRow(table, "Dibuat", FormatDate(_data.CreatedAt), "Terakhir update", FormatDate(_data.UpdatedAt));
                 });
 
                 column.Item().PaddingVertical(8).LineHorizontal(1);
@@ -384,7 +445,7 @@ internal sealed class ValidationReportDocument : IDocument
                 column.Item().Text("Ringkasan").SemiBold();
                 column.Item().Row(row =>
                 {
-                    row.RelativeItem().Text($"Total detail: {_data.Summary.TotalDetails}");
+                    row.RelativeItem().Text($"Total kesalahan: {_data.Summary.TotalDetails}");
                     row.RelativeItem().Text($"Wajib: {_data.Summary.RequiredDetails}");
                     row.RelativeItem().Text($"Saran: {_data.Summary.OptionalDetails}");
                 });
@@ -405,8 +466,9 @@ internal sealed class ValidationReportDocument : IDocument
                         columns.ConstantColumn(26);
                         columns.RelativeColumn(2);
                         columns.RelativeColumn(3);
-                        columns.RelativeColumn(4);
-                        columns.ConstantColumn(60);
+                        columns.RelativeColumn(3);
+                        columns.RelativeColumn(3);
+                        columns.ConstantColumn(55);
                         columns.ConstantColumn(45);
                     });
 
@@ -416,6 +478,7 @@ internal sealed class ValidationReportDocument : IDocument
                         header.Cell().Element(HeaderCellStyle).Text("Kategori");
                         header.Cell().Element(HeaderCellStyle).Text("Judul");
                         header.Cell().Element(HeaderCellStyle).Text("Penjelasan");
+                        header.Cell().Element(HeaderCellStyle).Text("Langkah perbaikan");
                         header.Cell().Element(HeaderCellStyle).Text("Halaman");
                         header.Cell().Element(HeaderCellStyle).Text("Wajib");
                     });
@@ -426,18 +489,23 @@ internal sealed class ValidationReportDocument : IDocument
                         table.Cell().Element(BodyCellStyle).Text(row.Category);
                         table.Cell().Element(BodyCellStyle).Text(row.Title);
                         table.Cell().Element(BodyCellStyle).Text(row.Explanation);
+                        table.Cell().Element(BodyCellStyle).Text(row.Steps);
                         table.Cell().Element(BodyCellStyle).Text(row.Pages);
                         table.Cell().Element(BodyCellStyle).Text(row.IsRequired ? "Ya" : "Saran");
                     }
                 });
             });
 
-            page.Footer().AlignRight().DefaultTextStyle(x => x.FontSize(9)).Text(text =>
+            page.Footer().DefaultTextStyle(x => x.FontSize(7)).Row(row =>
             {
-                text.Span("Halaman ");
-                text.CurrentPageNumber();
-                text.Span(" / ");
-                text.TotalPages();
+                row.RelativeItem().AlignLeft().Text($"Dicetak pada: {FormatPrintedDateTime(_data.GeneratedAt)}");
+                row.ConstantItem(90).AlignRight().Text(text =>
+                {
+                    text.Span("Halaman ");
+                    text.CurrentPageNumber();
+                    text.Span(" / ");
+                    text.TotalPages();
+                });
             });
         });
     }
@@ -458,7 +526,7 @@ internal sealed class ValidationReportDocument : IDocument
             .BorderColor(Colors.Grey.Lighten2)
             .PaddingVertical(4)
             .PaddingHorizontal(3)
-            .DefaultTextStyle(x => x.FontSize(9).SemiBold());
+            .DefaultTextStyle(x => x.FontSize(7).SemiBold());
     }
 
     private static IContainer BodyCellStyle(IContainer container)
@@ -468,7 +536,7 @@ internal sealed class ValidationReportDocument : IDocument
             .BorderColor(Colors.Grey.Lighten2)
             .PaddingVertical(3)
             .PaddingHorizontal(3)
-            .DefaultTextStyle(x => x.FontSize(9));
+            .DefaultTextStyle(x => x.FontSize(7));
     }
 
     private static IContainer InfoLabelStyle(IContainer container)
@@ -476,26 +544,16 @@ internal sealed class ValidationReportDocument : IDocument
         return container
             .PaddingVertical(2)
             .PaddingRight(6)
-            .DefaultTextStyle(x => x.FontSize(9).SemiBold());
+            .DefaultTextStyle(x => x.FontSize(7).SemiBold());
     }
 
     private static IContainer InfoValueStyle(IContainer container)
     {
         return container
             .PaddingVertical(2)
-            .DefaultTextStyle(x => x.FontSize(9));
+            .DefaultTextStyle(x => x.FontSize(7));
     }
 
-    private static string FormatDate(DateTime? date)
-    {
-        if (!date.HasValue)
-            return "-";
-
-        return date.Value.ToString("dd MMMM yyyy HH:mm", IdCulture);
-    }
-
-    private static string FormatDateTime(DateTime date)
-    {
-        return date.ToString("dd MMMM yyyy HH:mm", IdCulture);
-    }
+    private static string FormatPrintedDateTime(DateTime date)
+        => date.ToString("dd MMMM yyyy HH.mm", IdCulture);
 }

@@ -4,6 +4,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 
@@ -56,6 +57,17 @@ public class ParagraphExtractor
         public Run? FirstResultRun { get; set; }
     }
 
+    private sealed class NumberingContinuationState
+    {
+        public string? StyleId { get; set; }
+        public int? NumId { get; set; }
+        public int Ilvl { get; set; }
+        public int? AbstractNumId { get; set; }
+        public bool FromDirectOrContinuation { get; set; }
+    }
+
+    private readonly NumberingContinuationState _numberingContinuation = new();
+
     public ParagraphExtractor(ILogger logger, DrawingExtractor drawingExtractor)
     {
         _logger = logger;
@@ -105,6 +117,15 @@ public class ParagraphExtractor
         _tableExtractor = tableExtractor;
     }
 
+    /// <summary>
+    /// Resets state used to continue restarted list numbering across paragraphs.
+    /// Call this when entering a new extraction flow/part.
+    /// </summary>
+    public void ResetNumberingState()
+    {
+        ClearNumberingContinuationState();
+    }
+
 
 
     public string DetectParagraphType(Paragraph p)
@@ -138,6 +159,69 @@ public class ParagraphExtractor
         return "paragraph";
     }
 
+    private void ClearNumberingContinuationState()
+    {
+        _numberingContinuation.StyleId = null;
+        _numberingContinuation.NumId = null;
+        _numberingContinuation.Ilvl = 0;
+        _numberingContinuation.AbstractNumId = null;
+        _numberingContinuation.FromDirectOrContinuation = false;
+    }
+
+    private bool TryResolveContinuationNumId(
+        NumberingDefinitionsPart numberingPart,
+        string? styleId,
+        int styleNumId,
+        int ilvl,
+        out int continuedNumId)
+    {
+        continuedNumId = 0;
+
+        if (string.IsNullOrWhiteSpace(styleId))
+            return false;
+
+        if (!_numberingContinuation.FromDirectOrContinuation ||
+            !_numberingContinuation.NumId.HasValue ||
+            _numberingContinuation.NumId.Value <= 0)
+            return false;
+
+        if (!string.Equals(_numberingContinuation.StyleId, styleId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (_numberingContinuation.Ilvl != ilvl)
+            return false;
+
+        if (_numberingContinuation.NumId.Value == styleNumId)
+            return false;
+
+        var previousAbstractId = _numberingContinuation.AbstractNumId
+            ?? NumberingResolver.GetAbstractNumberId(numberingPart, _numberingContinuation.NumId.Value);
+        var styleAbstractId = NumberingResolver.GetAbstractNumberId(numberingPart, styleNumId);
+
+        if (!previousAbstractId.HasValue || !styleAbstractId.HasValue)
+            return false;
+
+        if (previousAbstractId.Value != styleAbstractId.Value)
+            return false;
+
+        continuedNumId = _numberingContinuation.NumId.Value;
+        return true;
+    }
+
+    private void UpdateNumberingContinuationState(
+        NumberingDefinitionsPart numberingPart,
+        string? styleId,
+        int numId,
+        int ilvl,
+        bool fromDirectOrContinuation)
+    {
+        _numberingContinuation.StyleId = styleId;
+        _numberingContinuation.NumId = numId;
+        _numberingContinuation.Ilvl = ilvl;
+        _numberingContinuation.AbstractNumId = NumberingResolver.GetAbstractNumberId(numberingPart, numId);
+        _numberingContinuation.FromDirectOrContinuation = fromDirectOrContinuation;
+    }
+
     public IEnumerable<(string type, JObject json)> FlattenParagraph(
         Paragraph p,
         NumberingDefinitionsPart? numberingPart = null,
@@ -148,6 +232,52 @@ public class ParagraphExtractor
 
         // Always yield a result, even for empty paragraphs, to maintain element count consistency
         yield return (paragraphType, new JObject { ["content"] = content });
+    }
+
+    private static bool IsCaptionParagraphStyle(string? styleId)
+    {
+        if (string.IsNullOrWhiteSpace(styleId))
+            return false;
+
+        return styleId.Equals("STTSGambar", StringComparison.OrdinalIgnoreCase) ||
+               styleId.Equals("STTSTabel", StringComparison.OrdinalIgnoreCase) ||
+               styleId.Equals("Caption", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCaptionSequenceInstruction(string? instruction)
+    {
+        if (string.IsNullOrWhiteSpace(instruction))
+            return false;
+
+        return Regex.IsMatch(
+            instruction,
+            "\\bSEQ\\s+(Gambar|Tabel)(?:[_\\w\\.-]*)?\\b",
+            RegexOptions.IgnoreCase);
+    }
+
+    private static bool HasCaptionSequenceField(Paragraph paragraph)
+    {
+        foreach (var simpleField in paragraph.Descendants<SimpleField>())
+        {
+            if (IsCaptionSequenceInstruction(simpleField.Instruction?.Value))
+                return true;
+        }
+
+        foreach (var fieldCode in paragraph.Descendants<FieldCode>())
+        {
+            if (IsCaptionSequenceInstruction(fieldCode.Text))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCaptionParagraph(Paragraph paragraph, string? styleId)
+    {
+        if (IsCaptionParagraphStyle(styleId))
+            return true;
+
+        return HasCaptionSequenceField(paragraph);
     }
 
 
@@ -161,6 +291,8 @@ public class ParagraphExtractor
         
         int itemIndex = 0;
         var helper = new ParagraphContentHelper();
+        var paragraphStyleId = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        var isCaptionParagraph = IsCaptionParagraph(p, paragraphStyleId);
         
         // --- Numbering Extraction Logic (delegated to NumberingExtractor) ---
         string numberingText = "";
@@ -194,9 +326,17 @@ public class ParagraphExtractor
                     var (styleNumId, styleIlvl) = _styleResolver.GetEffectiveNumberingProperties(p);
                     if (styleNumId != null && styleNumId.Value != 0)
                     {
-                        numId = styleNumId;
+                        if (TryResolveContinuationNumId(numberingPart, paragraphStyleId, styleNumId.Value, styleIlvl, out var continuedNumId))
+                        {
+                            numId = continuedNumId;
+                            source = "continuation";
+                        }
+                        else
+                        {
+                            numId = styleNumId;
+                            source = "style";
+                        }
                         ilvl = styleIlvl;
-                        source = "style";
                     }
                 }
                 
@@ -205,17 +345,34 @@ public class ParagraphExtractor
                     string label = NumberingExtractor.GetNumberingText(numberingPart, numId.Value, ilvl, numberingCounters);
                     if (!string.IsNullOrEmpty(label))
                         numberingText = label;
+
+                    UpdateNumberingContinuationState(
+                        numberingPart,
+                        paragraphStyleId,
+                        numId.Value,
+                        ilvl,
+                        source == "direct" || source == "continuation");
+
                     _logger.LogInformation("Numbering: source={Source}, numId={NumId}, ilvl={Ilvl}, label={Label}", 
                         source, numId, ilvl, label);
+                }
+                else
+                {
+                    ClearNumberingContinuationState();
                 }
             }
             catch (Exception ex)
             {
+                ClearNumberingContinuationState();
                 _logger.LogWarning(ex, "Failed to resolve numbering for paragraph");
             }
         }
+        else
+        {
+            ClearNumberingContinuationState();
+        }
         
-        if (!string.IsNullOrEmpty(numberingText))
+        if (!string.IsNullOrEmpty(numberingText) && !isCaptionParagraph)
             regularItems.Add((new JObject { ["type"] = "text", ["value"] = numberingText }, itemIndex++));
 
         void FlushText()

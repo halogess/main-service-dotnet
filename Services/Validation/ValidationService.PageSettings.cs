@@ -103,6 +103,8 @@ public partial class ValidationService
             return result;
         }
 
+        var sectionPageMap = await LoadSectionPageMapAsync(sections, cancellationToken);
+
         _logger.LogInformation("Validating {Count} sections for dokumen ID: {DokumenId}, tipe: {DokumenTipe}",
             sections.Count, dokumenId, dokumen.DokumenTipe);
 
@@ -126,38 +128,38 @@ public partial class ValidationService
             if (paperRule?.Section != null)
             {
                 var allowedPapers = GetAllowedPapersForSection(paperRule.Section, sectionType);
-                ValidatePaperSize(result, section, allowedPapers, i + 1, sectionType);
+                ValidatePaperSize(result, section, allowedPapers, i + 1, sectionType, sectionPageMap);
             }
 
             // Validate margins
             if (marginRule?.Paper != null)
             {
-                ValidateMargins(result, section, marginRule.Paper, i + 1, sectionType);
+                ValidateMargins(result, section, marginRule.Paper, i + 1, sectionType, sectionPageMap);
             }
 
             // Validate header/footer distances
             if (headerFooterRule != null)
             {
-                ValidateHeaderFooter(result, section, headerFooterRule, i + 1, sectionType);
+                ValidateHeaderFooter(result, section, headerFooterRule, i + 1, sectionType, sectionPageMap);
             }
 
             // Validate odd/even headers (must be off)
-            ValidateDifferentOddEven(result, section, i + 1, sectionType);
+            ValidateDifferentOddEven(result, section, i + 1, sectionType, sectionPageMap);
 
             // Validate gutter
             if (gutterRule != null)
             {
-                ValidateGutter(result, section, gutterRule, i + 1, sectionType);
+                ValidateGutter(result, section, gutterRule, i + 1, sectionType, sectionPageMap);
             }
 
             // Validate column count (must be 1)
-            ValidateColumnCount(result, section, effectiveColumnRule, i + 1, sectionType);
+            ValidateColumnCount(result, section, effectiveColumnRule, i + 1, sectionType, sectionPageMap);
 
             // Validate page numbering
             if (pageNumberingRule?.Section != null)
             {
                 var expectedNumbering = GetExpectedPageNumbering(pageNumberingRule.Section, sectionType);
-                ValidatePageNumbering(result, section, expectedNumbering, i + 1, sectionType);
+                ValidatePageNumbering(result, section, expectedNumbering, i + 1, sectionType, sectionPageMap);
             }
         }
 
@@ -221,7 +223,13 @@ public partial class ValidationService
         };
     }
 
-    private void ValidatePaperSize(ValidationResult result, DokumenSection section, List<PaperSpec> allowedPapers, int sectionNumber, string sectionType)
+    private void ValidatePaperSize(
+        ValidationResult result,
+        DokumenSection section,
+        List<PaperSpec> allowedPapers,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         result.TotalChecks++;
 
@@ -256,7 +264,8 @@ public partial class ValidationService
                 Message = $"Ukuran kertas section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                 Expected = allowedStr,
                 Actual = actualDescriptor,
-                SectionIndex = sectionNumber
+                SectionIndex = sectionNumber,
+                Locations = BuildPageSettingsLocations("paper", section, sectionPageMap)
             });
         }
     }
@@ -298,7 +307,13 @@ public partial class ValidationService
         return $"{widthText} x {heightText} cm";
     }
 
-    private void ValidateMargins(ValidationResult result, DokumenSection section, PaperMargins margins, int sectionNumber, string sectionType)
+    private void ValidateMargins(
+        ValidationResult result,
+        DokumenSection section,
+        PaperMargins margins,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         var paperSize = DetectPaperSize(section.DsecPageWidthTwips, section.DsecPageHeightTwips);
         var orientation = section.DsecOrientation?.ToUpper() ?? "PORTRAIT";
@@ -315,13 +330,21 @@ public partial class ValidationService
             return;
 
         // Validate each margin
-        ValidateSingleMargin(result, "top", section.DsecMarginTopTwips, expectedMargins.Top, sectionNumber, sectionType);
-        ValidateSingleMargin(result, "bottom", section.DsecMarginBottomTwips, expectedMargins.Bottom, sectionNumber, sectionType);
-        ValidateSingleMargin(result, "left", section.DsecMarginLeftTwips, expectedMargins.Left, sectionNumber, sectionType);
-        ValidateSingleMargin(result, "right", section.DsecMarginRightTwips, expectedMargins.Right, sectionNumber, sectionType);
+        ValidateSingleMargin(result, "top", section, section.DsecMarginTopTwips, expectedMargins.Top, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "bottom", section, section.DsecMarginBottomTwips, expectedMargins.Bottom, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "left", section, section.DsecMarginLeftTwips, expectedMargins.Left, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "right", section, section.DsecMarginRightTwips, expectedMargins.Right, sectionNumber, sectionType, sectionPageMap);
     }
 
-    private void ValidateSingleMargin(ValidationResult result, string marginName, uint? actualTwips, decimal? expectedCm, int sectionNumber, string sectionType)
+    private void ValidateSingleMargin(
+        ValidationResult result,
+        string marginName,
+        DokumenSection section,
+        uint? actualTwips,
+        decimal? expectedCm,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         if (!expectedCm.HasValue)
             return;
@@ -344,12 +367,19 @@ public partial class ValidationService
                 Message = $"Margin {marginName} section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                 Expected = $"{expectedCm.Value} cm",
                 Actual = $"{actualCm:F2} cm",
-                SectionIndex = sectionNumber
+                SectionIndex = sectionNumber,
+                Locations = BuildPageSettingsLocations($"margin_{marginName}", section, sectionPageMap, expectedCm)
             });
         }
     }
 
-    private void ValidateHeaderFooter(ValidationResult result, DokumenSection section, HeaderFooterRule rule, int sectionNumber, string sectionType)
+    private void ValidateHeaderFooter(
+        ValidationResult result,
+        DokumenSection section,
+        HeaderFooterRule rule,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         // Validate header distance from top
         var expectedHeaderCm = rule.HeaderFromTop?.Value;
@@ -375,7 +405,8 @@ public partial class ValidationService
                     Message = $"Jarak header dari atas section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                     Expected = $"{expectedHeaderCm.Value} cm",
                     Actual = $"{actualHeaderCm:F2} cm",
-                    SectionIndex = sectionNumber
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("header_from_top", section, sectionPageMap, expectedHeaderCm)
                 });
             }
         }
@@ -404,13 +435,19 @@ public partial class ValidationService
                     Message = $"Jarak footer dari bawah section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                     Expected = $"{expectedFooterCm.Value} cm",
                     Actual = $"{actualFooterCm:F2} cm",
-                    SectionIndex = sectionNumber
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("footer_from_bottom", section, sectionPageMap, expectedFooterCm)
                 });
             }
         }
     }
 
-    private void ValidateDifferentOddEven(ValidationResult result, DokumenSection section, int sectionNumber, string sectionType)
+    private void ValidateDifferentOddEven(
+        ValidationResult result,
+        DokumenSection section,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         result.TotalChecks++;
 
@@ -427,11 +464,18 @@ public partial class ValidationService
             Message = $"Pengaturan header/footer ganjil-genap section {sectionNumber} (bagian {sectionType}) tidak diperbolehkan",
             Expected = "0",
             Actual = "1",
-            SectionIndex = sectionNumber
+            SectionIndex = sectionNumber,
+            Locations = BuildPageSettingsLocations("different_odd_even", section, sectionPageMap)
         });
     }
 
-    private void ValidateGutter(ValidationResult result, DokumenSection section, GutterRule rule, int sectionNumber, string sectionType)
+    private void ValidateGutter(
+        ValidationResult result,
+        DokumenSection section,
+        GutterRule rule,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         // Validate gutter size
         result.TotalChecks++;
@@ -453,7 +497,8 @@ public partial class ValidationService
                 Message = $"Gutter section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                 Expected = $"{rule.Gutter} cm",
                 Actual = $"{actualGutterCm:F2} cm",
-                SectionIndex = sectionNumber
+                SectionIndex = sectionNumber,
+                Locations = BuildPageSettingsLocations("gutter", section, sectionPageMap)
             });
         }
 
@@ -477,13 +522,20 @@ public partial class ValidationService
                     Message = $"Posisi gutter section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                     Expected = expectedPosition,
                     Actual = actualPosition,
-                    SectionIndex = sectionNumber
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("gutter_position", section, sectionPageMap)
                 });
             }
         }
     }
 
-    private void ValidateColumnCount(ValidationResult result, DokumenSection section, ColumnRule rule, int sectionNumber, string sectionType)
+    private void ValidateColumnCount(
+        ValidationResult result,
+        DokumenSection section,
+        ColumnRule rule,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         result.TotalChecks++;
         var actualColumns = (int)(section.DsecColumnCount ?? 1);
@@ -501,7 +553,8 @@ public partial class ValidationService
                 Message = $"Jumlah kolom section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                 Expected = $"{rule.Count} kolom",
                 Actual = $"{actualColumns} kolom",
-                SectionIndex = sectionNumber
+                SectionIndex = sectionNumber,
+                Locations = BuildPageSettingsLocations("column_count", section, sectionPageMap)
             });
         }
     }
@@ -518,7 +571,13 @@ public partial class ValidationService
         };
     }
 
-    private void ValidatePageNumbering(ValidationResult result, DokumenSection section, PageNumberingSpec? expected, int sectionNumber, string sectionType)
+    private void ValidatePageNumbering(
+        ValidationResult result,
+        DokumenSection section,
+        PageNumberingSpec? expected,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
     {
         if (expected == null)
             return;
@@ -543,7 +602,8 @@ public partial class ValidationService
                     Message = $"Format nomor halaman section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                     Expected = expectedFormat,
                     Actual = actualFormat,
-                    SectionIndex = sectionNumber
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("page_number_format", section, sectionPageMap)
                 });
             }
         }
@@ -568,10 +628,268 @@ public partial class ValidationService
                     Message = $"Nomor halaman awal section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                     Expected = $"{expected.Start.Value}",
                     Actual = actualStart == 0 ? "lanjutan" : $"{actualStart}",
-                    SectionIndex = sectionNumber
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("page_number_start", section, sectionPageMap)
                 });
             }
         }
+    }
+
+    private async Task<Dictionary<uint, int>> LoadSectionPageMapAsync(
+        IReadOnlyList<DokumenSection> sections,
+        CancellationToken cancellationToken)
+    {
+        var sectionPageMap = new Dictionary<uint, int>();
+        if (sections == null || sections.Count == 0)
+            return sectionPageMap;
+
+        var sectionIds = sections
+            .Select(s => s.DsecId)
+            .Distinct()
+            .ToList();
+
+        var bodyParts = await _db.DokumenParts
+            .Where(p => sectionIds.Contains(p.DsecId) && p.DpartType == "body")
+            .Select(p => new { p.DpartId, p.DsecId })
+            .ToListAsync(cancellationToken);
+
+        if (bodyParts.Count == 0)
+            return sectionPageMap;
+
+        var partIds = bodyParts
+            .Select(p => p.DpartId)
+            .Distinct()
+            .ToList();
+
+        var elements = await _db.DokumenElemens
+            .Where(e => e.DpartId.HasValue && partIds.Contains(e.DpartId.Value))
+            .Select(e => new
+            {
+                DpartId = e.DpartId!.Value,
+                e.DelemenId,
+                e.DelemenType,
+                e.DelemenSequence
+            })
+            .ToListAsync(cancellationToken);
+
+        if (elements.Count == 0)
+            return sectionPageMap;
+
+        var candidatesByPart = elements
+            .GroupBy(e => e.DpartId)
+            .ToDictionary(
+                g => g.Key,
+                g => g
+                    .OrderBy(e => string.Equals(e.DelemenType, "paragraph", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                    .ThenBy(e => e.DelemenSequence ?? uint.MaxValue)
+                    .ThenBy(e => e.DelemenId)
+                    .Select(e => e.DelemenId)
+                    .ToList());
+
+        var candidateIds = candidatesByPart
+            .Values
+            .SelectMany(ids => ids)
+            .Distinct()
+            .ToList();
+
+        var pageByElement = await LoadPageNumbersAsync(candidateIds, cancellationToken);
+
+        foreach (var bodyPart in bodyParts.OrderBy(p => p.DpartId))
+        {
+            if (sectionPageMap.ContainsKey(bodyPart.DsecId))
+                continue;
+
+            if (!candidatesByPart.TryGetValue(bodyPart.DpartId, out var candidates) || candidates.Count == 0)
+                continue;
+
+            foreach (var candidateId in candidates)
+            {
+                if (pageByElement.TryGetValue(candidateId, out var page) && page > 0)
+                {
+                    sectionPageMap[bodyPart.DsecId] = page;
+                    break;
+                }
+            }
+        }
+
+        // Fallback: single-section documents should still point to page 1
+        // when no anchor page could be resolved from visual data.
+        if (sections.Count == 1)
+        {
+            var onlySectionId = sections[0].DsecId;
+            if (!sectionPageMap.ContainsKey(onlySectionId))
+                sectionPageMap[onlySectionId] = 1;
+        }
+
+        return sectionPageMap;
+    }
+
+    private List<ErrorLocation> BuildPageSettingsLocations(
+        string field,
+        DokumenSection section,
+        Dictionary<uint, int> sectionPageMap,
+        decimal? expectedDistanceCm = null)
+    {
+        if (!sectionPageMap.TryGetValue(section.DsecId, out var page) || page <= 0)
+            return new List<ErrorLocation>();
+
+        var bbox = BuildPageSettingsBbox(field, section, expectedDistanceCm);
+        return new List<ErrorLocation>
+        {
+            new()
+            {
+                HalamanKe = page,
+                Bbox = bbox
+            }
+        };
+    }
+
+    private ErrorBbox? BuildPageSettingsBbox(string field, DokumenSection section, decimal? expectedDistanceCm)
+    {
+        if (!TryGetPageBoundsPoints(section, out var pageWidth, out var pageHeight))
+            return null;
+
+        var normalizedField = (field ?? string.Empty).Trim().ToLowerInvariant();
+        if (normalizedField.StartsWith("margin_", StringComparison.Ordinal))
+        {
+            var side = normalizedField["margin_".Length..];
+            return BuildMarginAreaBbox(side, section, pageWidth, pageHeight, expectedDistanceCm);
+        }
+
+        if (normalizedField == "header_from_top")
+            return BuildHeaderAreaBbox(section, pageWidth, pageHeight, expectedDistanceCm);
+
+        if (normalizedField == "footer_from_bottom")
+            return BuildFooterAreaBbox(section, pageWidth, pageHeight, expectedDistanceCm);
+
+        return CreateBbox(0m, 0m, pageWidth, pageHeight, pageWidth, pageHeight);
+    }
+
+    private ErrorBbox? BuildMarginAreaBbox(
+        string side,
+        DokumenSection section,
+        decimal pageWidth,
+        decimal pageHeight,
+        decimal? expectedDistanceCm)
+    {
+        switch ((side ?? string.Empty).Trim().ToLowerInvariant())
+        {
+            case "top":
+            {
+                var top = ResolveDistancePoints(section.DsecMarginTopTwips, expectedDistanceCm);
+                return CreateBbox(0m, 0m, pageWidth, top, pageWidth, pageHeight);
+            }
+            case "bottom":
+            {
+                var bottom = ResolveDistancePoints(section.DsecMarginBottomTwips, expectedDistanceCm);
+                return CreateBbox(0m, pageHeight - bottom, pageWidth, pageHeight, pageWidth, pageHeight);
+            }
+            case "left":
+            {
+                var left = ResolveDistancePoints(section.DsecMarginLeftTwips, expectedDistanceCm);
+                return CreateBbox(0m, 0m, left, pageHeight, pageWidth, pageHeight);
+            }
+            case "right":
+            {
+                var right = ResolveDistancePoints(section.DsecMarginRightTwips, expectedDistanceCm);
+                return CreateBbox(pageWidth - right, 0m, pageWidth, pageHeight, pageWidth, pageHeight);
+            }
+            default:
+                return CreateBbox(0m, 0m, pageWidth, pageHeight, pageWidth, pageHeight);
+        }
+    }
+
+    private ErrorBbox? BuildHeaderAreaBbox(
+        DokumenSection section,
+        decimal pageWidth,
+        decimal pageHeight,
+        decimal? expectedDistanceCm)
+    {
+        var headerDistance = ResolveDistancePoints(section.DsecHeaderMarginTwips, expectedDistanceCm);
+        return CreateBbox(0m, 0m, pageWidth, headerDistance, pageWidth, pageHeight);
+    }
+
+    private ErrorBbox? BuildFooterAreaBbox(
+        DokumenSection section,
+        decimal pageWidth,
+        decimal pageHeight,
+        decimal? expectedDistanceCm)
+    {
+        var footerDistance = ResolveDistancePoints(section.DsecFooterMarginTwips, expectedDistanceCm);
+        return CreateBbox(0m, pageHeight - footerDistance, pageWidth, pageHeight, pageWidth, pageHeight);
+    }
+
+    private bool TryGetPageBoundsPoints(DokumenSection section, out decimal widthPoints, out decimal heightPoints)
+    {
+        var widthFromSection = TwipsToPoints(section.DsecPageWidthTwips);
+        var heightFromSection = TwipsToPoints(section.DsecPageHeightTwips);
+        if (widthFromSection.HasValue && heightFromSection.HasValue &&
+            widthFromSection.Value > 0 && heightFromSection.Value > 0)
+        {
+            widthPoints = widthFromSection.Value;
+            heightPoints = heightFromSection.Value;
+            return true;
+        }
+
+        var detectedSize = DetectPaperSize(section.DsecPageWidthTwips, section.DsecPageHeightTwips);
+        if (!PaperSizes.TryGetValue(detectedSize, out var dimensions))
+            dimensions = PaperSizes["A4"];
+
+        var orientation = (section.DsecOrientation ?? "PORTRAIT").Trim().ToUpperInvariant();
+        var widthTwips = dimensions.Width;
+        var heightTwips = dimensions.Height;
+        if (orientation == "LANDSCAPE")
+            (widthTwips, heightTwips) = (heightTwips, widthTwips);
+
+        widthPoints = widthTwips / 20m;
+        heightPoints = heightTwips / 20m;
+        return widthPoints > 0m && heightPoints > 0m;
+    }
+
+    private static decimal ResolveDistancePoints(uint? twips, decimal? expectedDistanceCm)
+    {
+        var actual = TwipsToPoints(twips) ?? 0m;
+        if (actual > 0m)
+            return actual;
+
+        if (expectedDistanceCm.HasValue && expectedDistanceCm.Value > 0m)
+            return expectedDistanceCm.Value * TwipsPerCm / 20m;
+
+        return 0m;
+    }
+
+    private static ErrorBbox? CreateBbox(
+        decimal x0,
+        decimal y0,
+        decimal x1,
+        decimal y1,
+        decimal pageWidth,
+        decimal pageHeight)
+    {
+        var left = ClampToRange(Math.Min(x0, x1), 0m, pageWidth);
+        var right = ClampToRange(Math.Max(x0, x1), 0m, pageWidth);
+        var top = ClampToRange(Math.Min(y0, y1), 0m, pageHeight);
+        var bottom = ClampToRange(Math.Max(y0, y1), 0m, pageHeight);
+
+        if (right <= left || bottom <= top)
+            return null;
+
+        return new ErrorBbox
+        {
+            X0 = left,
+            Y0 = top,
+            X1 = right,
+            Y1 = bottom
+        };
+    }
+
+    private static decimal ClampToRange(decimal value, decimal min, decimal max)
+    {
+        if (value < min)
+            return min;
+        if (value > max)
+            return max;
+        return value;
     }
 
     private string DetectPaperSize(uint? widthTwips, uint? heightTwips)

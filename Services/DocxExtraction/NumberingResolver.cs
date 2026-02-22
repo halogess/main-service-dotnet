@@ -10,6 +10,16 @@ namespace ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 public class NumberingResolver
 {
     /// <summary>
+    /// Gets abstractNumId from numbering.xml for a given numId
+    /// </summary>
+    public static int? GetAbstractNumberId(NumberingDefinitionsPart numberingPart, int numId)
+    {
+        return numberingPart.Numbering?.Elements<NumberingInstance>()
+            .FirstOrDefault(n => n.NumberID?.Value == numId)?
+            .AbstractNumId?.Val?.Value;
+    }
+
+    /// <summary>
     /// Gets the Level element from numbering.xml for a given numId and ilvl
     /// </summary>
     public static Level? GetNumberingLevel(NumberingDefinitionsPart numberingPart, int numId, int ilvl)

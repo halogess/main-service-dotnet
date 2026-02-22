@@ -183,12 +183,18 @@ public partial class ValidationService
         result.TotalChecks++;
         if (!titleIds.Contains(firstElement.DelemenId))
         {
+            var pageNumbers = await LoadPageNumbersAsync(titleIds, cancellationToken);
+            var pageBboxMap = await LoadPageBboxMapAsync(titleIds, cancellationToken);
+            var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
+            var misplacedTitleId = titleElementId ?? titleIds.FirstOrDefault();
+
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
                 Field = "judul_bab",
                 Message = "Judul bab harus berada di elemen pertama",
-                DokumenElemenId = firstElement.DelemenId
+                DokumenElemenId = misplacedTitleId == 0 ? null : misplacedTitleId,
+                Locations = locations
             });
             return result;
         }
@@ -210,6 +216,14 @@ public partial class ValidationService
         var numberLine = titleLines.FirstOrDefault() ?? string.Empty;
         var titleLineCandidates = titleLines.Skip(1).ToList();
         var titleLinesNonEmpty = titleLineCandidates.Where(line => !string.IsNullOrWhiteSpace(line)).ToList();
+        var titleAlignmentText = NormalizeWhitespace(string.Join(" ", titleLines.Where(line => !string.IsNullOrWhiteSpace(line))));
+        var titlePageNumbers = await LoadPageNumbersAsync(titleIds, cancellationToken);
+        var titlePageBboxMap = await LoadPageBboxMapAsync(titleIds, cancellationToken);
+        var titleAlignmentLocations = CreateLocations(titlePageNumbers.Values, titlePageBboxMap);
+        PageLayoutSnapshot? titlePageLayout = null;
+        var titleLayoutsById = await LoadPageLayoutsAsync(titleIds, cancellationToken);
+        if (titleLayoutsById.Count > 0)
+            titlePageLayout = titleLayoutsById.Values.FirstOrDefault();
 
         result.TotalChecks++;
         if (!HasDisallowedWhitespace(numberLine))
@@ -394,13 +408,11 @@ public partial class ValidationService
                 .Select(pf => pf!.DfpJc ?? "unknown")
                 .Distinct()
                 .ToList();
-            var expectedNormalized = NormalizeAlignmentValue(expectedAlignment);
-            var normalizedAlignments = actualAlignments
-                .Select(NormalizeAlignmentValue)
-                .Distinct()
-                .ToList();
+            var alignmentContext = CreateAlignmentContext(titleAlignmentText, titleAlignmentLocations, titlePageLayout);
+            var allEquivalent = actualAlignments
+                .All(actual => AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext));
 
-            if (normalizedAlignments.All(a => string.Equals(a, expectedNormalized, StringComparison.OrdinalIgnoreCase)))
+            if (allEquivalent)
             {
                 result.PassedChecks++;
             }
@@ -1436,6 +1448,7 @@ public partial class ValidationService
         {
             "judul_bab" => 0,
             "judul_subbab" => 1,
+            "judul_kode" => 2,
             "caption_gambar" => 2,
             "caption_tabel" => 3,
             "paragraf" => 4,
@@ -1836,6 +1849,15 @@ public partial class ValidationService
         }
 
         return null;
+    }
+
+    private static decimal GetRightIndentCm(DokumenFormatParagraf format)
+    {
+        var rightTwips = format.DfpIndRightTwips.HasValue && format.DfpIndRightTwips.Value != 0
+            ? format.DfpIndRightTwips.Value
+            : format.DfpIndEndTwips ?? 0;
+
+        return rightTwips / 1440.0m * 2.54m;
     }
 
     private static decimal? TwipsToPoints(uint? twips)

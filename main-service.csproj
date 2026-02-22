@@ -16,6 +16,7 @@
     <Compile Remove="DebugShapes\**" />
     <Compile Remove="DebugFontResolution\**" />
     <Compile Remove="Tests\**" />
+    <Compile Remove="tmp_*\**" />
     <Content Remove="DbFixer\**" />
     <Content Remove="DocChecker\**" />
     <Content Remove="DebugSections\**" />
@@ -23,6 +24,7 @@
     <Content Remove="DebugTableExtraction\**" />
     <Content Remove="DebugFontResolution\**" />
     <Content Remove="Tests\**" />
+    <Content Remove="tmp_*\**" />
     <EmbeddedResource Remove="DbFixer\**" />
     <EmbeddedResource Remove="DocChecker\**" />
     <EmbeddedResource Remove="DebugSections\**" />
@@ -30,6 +32,7 @@
     <EmbeddedResource Remove="DebugTableExtraction\**" />
     <EmbeddedResource Remove="DebugFontResolution\**" />
     <EmbeddedResource Remove="Tests\**" />
+    <EmbeddedResource Remove="tmp_*\**" />
     <None Remove="DbFixer\**" />
     <None Remove="DocChecker\**" />
     <None Remove="DebugSections\**" />
@@ -37,6 +40,7 @@
     <None Remove="DebugTableExtraction\**" />
     <None Remove="DebugFontResolution\**" />
     <None Remove="Tests\**" />
+    <None Remove="tmp_*\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -57,8 +61,9 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
     <PackageReference Include="QuestPDF" Version="2024.3.0" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.14.0" />
-    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
   </ItemGroup>
 
   <ItemGroup>

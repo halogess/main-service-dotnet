@@ -109,17 +109,41 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         stoppingToken);
                                 }
 
-                                // Generate validation report before status updated
+                                var activeAturan = await db.Aturans
+                                    .Where(a => a.AturanStatus == 1)
+                                    .OrderByDescending(a => a.AturanCreatedAt)
+                                    .FirstOrDefaultAsync(stoppingToken);
+
+                                var minimumScore = (decimal)(activeAturan?.AturanSkorMinimum ?? 80u);
+                                var isLolos = validationResult.Score >= minimumScore;
+                                dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
+                                dokumen.DokumenUpdatedAt = DateTime.Now;
+
+                                if (activeAturan == null)
+                                {
+                                    _logger.LogWarning(
+                                        "No active aturan found when determining validation status for dokumen ID: {DokumenId}. Using default minimum score: {MinimumScore}",
+                                        queue.DokumenId,
+                                        minimumScore);
+                                }
+                                else
+                                {
+                                    _logger.LogInformation(
+                                        "Validation status for dokumen ID: {DokumenId} determined by score. Score: {Score}, MinimumScore: {MinimumScore}, AturanId: {AturanId}, Status: {Status}",
+                                        queue.DokumenId,
+                                        validationResult.Score,
+                                        minimumScore,
+                                        activeAturan.AturanId,
+                                        dokumen.DokumenStatus);
+                                }
+
+                                // Generate validation report after status is updated
                                 await reportService.GenerateDokumenReportAsync(
                                     (int)queue.DokumenId.Value,
                                     dokumen.MhsNrp,
                                     "admin",
                                     refresh: true,
                                     cancellationToken: stoppingToken);
-
-                                var isLolos = dokumen.DokumenJumlahKesalahan == 0;
-                                dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
-                                dokumen.DokumenUpdatedAt = DateTime.Now;
 
                                 // Notify: Completed
                                 await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "completed", 100);

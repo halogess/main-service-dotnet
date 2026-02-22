@@ -231,11 +231,11 @@ public partial class ValidationService
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
 
         if (allowedPapers.Count == 0)
         {
-            result.PassedChecks++; // No restriction for this section type
+            result.IncrementPassedChecks(); // No restriction for this section type
             return;
         }
 
@@ -252,7 +252,7 @@ public partial class ValidationService
 
         if (isValid)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {
@@ -349,14 +349,14 @@ public partial class ValidationService
         if (!expectedCm.HasValue)
             return;
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
 
         var expectedTwips = expectedCm.Value * TwipsPerCm;
         var actualCm = actualTwips.HasValue ? actualTwips.Value / TwipsPerCm : 0;
 
         if (actualTwips.HasValue && Math.Abs(actualTwips.Value - expectedTwips) <= TwipsTolerance * 2)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {
@@ -385,7 +385,7 @@ public partial class ValidationService
         var expectedHeaderCm = rule.HeaderFromTop?.Value;
         if (expectedHeaderCm.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expectedHeaderTwips = expectedHeaderCm.Value * TwipsPerCm;
             var actualHeaderCm = section.DsecHeaderMarginTwips.HasValue
                 ? section.DsecHeaderMarginTwips.Value / TwipsPerCm
@@ -394,7 +394,7 @@ public partial class ValidationService
             if (section.DsecHeaderMarginTwips.HasValue &&
                 Math.Abs(section.DsecHeaderMarginTwips.Value - expectedHeaderTwips) <= TwipsTolerance * 2)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -415,7 +415,7 @@ public partial class ValidationService
         var expectedFooterCm = rule.FooterFromBottom?.Value;
         if (expectedFooterCm.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expectedFooterTwips = expectedFooterCm.Value * TwipsPerCm;
             var actualFooterCm = section.DsecFooterMarginTwips.HasValue
                 ? section.DsecFooterMarginTwips.Value / TwipsPerCm
@@ -424,7 +424,7 @@ public partial class ValidationService
             if (section.DsecFooterMarginTwips.HasValue &&
                 Math.Abs(section.DsecFooterMarginTwips.Value - expectedFooterTwips) <= TwipsTolerance * 2)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -449,11 +449,11 @@ public partial class ValidationService
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
 
         if (!section.DsecDifferentOddEven)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
             return;
         }
 
@@ -478,7 +478,7 @@ public partial class ValidationService
         Dictionary<uint, int> sectionPageMap)
     {
         // Validate gutter size
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         var expectedGutterTwips = rule.Gutter * TwipsPerCm;
         var actualGutterCm = section.DsecGutterTwips.HasValue 
             ? section.DsecGutterTwips.Value / TwipsPerCm 
@@ -486,7 +486,7 @@ public partial class ValidationService
 
         if (Math.Abs((section.DsecGutterTwips ?? 0) - expectedGutterTwips) <= TwipsTolerance * 2)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {
@@ -505,13 +505,13 @@ public partial class ValidationService
         // Validate gutter position if specified
         if (!string.IsNullOrEmpty(rule.Position))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var actualPosition = section.DsecGutterPosition?.ToLower() ?? "left";
             var expectedPosition = rule.Position.ToLower();
 
             if (actualPosition == expectedPosition)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -537,12 +537,12 @@ public partial class ValidationService
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         var actualColumns = (int)(section.DsecColumnCount ?? 1);
 
         if (actualColumns == rule.Count)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {
@@ -585,13 +585,13 @@ public partial class ValidationService
         // Validate format
         if (!string.IsNullOrEmpty(expected.Format))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var actualFormat = section.DsecPageNumFormat?.ToLower() ?? "decimal";
             var expectedFormat = expected.Format.ToLower();
 
             if (actualFormat == expectedFormat)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -611,13 +611,13 @@ public partial class ValidationService
         // Validate start number if specified
         if (expected.Start.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var actualStart = (int)(section.DsecPageNumStart ?? 0);
 
             if (actualStart == expected.Start.Value || (expected.Start.Value == 1 && actualStart == 0))
             {
                 // 0 is treated as "continue from previous" which for first section means 1
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {

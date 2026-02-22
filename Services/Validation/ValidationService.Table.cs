@@ -226,7 +226,7 @@ public partial class ValidationService
 
             if (tableRule?.CegahGambarTabel?.Value == true)
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
@@ -301,7 +301,7 @@ public partial class ValidationService
                     tableFormats.TryGetValue(block.TableFormatId ?? 0, out var tableFormat))
                 {
                     var expectedAlignment = tableRule.Position.Alignment.Value;
-                    result.TotalChecks++;
+                    result.IncrementTotalChecks();
                     var actualAlignment = tableFormat.DftJc ?? "unknown";
                     pageLayoutsById.TryGetValue(block.ElementId, out var tableLayout);
                     var isNearFullWidthCenterCase = IsCenterAlignmentSatisfiedByNearFullWidth(
@@ -312,7 +312,7 @@ public partial class ValidationService
 
                     if (AreAlignmentsEquivalent(actualAlignment, expectedAlignment) || isNearFullWidthCenterCase)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -332,13 +332,13 @@ public partial class ValidationService
                 if (tableRule.Position?.IndentFromLeft?.Value.HasValue == true &&
                     tableFormats.TryGetValue(block.TableFormatId ?? 0, out var indentFormat))
                 {
-                    result.TotalChecks++;
+                    result.IncrementTotalChecks();
                     var expectedIndent = tableRule.Position.IndentFromLeft.Value.Value;
                     var actualTwips = indentFormat.DftTblIndTwips ?? 0;
                     var actualIndent = actualTwips / 1440.0m * 2.54m;
                     if (Math.Abs(actualIndent - expectedIndent) <= 0.05m)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -359,7 +359,7 @@ public partial class ValidationService
                     tableFormats.TryGetValue(block.TableFormatId ?? 0, out var widthFormat) &&
                     pageLayoutsById.TryGetValue(block.ElementId, out var layout))
                 {
-                    result.TotalChecks++;
+                    result.IncrementTotalChecks();
 
                     var availableWidth = GetAvailableWidthCm(layout);
                     var indentTwips = widthFormat.DftTblIndTwips ?? 0;
@@ -384,7 +384,7 @@ public partial class ValidationService
                     }
                     else
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                 }
 
@@ -392,10 +392,10 @@ public partial class ValidationService
                 {
                     if (pageNumbersById.TryGetValue(block.ElementId, out var pageNumber) && pageNumber > 0)
                     {
-                        result.TotalChecks++;
+                        result.IncrementTotalChecks();
                         if (pagesWithParagraph.Contains(pageNumber))
                         {
-                            result.PassedChecks++;
+                            result.IncrementPassedChecks();
                         }
                         else
                         {
@@ -415,10 +415,10 @@ public partial class ValidationService
 
                 if (tableRule.CegahGambarTabel?.Value == true)
                 {
-                    result.TotalChecks++;
+                    result.IncrementTotalChecks();
                     if (!block.Content.HasImageContent)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -492,7 +492,7 @@ public partial class ValidationService
                     }
                     else if (captionAfter != null)
                     {
-                        result.TotalChecks++;
+                        result.IncrementTotalChecks();
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -506,7 +506,7 @@ public partial class ValidationService
                     }
                     else
                     {
-                        result.TotalChecks++;
+                        result.IncrementTotalChecks();
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -527,7 +527,7 @@ public partial class ValidationService
                     }
                     else if (captionBefore != null)
                     {
-                        result.TotalChecks++;
+                        result.IncrementTotalChecks();
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -541,7 +541,7 @@ public partial class ValidationService
                     }
                     else
                     {
-                        result.TotalChecks++;
+                        result.IncrementTotalChecks();
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -1018,7 +1018,7 @@ public partial class ValidationService
         var expectedFontName = rule?.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1029,7 +1029,7 @@ public partial class ValidationService
 
                 if (mismatches.Count == 0)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1050,7 +1050,7 @@ public partial class ValidationService
                 var actuals = textFormats.Select(tf => tf.DftxFontAscii ?? "unknown").Distinct().ToList();
                 if (actuals.All(a => string.Equals(a, expectedFontName, StringComparison.OrdinalIgnoreCase)))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1071,7 +1071,7 @@ public partial class ValidationService
         var expectedFontSize = rule?.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expectedHalfPt = expectedFontSize.Value * 2m;
             if (runs.Count > 0)
             {
@@ -1085,7 +1085,7 @@ public partial class ValidationService
 
                 if (mismatches.Count == 0)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1109,7 +1109,7 @@ public partial class ValidationService
 
                 if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1141,13 +1141,13 @@ public partial class ValidationService
 
         if (spacingRule.LineSpacing?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.LineSpacing.Value.Value;
             var actuals = paragraphFormats.Select(GetLineSpacing).Distinct().ToList();
 
             if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expected) <= 0.05m))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1166,13 +1166,13 @@ public partial class ValidationService
 
         if (spacingRule.Before?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.Before.Value.Value;
             var actuals = paragraphFormats.Select(pf => TwipsToPoints(pf.DfpSpacingBeforeTwips)).Distinct().ToList();
 
             if (actuals.All(a => a.HasValue && IsWithinTolerance(a.Value, expected, 0.5m)))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1191,13 +1191,13 @@ public partial class ValidationService
 
         if (spacingRule.After?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.After.Value.Value;
             var actuals = paragraphFormats.Select(pf => TwipsToPoints(pf.DfpSpacingAfterTwips)).Distinct().ToList();
 
             if (actuals.All(a => a.HasValue && IsWithinTolerance(a.Value, expected, 0.5m)))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1237,7 +1237,7 @@ public partial class ValidationService
         var expectedFontName = fontRule.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1248,7 +1248,7 @@ public partial class ValidationService
 
                 if (mismatches.Count == 0)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1269,7 +1269,7 @@ public partial class ValidationService
                 var actuals = textFormats.Select(tf => tf.DftxFontAscii ?? "unknown").Distinct().ToList();
                 if (actuals.All(a => string.Equals(a, expectedFontName, StringComparison.OrdinalIgnoreCase)))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1290,7 +1290,7 @@ public partial class ValidationService
         var expectedFontSize = fontRule.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expectedHalfPt = expectedFontSize.Value * 2m;
             if (runs.Count > 0)
             {
@@ -1304,7 +1304,7 @@ public partial class ValidationService
 
                 if (mismatches.Count == 0)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1328,7 +1328,7 @@ public partial class ValidationService
 
                 if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1349,7 +1349,7 @@ public partial class ValidationService
         var expectedBold = fontRule.FontStyle?.Bold?.Value;
         if (expectedBold.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1360,7 +1360,7 @@ public partial class ValidationService
 
                 if (mismatches.Count == 0)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1381,7 +1381,7 @@ public partial class ValidationService
                 var actuals = textFormats.Select(tf => tf.DftxBold).Distinct().ToList();
                 if (actuals.All(a => a.HasValue && a.Value == expectedBold.Value))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1402,7 +1402,7 @@ public partial class ValidationService
         var expectedItalic = fontRule.FontStyle?.Italic?.Value;
         if (expectedItalic.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1413,7 +1413,7 @@ public partial class ValidationService
 
                 if (mismatches.Count == 0)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1434,7 +1434,7 @@ public partial class ValidationService
                 var actuals = textFormats.Select(tf => tf.DftxItalic).Distinct().ToList();
                 if (actuals.All(a => a.HasValue && a.Value == expectedItalic.Value))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1455,7 +1455,7 @@ public partial class ValidationService
         var expectedUnderline = fontRule.FontStyle?.Underline?.Value;
         if (expectedUnderline.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1476,7 +1476,7 @@ public partial class ValidationService
 
                 if (mismatches.Count == 0)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1501,7 +1501,7 @@ public partial class ValidationService
 
                 if (matches)
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
@@ -1536,12 +1536,12 @@ public partial class ValidationService
         var expectedAlignment = paragraphRule.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(evidenceText, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1562,10 +1562,10 @@ public partial class ValidationService
         if (!string.IsNullOrWhiteSpace(indentationValue) &&
             indentationValue.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (!HasIndentation(format))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1585,13 +1585,13 @@ public partial class ValidationService
         var spacingRule = paragraphRule.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
             if (actual.HasValue && Math.Abs(actual.Value - expected) <= 0.05m)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1610,13 +1610,13 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
             if (actual.HasValue && IsWithinTolerance(actual.Value, expected, 0.5m) && !format.DfpSpacingBeforeAutospacing)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1635,13 +1635,13 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 
             if (actual.HasValue && IsWithinTolerance(actual.Value, expected, 0.5m) && !format.DfpSpacingAfterAutospacing)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1705,7 +1705,7 @@ public partial class ValidationService
 
         if (!matched)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -1719,16 +1719,16 @@ public partial class ValidationService
             return;
         }
 
-        result.TotalChecks++;
-        result.PassedChecks++;
+        result.IncrementTotalChecks();
+        result.IncrementPassedChecks();
 
         var requireTitle = numberingRule.EnterAfterNumbering?.Value == true;
         if (requireTitle)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (!string.IsNullOrWhiteSpace(titleText))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -1750,10 +1750,10 @@ public partial class ValidationService
             caseRule.Equals("Title Case", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(titleText))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (IsTitleCaseText(titleText))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {

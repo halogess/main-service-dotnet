@@ -1,5 +1,7 @@
 using System.Data;
 using System.Globalization;
+using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -733,7 +735,107 @@ public class ValidationResult
     public List<ValidationError> Errors { get; set; } = new();
     public int TotalChecks { get; set; }
     public int PassedChecks { get; set; }
-    public decimal Score => TotalChecks > 0 ? (decimal)PassedChecks / TotalChecks * 100 : 100;
+
+    // Unique check tracking: each check statement line is treated as one check key.
+    private readonly HashSet<string> _uniqueCheckKeys = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _failedUniqueCheckKeys = new(StringComparer.Ordinal);
+    private string? _pendingCheckKey;
+    private bool _pendingCheckPassed;
+
+    public int UniqueTotalChecks
+    {
+        get
+        {
+            FinalizePendingCheck();
+            return _uniqueCheckKeys.Count;
+        }
+    }
+
+    public int UniqueFailedChecks
+    {
+        get
+        {
+            FinalizePendingCheck();
+            return _failedUniqueCheckKeys.Count;
+        }
+    }
+
+    public int UniquePassedChecks
+    {
+        get
+        {
+            FinalizePendingCheck();
+            return Math.Max(0, _uniqueCheckKeys.Count - _failedUniqueCheckKeys.Count);
+        }
+    }
+
+    public decimal Score => UniqueTotalChecks > 0 ? (decimal)UniquePassedChecks / UniqueTotalChecks * 100 : 100;
+
+    public void IncrementTotalChecks(
+        [CallerFilePath] string filePath = "",
+        [CallerLineNumber] int lineNumber = 0,
+        [CallerMemberName] string memberName = "")
+    {
+        FinalizePendingCheck();
+        TotalChecks++;
+
+        var checkKey = BuildCheckKey(filePath, lineNumber, memberName);
+        _uniqueCheckKeys.Add(checkKey);
+        _pendingCheckKey = checkKey;
+        _pendingCheckPassed = false;
+    }
+
+    public void IncrementPassedChecks(
+        [CallerFilePath] string filePath = "",
+        [CallerLineNumber] int lineNumber = 0,
+        [CallerMemberName] string memberName = "")
+    {
+        PassedChecks++;
+
+        // Normal flow: pass belongs to the latest started check.
+        if (!string.IsNullOrWhiteSpace(_pendingCheckKey))
+        {
+            _pendingCheckPassed = true;
+            return;
+        }
+
+        // Defensive fallback: if called without pending check, still register key.
+        var checkKey = BuildCheckKey(filePath, lineNumber, memberName);
+        _uniqueCheckKeys.Add(checkKey);
+    }
+
+    public void MergeFrom(ValidationResult other)
+    {
+        if (other == null)
+            return;
+
+        FinalizePendingCheck();
+        other.FinalizePendingCheck();
+
+        Errors.AddRange(other.Errors);
+        TotalChecks += other.TotalChecks;
+        PassedChecks += other.PassedChecks;
+        _uniqueCheckKeys.UnionWith(other._uniqueCheckKeys);
+        _failedUniqueCheckKeys.UnionWith(other._failedUniqueCheckKeys);
+    }
+
+    private void FinalizePendingCheck()
+    {
+        if (string.IsNullOrWhiteSpace(_pendingCheckKey))
+            return;
+
+        if (!_pendingCheckPassed)
+            _failedUniqueCheckKeys.Add(_pendingCheckKey);
+
+        _pendingCheckKey = null;
+        _pendingCheckPassed = false;
+    }
+
+    private static string BuildCheckKey(string filePath, int lineNumber, string memberName)
+    {
+        var fileName = string.IsNullOrWhiteSpace(filePath) ? "unknown" : Path.GetFileName(filePath);
+        return $"{fileName}:{lineNumber}:{memberName}";
+    }
 }
 
 public class ErrorLocation
@@ -822,23 +924,17 @@ public partial class ValidationService : IValidationService
 
         // Validate page settings
         var pageResult = await ValidatePageSettingsAsync(dokumenId, cancellationToken);
-        result.Errors.AddRange(pageResult.Errors);
-        result.TotalChecks += pageResult.TotalChecks;
-        result.PassedChecks += pageResult.PassedChecks;
+        result.MergeFrom(pageResult);
 
         var classification = await ClassifyElementsAsync(dokumenId, cancellationToken);
 
         // Validate chapter title
         var titleResult = await ValidateChapterTitleAsync(dokumenId, classification.ChapterTitleIds, cancellationToken);
-        result.Errors.AddRange(titleResult.Errors);
-        result.TotalChecks += titleResult.TotalChecks;
-        result.PassedChecks += titleResult.PassedChecks;
+        result.MergeFrom(titleResult);
 
         // Validate subchapter title
         var subchapterResult = await ValidateSubchapterTitleAsync(dokumenId, classification.SubchapterIds, cancellationToken);
-        result.Errors.AddRange(subchapterResult.Errors);
-        result.TotalChecks += subchapterResult.TotalChecks;
-        result.PassedChecks += subchapterResult.PassedChecks;
+        result.MergeFrom(subchapterResult);
 
         // Validate paragraphs
         var paragraphResult = await ValidateParagraphAsync(
@@ -846,39 +942,27 @@ public partial class ValidationService : IValidationService
             classification.ParagraphIds,
             classification.ListItemIds,
             cancellationToken);
-        result.Errors.AddRange(paragraphResult.Errors);
-        result.TotalChecks += paragraphResult.TotalChecks;
-        result.PassedChecks += paragraphResult.PassedChecks;
+        result.MergeFrom(paragraphResult);
 
         // Validate list items
         var listItemResult = await ValidateListItemAsync(dokumenId, classification.ListItemIds, cancellationToken);
-        result.Errors.AddRange(listItemResult.Errors);
-        result.TotalChecks += listItemResult.TotalChecks;
-        result.PassedChecks += listItemResult.PassedChecks;
+        result.MergeFrom(listItemResult);
 
         // Validate images
         var imageResult = await ValidateImageAsync(dokumenId, cancellationToken);
-        result.Errors.AddRange(imageResult.Errors);
-        result.TotalChecks += imageResult.TotalChecks;
-        result.PassedChecks += imageResult.PassedChecks;
+        result.MergeFrom(imageResult);
 
         // Validate tables
         var tableResult = await ValidateTableAsync(dokumenId, cancellationToken);
-        result.Errors.AddRange(tableResult.Errors);
-        result.TotalChecks += tableResult.TotalChecks;
-        result.PassedChecks += tableResult.PassedChecks;
+        result.MergeFrom(tableResult);
 
         // Validate formulas
         var formulaResult = await ValidateFormulaAsync(dokumenId, cancellationToken);
-        result.Errors.AddRange(formulaResult.Errors);
-        result.TotalChecks += formulaResult.TotalChecks;
-        result.PassedChecks += formulaResult.PassedChecks;
+        result.MergeFrom(formulaResult);
 
         // Validate code blocks
         var codeResult = await ValidateCodeAsync(dokumenId, cancellationToken);
-        result.Errors.AddRange(codeResult.Errors);
-        result.TotalChecks += codeResult.TotalChecks;
-        result.PassedChecks += codeResult.PassedChecks;
+        result.MergeFrom(codeResult);
 
         NormalizeContentErrorCategories(result.Errors);
         return result;

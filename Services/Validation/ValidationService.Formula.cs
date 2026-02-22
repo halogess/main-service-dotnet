@@ -324,7 +324,7 @@ public partial class ValidationService
 
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var mismatches = CollectRunMismatches(
                 runs,
                 textFormatById,
@@ -333,7 +333,7 @@ public partial class ValidationService
 
             if (mismatches.Count == 0)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -352,7 +352,7 @@ public partial class ValidationService
 
         if (expectedFontSize.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expectedHalfPt = expectedFontSize.Value * 2m;
             var mismatches = CollectRunMismatches(
                 runs,
@@ -364,7 +364,7 @@ public partial class ValidationService
 
             if (mismatches.Count == 0)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -429,12 +429,12 @@ public partial class ValidationService
             if (!checkedAlignments.Add(normalizedExpected))
                 continue;
 
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(formulaText, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -461,13 +461,13 @@ public partial class ValidationService
 
         if (expectedFirstLineIndent.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var firstLineTwips = format.DfpIndFirstLineTwips ?? 0;
             var firstLineCm = firstLineTwips / 1440.0m * 2.54m;
 
             if (Math.Abs(firstLineCm - expectedFirstLineIndent.Value) <= 0.05m)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -491,10 +491,10 @@ public partial class ValidationService
 
         if (expectedLeftIndent.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (Math.Abs(leftCm - expectedLeftIndent.Value) <= 0.05m)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -513,10 +513,10 @@ public partial class ValidationService
 
         if (expectedOverallIndent.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (Math.Abs(leftCm - expectedOverallIndent.Value) <= 0.05m)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -533,11 +533,11 @@ public partial class ValidationService
             }
         }
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         var rightCm = GetRightIndentCm(format);
         if (Math.Abs(rightCm) <= 0.05m)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {
@@ -556,13 +556,13 @@ public partial class ValidationService
         var spacingRule = rule.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
             if (actual.HasValue && Math.Abs(actual.Value - expected) <= 0.05m)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -581,7 +581,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -589,7 +589,7 @@ public partial class ValidationService
                 IsWithinTolerance(actual.Value, expected, 0.5m) &&
                 !format.DfpSpacingBeforeAutospacing)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -608,7 +608,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 
@@ -616,7 +616,7 @@ public partial class ValidationService
                 IsWithinTolerance(actual.Value, expected, 0.5m) &&
                 !format.DfpSpacingAfterAutospacing)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -697,7 +697,7 @@ public partial class ValidationService
         var preferRight = tabName.Equals("right", StringComparison.OrdinalIgnoreCase);
         var actualTab = FindFormulaTabStop(tabStops, expectedAlignment, preferRight);
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         if (actualTab == null)
         {
             result.Errors.Add(new ValidationError
@@ -712,14 +712,14 @@ public partial class ValidationService
             });
             return;
         }
-        result.PassedChecks++;
+        result.IncrementPassedChecks();
 
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (string.Equals(actualTab.Alignment, expectedAlignment, StringComparison.OrdinalIgnoreCase))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -738,10 +738,10 @@ public partial class ValidationService
 
         if (!string.IsNullOrWhiteSpace(expectedLeader))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (string.Equals(actualTab.LeaderStyle, expectedLeader, StringComparison.OrdinalIgnoreCase))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -760,10 +760,10 @@ public partial class ValidationService
 
         if (expectedPositionCm.HasValue)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (actualTab.PositionCm.HasValue && Math.Abs(actualTab.PositionCm.Value - expectedPositionCm.Value) <= 0.15m)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -781,10 +781,10 @@ public partial class ValidationService
         }
         else if (expectedDistanceCm.HasValue && dependsOnEquationLength)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (actualTab.PositionCm.HasValue && actualTab.PositionCm.Value + 0.15m >= expectedDistanceCm.Value)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -935,7 +935,7 @@ public partial class ValidationService
         if (string.IsNullOrWhiteSpace(expectedFormat))
             return;
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
 
         var numberToken = ExtractFormulaNumberToken(content.PlainText);
         if (string.IsNullOrWhiteSpace(numberToken))
@@ -955,7 +955,7 @@ public partial class ValidationService
 
         if (MatchesFormulaNumberFormat(numberToken, expectedFormat))
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
             return;
         }
 
@@ -1022,10 +1022,10 @@ public partial class ValidationService
         if (!pageNumbersById.TryGetValue(formulaElement.ElementId, out var pageNumber) || pageNumber <= 0)
             return;
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         if (pagesWithNonFormulaParagraph.Contains(pageNumber))
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {

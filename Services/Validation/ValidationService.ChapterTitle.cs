@@ -166,7 +166,7 @@ public partial class ValidationService
             titleBlock.Add(content);
         }
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         if (titleIds.Count == 0)
         {
             result.Errors.Add(new ValidationError
@@ -177,10 +177,10 @@ public partial class ValidationService
             });
             return result;
         }
-        result.PassedChecks++;
+        result.IncrementPassedChecks();
 
         var firstElement = bodyElements[0];
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         if (!titleIds.Contains(firstElement.DelemenId))
         {
             var pageNumbers = await LoadPageNumbersAsync(titleIds, cancellationToken);
@@ -198,7 +198,7 @@ public partial class ValidationService
             });
             return result;
         }
-        result.PassedChecks++;
+        result.IncrementPassedChecks();
 
         if (titleBlock.Count == 0)
         {
@@ -225,10 +225,10 @@ public partial class ValidationService
         if (titleLayoutsById.Count > 0)
             titlePageLayout = titleLayoutsById.Values.FirstOrDefault();
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         if (!HasDisallowedWhitespace(numberLine))
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {
@@ -244,10 +244,10 @@ public partial class ValidationService
         var numberFormat = rule?.Numbering?.NumberFormat?.Value;
         if (!string.IsNullOrWhiteSpace(numberFormat))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (MatchesNumberFormat(numberLine, numberFormat, rule?.Numbering?.Case?.Value))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -262,10 +262,10 @@ public partial class ValidationService
             }
         }
 
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         if (titleLinesNonEmpty.Count > 0)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {
@@ -279,10 +279,10 @@ public partial class ValidationService
 
         if (rule?.Numbering?.EnterAfterNumber?.Value == true)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (titleLinesNonEmpty.Count > 0 && titleLineCandidates.Count > 0)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -312,13 +312,13 @@ public partial class ValidationService
         
         if (requireEmptyLineAfter)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (nextElementIndex < bodyElements.Count)
             {
                 var emptyContent = ParseElementContent(bodyElements[nextElementIndex].DelemenJsonTree);
                 if (IsEmptyElement(emptyContent))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
 
                     // Check if empty paragraph has same font size as title (non-required check)
                     await ValidateEmptyParagraphFontSizeAsync(
@@ -327,14 +327,14 @@ public partial class ValidationService
                         bodyElements[nextElementIndex].DelemenId,
                         cancellationToken);
 
-                    result.TotalChecks++;
+                    result.IncrementTotalChecks();
                     var afterEmptyIndex = nextElementIndex + 1;
                     if (afterEmptyIndex < bodyElements.Count)
                     {
                         var afterEmptyContent = ParseElementContent(bodyElements[afterEmptyIndex].DelemenJsonTree);
                         if (!IsEmptyElement(afterEmptyContent))
                         {
-                            result.PassedChecks++;
+                            result.IncrementPassedChecks();
                         }
                         else
                         {
@@ -386,7 +386,7 @@ public partial class ValidationService
 
         if (paragraphIds.Count != titleBlock.Count)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -403,7 +403,7 @@ public partial class ValidationService
         var expectedAlignment = rule?.Paragraph?.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment) && titleParagraphs.Count > 0)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var actualAlignments = titleParagraphs
                 .Select(pf => pf!.DfpJc ?? "unknown")
                 .Distinct()
@@ -414,7 +414,7 @@ public partial class ValidationService
 
             if (allEquivalent)
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -434,10 +434,10 @@ public partial class ValidationService
             indentationValue.Equals("none", StringComparison.OrdinalIgnoreCase) &&
             titleParagraphs.Count > 0)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             if (titleParagraphs.All(pf => !HasIndentation(pf!)))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -456,13 +456,13 @@ public partial class ValidationService
         var spacingRule = rule?.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true && titleParagraphs.Count > 0)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.LineSpacing.Value.Value;
             var actuals = titleParagraphs.Select(pf => GetLineSpacing(pf!)).ToList();
 
             if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expected) <= 0.05m))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -479,14 +479,14 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true && titleParagraphs.Count > 0)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.Before.Value.Value;
             var actuals = titleParagraphs.Select(pf => TwipsToPoints(pf!.DfpSpacingBeforeTwips)).ToList();
 
             if (actuals.All(a => a.HasValue && IsWithinTolerance(a.Value, expected, 0.5m)) &&
                 titleParagraphs.All(pf => !pf!.DfpSpacingBeforeAutospacing))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -503,14 +503,14 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true && titleParagraphs.Count > 0)
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             var expected = spacingRule.After.Value.Value;
             var actuals = titleParagraphs.Select(pf => TwipsToPoints(pf!.DfpSpacingAfterTwips)).ToList();
 
             if (actuals.All(a => a.HasValue && IsWithinTolerance(a.Value, expected, 0.5m)) &&
                 titleParagraphs.All(pf => !pf!.DfpSpacingAfterAutospacing))
             {
-                result.PassedChecks++;
+                result.IncrementPassedChecks();
             }
             else
             {
@@ -532,7 +532,7 @@ public partial class ValidationService
 
         if (textFormatIds.Count == 0 && HasTitleFontRule(rule))
         {
-            result.TotalChecks++;
+            result.IncrementTotalChecks();
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -551,7 +551,7 @@ public partial class ValidationService
 
             if (textFormats.Count == 0)
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
@@ -568,7 +568,7 @@ public partial class ValidationService
             var expectedFontName = rule?.Font?.FontName?.Value;
             if (!string.IsNullOrWhiteSpace(expectedFontName))
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -579,7 +579,7 @@ public partial class ValidationService
 
                     if (mismatches.Count == 0)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -602,7 +602,7 @@ public partial class ValidationService
 
                     if (actuals.All(a => string.Equals(a, expectedFontName, StringComparison.OrdinalIgnoreCase)))
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -621,7 +621,7 @@ public partial class ValidationService
             var expectedFontSize = rule?.Font?.FontSize?.Value;
             if (expectedFontSize.HasValue)
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 var expectedPt = expectedFontSize.Value;
                 var expectedHalfPt = expectedPt * 2m;
                 if (titleRuns.Count > 0)
@@ -636,7 +636,7 @@ public partial class ValidationService
 
                     if (mismatches.Count == 0)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -658,7 +658,7 @@ public partial class ValidationService
 
                     if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -677,7 +677,7 @@ public partial class ValidationService
             var expectedBold = rule?.Font?.FontStyle?.Bold?.Value;
             if (expectedBold.HasValue)
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -688,7 +688,7 @@ public partial class ValidationService
 
                     if (mismatches.Count == 0)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -708,7 +708,7 @@ public partial class ValidationService
 
                     if (actuals.All(a => a.HasValue && a.Value == expectedBold.Value))
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -727,7 +727,7 @@ public partial class ValidationService
             var expectedItalic = rule?.Font?.FontStyle?.Italic?.Value;
             if (expectedItalic.HasValue)
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -738,7 +738,7 @@ public partial class ValidationService
 
                     if (mismatches.Count == 0)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -758,7 +758,7 @@ public partial class ValidationService
 
                     if (actuals.All(a => a.HasValue && a.Value == expectedItalic.Value))
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -777,7 +777,7 @@ public partial class ValidationService
             var expectedUnderline = rule?.Font?.FontStyle?.Underline?.Value;
             if (expectedUnderline.HasValue)
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -798,7 +798,7 @@ public partial class ValidationService
 
                     if (mismatches.Count == 0)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -822,7 +822,7 @@ public partial class ValidationService
 
                     if (matches)
                     {
-                        result.PassedChecks++;
+                        result.IncrementPassedChecks();
                     }
                     else
                     {
@@ -960,7 +960,7 @@ public partial class ValidationService
 
             if (textFormats.Count > 0)
             {
-                result.TotalChecks++;
+                result.IncrementTotalChecks();
                 var expectedHalfPt = expectedFontSize.Value * 2m;
                 var actuals = textFormats
                     .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
@@ -969,7 +969,7 @@ public partial class ValidationService
 
                 if (actuals.Count > 0 && actuals.All(a => Math.Abs(a!.Value - expectedHalfPt) <= 0.5m))
                 {
-                    result.PassedChecks++;
+                    result.IncrementPassedChecks();
                 }
                 else if (actuals.Count > 0)
                 {
@@ -1328,7 +1328,7 @@ public partial class ValidationService
         }
 
         // Check if there's at least one paragraph (paragraf) between title and first subchapter
-        result.TotalChecks++;
+        result.IncrementTotalChecks();
         bool hasParagraphBefore = false;
         
         for (int i = titleEndIndex; i < firstSubchapterIndex.Value; i++)
@@ -1351,7 +1351,7 @@ public partial class ValidationService
 
         if (hasParagraphBefore)
         {
-            result.PassedChecks++;
+            result.IncrementPassedChecks();
         }
         else
         {

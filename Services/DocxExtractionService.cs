@@ -12,6 +12,7 @@ namespace ValidasiTugasAkhir.MainService.Services;
 public interface IDocxExtractionService
 {
     Task ExtractDocxToDatabase(string docxPath, int dokumenId);
+    Task ExtractDocxToDatabase(string docxPath, string refTipe, uint refId);
 }
 
 public class DocxExtractionService : IDocxExtractionService
@@ -34,10 +35,16 @@ public class DocxExtractionService : IDocxExtractionService
     }
 
     public async Task ExtractDocxToDatabase(string docxPath, int dokumenId)
+        => await ExtractDocxToDatabase(docxPath, "dokumen", (uint)dokumenId);
+
+    public async Task ExtractDocxToDatabase(string docxPath, string refTipe, uint refId)
     {
+        var normalizedRefTipe = string.IsNullOrWhiteSpace(refTipe) ? "dokumen" : refTipe.Trim().ToLowerInvariant();
+        var isDokumenRef = normalizedRefTipe == "dokumen";
+
         try
         {
-            _logger.LogInformation("Starting extraction for dokumen {DokumenId}, path: {Path}", dokumenId, docxPath);
+            _logger.LogInformation("Starting extraction for {RefTipe} {RefId}, path: {Path}", normalizedRefTipe, refId, docxPath);
             
             using var doc = WordprocessingDocument.Open(docxPath, false);
             var hasEvenAndOddHeaders = IsEvenAndOddHeadersEnabled(doc.MainDocumentPart?.DocumentSettingsPart);
@@ -112,13 +119,13 @@ public class DocxExtractionService : IDocxExtractionService
             
             foreach (var (upToIndex, sectPr) in sectionInfos)
             {
-                var section = SectionExtractor.ExtractSectionProperties(sectPr, dokumenId, sectionIndex);
+                var section = SectionExtractor.ExtractSectionProperties(sectPr, normalizedRefTipe, refId, sectionIndex);
                 SectionExtractor.UpdateOddEvenFromSettings(section, hasEvenAndOddHeaders);
                 _db.DokumenSections.Add(section);
                 await _db.SaveChangesAsync();
                 sectionIdMap.Add((upToIndex, section.DsecId, section));
-                _logger.LogInformation("Created section {Index} with ID {DsecId} for dokumen {DokumenId}", 
-                    sectionIndex, section.DsecId, dokumenId);
+                _logger.LogInformation("Created section {Index} with ID {DsecId} for {RefTipe} {RefId}", 
+                    sectionIndex, section.DsecId, normalizedRefTipe, refId);
                 sectionIndex++;
             }
             
@@ -174,7 +181,7 @@ public class DocxExtractionService : IDocxExtractionService
                         var headerPartDoc = doc.MainDocumentPart!.GetPartById(headerRef.Id!) as HeaderPart;
                         if (headerPartDoc?.Header != null)
                         {
-                            await ExtractPartContent(headerPartDoc.Header, headerPart.DpartId, (uint)dokumenId, 
+                            await ExtractPartContent(headerPartDoc.Header, headerPart.DpartId, refId, 
                                 numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips, useHangingIndentTabStop);
                         }
                     }
@@ -205,7 +212,7 @@ public class DocxExtractionService : IDocxExtractionService
                         var footerPartDoc = doc.MainDocumentPart!.GetPartById(footerRef.Id!) as FooterPart;
                         if (footerPartDoc?.Footer != null)
                         {
-                            await ExtractPartContent(footerPartDoc.Footer, footerPart.DpartId, (uint)dokumenId, 
+                            await ExtractPartContent(footerPartDoc.Footer, footerPart.DpartId, refId, 
                                 numberingPart, numberingCounters, paragraphFormatExtractor, tableExtractor, defaultTabStopTwips, useHangingIndentTabStop);
                         }
                     }
@@ -286,15 +293,15 @@ public class DocxExtractionService : IDocxExtractionService
                     // Detect footnote/endnote references
                     foreach (var fnRef in para.Descendants<DocumentFormat.OpenXml.Wordprocessing.FootnoteReference>())
                     {
-                        var refId = fnRef.Id?.Value ?? 0;
-                        if (refId >= 1)
-                            noteRefToSequence[("footnote", refId)] = (uint)seq;
+                        var noteRefId = fnRef.Id?.Value ?? 0;
+                        if (noteRefId >= 1)
+                            noteRefToSequence[("footnote", noteRefId)] = (uint)seq;
                     }
                     foreach (var enRef in para.Descendants<DocumentFormat.OpenXml.Wordprocessing.EndnoteReference>())
                     {
-                        var refId = enRef.Id?.Value ?? 0;
-                        if (refId >= 1)
-                            noteRefToSequence[("endnote", refId)] = (uint)seq;
+                        var noteRefId = enRef.Id?.Value ?? 0;
+                        if (noteRefId >= 1)
+                            noteRefToSequence[("endnote", noteRefId)] = (uint)seq;
                     }
                 }
                 
@@ -373,7 +380,7 @@ public class DocxExtractionService : IDocxExtractionService
             
             // === FOOTNOTE EXTRACTION ===
             var footnotesPart = doc.MainDocumentPart!.FootnotesPart;
-            if (footnotesPart?.Footnotes != null)
+            if (isDokumenRef && footnotesPart?.Footnotes != null)
             {
                 foreach (var footnote in footnotesPart.Footnotes.Elements<DocumentFormat.OpenXml.Wordprocessing.Footnote>())
                 {
@@ -387,7 +394,7 @@ public class DocxExtractionService : IDocxExtractionService
                     
                     _db.DokumenNotes.Add(new DokumenNote
                     {
-                        DokumenId = (uint)dokumenId,
+                        DokumenId = refId,
                         DelemenId = GetDelemenIdForNote("footnote", fnId),
                         DnoteKind = "footnote",
                         DnoteType = fnType,
@@ -395,12 +402,12 @@ public class DocxExtractionService : IDocxExtractionService
                         DnoteXml = footnote.OuterXml
                     });
                 }
-                _logger.LogDebug("Extracted footnotes for dokumen {DokumenId}", dokumenId);
+                _logger.LogDebug("Extracted footnotes for dokumen {DokumenId}", refId);
             }
             
             // === ENDNOTE EXTRACTION ===
             var endnotesPart = doc.MainDocumentPart!.EndnotesPart;
-            if (endnotesPart?.Endnotes != null)
+            if (isDokumenRef && endnotesPart?.Endnotes != null)
             {
                 foreach (var endnote in endnotesPart.Endnotes.Elements<DocumentFormat.OpenXml.Wordprocessing.Endnote>())
                 {
@@ -414,7 +421,7 @@ public class DocxExtractionService : IDocxExtractionService
                     
                     _db.DokumenNotes.Add(new DokumenNote
                     {
-                        DokumenId = (uint)dokumenId,
+                        DokumenId = refId,
                         DelemenId = GetDelemenIdForNote("endnote", enId),
                         DnoteKind = "endnote",
                         DnoteType = enType,
@@ -422,18 +429,18 @@ public class DocxExtractionService : IDocxExtractionService
                         DnoteXml = endnote.OuterXml
                     });
                 }
-                _logger.LogDebug("Extracted endnotes for dokumen {DokumenId}", dokumenId);
+                _logger.LogDebug("Extracted endnotes for dokumen {DokumenId}", refId);
             }
             
             await _db.SaveChangesAsync();
             
             int totalParts = partMap.Values.Sum(p => p.Count);
-            _logger.LogInformation("Extraction completed for dokumen {DokumenId}: {ElementCount} elements, {SectionCount} sections, {PartCount} parts", 
-                dokumenId, seq - 1, sectionInfos.Count, totalParts);
+            _logger.LogInformation("Extraction completed for {RefTipe} {RefId}: {ElementCount} elements, {SectionCount} sections, {PartCount} parts", 
+                normalizedRefTipe, refId, seq - 1, sectionInfos.Count, totalParts);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Extraction failed for dokumen {DokumenId}", dokumenId);
+            _logger.LogError(ex, "Extraction failed for {RefTipe} {RefId}", refTipe, refId);
             throw;
         }
     }

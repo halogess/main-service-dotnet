@@ -725,6 +725,138 @@ public class FormulaPageStructureRule
     public RuleValue<bool>? MinimalSatuParagrafDiHalaman { get; set; }
 }
 
+public class FootnoteRule
+{
+    [JsonPropertyName("numbering")]
+    public FootnoteNumberingRule? Numbering { get; set; }
+
+    [JsonPropertyName("separator")]
+    public FootnoteSeparatorRule? Separator { get; set; }
+
+    [JsonPropertyName("footnote_text")]
+    public FootnoteTextRule? FootnoteText { get; set; }
+
+    [JsonPropertyName("sumber")]
+    public FootnoteSourceRule? Sumber { get; set; }
+}
+
+public class FootnoteNumberingRule
+{
+    [JsonPropertyName("number_format")]
+    public RuleValue<string>? NumberFormat { get; set; }
+
+    [JsonPropertyName("type")]
+    public RuleValue<string>? Type { get; set; }
+}
+
+public class FootnoteSeparatorRule
+{
+    [JsonPropertyName("paragraph")]
+    public FootnoteSeparatorParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("cegah_tab_awal")]
+    public RuleValue<bool>? CegahTabAwal { get; set; }
+}
+
+public class FootnoteSeparatorParagraphRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("indentation")]
+    public FootnoteSeparatorIndentationRule? Indentation { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class FootnoteSeparatorIndentationRule
+{
+    [JsonPropertyName("left_indent")]
+    public DecimalRuleValue? LeftIndent { get; set; }
+
+    [JsonPropertyName("first_line_indent")]
+    public DecimalRuleValue? FirstLineIndent { get; set; }
+}
+
+public class FootnoteTextRule
+{
+    [JsonPropertyName("font")]
+    public ParagraphFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public FootnoteTextParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public FootnoteContentStructureRule? StrukturKonten { get; set; }
+}
+
+public class FootnoteTextParagraphRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class FootnoteContentStructureRule
+{
+    [JsonPropertyName("satu_enter_sebelum")]
+    public RuleValue<bool>? SatuEnterSebelum { get; set; }
+}
+
+public class FootnoteSourceRule
+{
+    [JsonPropertyName("wajib_berisi_sumber")]
+    public RuleValue<bool>? WajibBerisiSumber { get; set; }
+
+    [JsonPropertyName("format_penulisan")]
+    public RuleValue<List<FootnoteSourceFormatRule>>? FormatPenulisan { get; set; }
+}
+
+public class FootnoteSourceFormatRule
+{
+    [JsonPropertyName("keterangan")]
+    public string? Keterangan { get; set; }
+
+    [JsonPropertyName("format")]
+    public string? Format { get; set; }
+
+    [JsonPropertyName("contoh")]
+    public string? Contoh { get; set; }
+}
+
+public class DaftarPustakaRule
+{
+    [JsonPropertyName("font")]
+    public ParagraphFontRule? Font { get; set; }
+
+    [JsonPropertyName("paragraph")]
+    public DaftarPustakaParagraphRule? Paragraph { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public DaftarPustakaContentStructureRule? StrukturKonten { get; set; }
+
+    [JsonPropertyName("urut_abjad")]
+    public RuleValue<bool>? UrutAbjad { get; set; }
+}
+
+public class DaftarPustakaParagraphRule
+{
+    [JsonPropertyName("alignment")]
+    public RuleValue<string>? Alignment { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class DaftarPustakaContentStructureRule
+{
+    [JsonPropertyName("satu_enter_antar_sumber")]
+    public RuleValue<bool>? SatuEnterAntarSumber { get; set; }
+}
+
 #endregion
 
 #region Validation Result DTOs
@@ -948,6 +1080,14 @@ public partial class ValidationService : IValidationService
         var listItemResult = await ValidateListItemAsync(dokumenId, classification.ListItemIds, cancellationToken);
         result.MergeFrom(listItemResult);
 
+        // Validate footnotes
+        var footnoteResult = await ValidateFootnoteAsync(dokumenId, cancellationToken);
+        result.MergeFrom(footnoteResult);
+
+        // Validate bibliography
+        var daftarPustakaResult = await ValidateDaftarPustakaAsync(dokumenId, cancellationToken);
+        result.MergeFrom(daftarPustakaResult);
+
         // Validate images
         var imageResult = await ValidateImageAsync(dokumenId, cancellationToken);
         result.MergeFrom(imageResult);
@@ -1025,7 +1165,7 @@ public partial class ValidationService : IValidationService
         var bodyElements = await (from e in _db.DokumenElemens
             join p in _db.DokumenParts on e.DpartId equals p.DpartId
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
-            where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
+            where s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
             select new BodyElementInfo { DelemenId = e.DelemenId, DelemenType = e.DelemenType, DelemenJsonTree = e.DelemenJsonTree })
             .ToListAsync(cancellationToken);
@@ -1906,3 +2046,4 @@ public partial class ValidationService : IValidationService
     }
 
 }
+

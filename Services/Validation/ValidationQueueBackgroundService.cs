@@ -100,11 +100,14 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 {
                                     // Notify: Enriching errors with AI
                                     await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "enriching", 85);
+                                    var (sectionRefType, sectionRefId) = ResolveSectionRef(queue);
 
                                     await EnrichAndStoreErrorsAsync(
                                         db,
                                         queue.AntrianId,
                                         queue.DokumenId.Value,
+                                        sectionRefType,
+                                        sectionRefId,
                                         validationResult.Errors,
                                         stoppingToken);
                                 }
@@ -253,6 +256,8 @@ public class ValidationQueueBackgroundService : BackgroundService
         KorektorBukuDbContext db,
         uint antrianId,
         uint dokumenId,
+        string sectionRefType,
+        uint sectionRefId,
         IReadOnlyList<ValidationError> errors,
         CancellationToken cancellationToken)
     {
@@ -272,7 +277,13 @@ public class ValidationQueueBackgroundService : BackgroundService
                 .ToListAsync(cancellationToken);
         }
 
-        var llmErrors = await BuildLlmErrorsAsync(db, dokumenId, errors, cancellationToken);
+        var llmErrors = await BuildLlmErrorsAsync(
+            db,
+            dokumenId,
+            sectionRefType,
+            sectionRefId,
+            errors,
+            cancellationToken);
         if (llmErrors.Count == 0)
             return;
 
@@ -631,6 +642,8 @@ public class ValidationQueueBackgroundService : BackgroundService
     private async Task<List<ValidationError>> BuildLlmErrorsAsync(
         KorektorBukuDbContext db,
         uint dokumenId,
+        string sectionRefType,
+        uint sectionRefId,
         IReadOnlyList<ValidationError> errors,
         CancellationToken cancellationToken)
     {
@@ -660,7 +673,8 @@ public class ValidationQueueBackgroundService : BackgroundService
 
         var sectionContexts = await LoadSectionContextsAsync(
             db,
-            dokumenId,
+            sectionRefType,
+            sectionRefId,
             sectionIndices,
             cancellationToken);
 
@@ -899,7 +913,8 @@ public class ValidationQueueBackgroundService : BackgroundService
 
     private async Task<Dictionary<int, SectionContext>> LoadSectionContextsAsync(
         KorektorBukuDbContext db,
-        uint dokumenId,
+        string sectionRefType,
+        uint sectionRefId,
         IEnumerable<int> sectionIndices,
         CancellationToken cancellationToken)
     {
@@ -908,7 +923,7 @@ public class ValidationQueueBackgroundService : BackgroundService
             return new Dictionary<int, SectionContext>();
 
         var sections = await db.DokumenSections
-            .Where(s => s.DokumenId == dokumenId)
+            .Where(s => s.DsecRefTipe == sectionRefType && s.DsecRefId == sectionRefId)
             .OrderBy(s => s.DsecIndex)
             .Select(s => s.DsecId)
             .ToListAsync(cancellationToken);
@@ -962,7 +977,12 @@ public class ValidationQueueBackgroundService : BackgroundService
             .Select(id => id!.Value)
             .ToList();
 
-        var pageNumbers = await LoadPageNumbersByElementIdAsync(db, elementIds, cancellationToken);
+        var pageNumbers = await LoadPageNumbersByElementIdAsync(
+            db,
+            sectionRefType,
+            sectionRefId,
+            elementIds,
+            cancellationToken);
         foreach (var context in contexts.Values)
         {
             if (!context.ElementId.HasValue)
@@ -977,6 +997,8 @@ public class ValidationQueueBackgroundService : BackgroundService
 
     private async Task<Dictionary<ulong, int>> LoadPageNumbersByElementIdAsync(
         KorektorBukuDbContext db,
+        string refType,
+        uint refId,
         IEnumerable<ulong> elementIds,
         CancellationToken cancellationToken)
     {
@@ -989,6 +1011,8 @@ public class ValidationQueueBackgroundService : BackgroundService
         var idColumn = await ResolveVisualIdColumnAsync(db, cancellationToken);
         if (string.IsNullOrWhiteSpace(idColumn))
             return pageNumbers;
+        var (refTypeColumn, refIdColumn) = await ResolveVisualRefColumnsAsync(db, cancellationToken);
+        var refFilter = BuildVisualRefFilterClause(refTypeColumn, refIdColumn, refType, refId);
 
         var connection = db.Database.GetDbConnection();
         var shouldClose = connection.State != ConnectionState.Open;
@@ -1001,7 +1025,7 @@ public class ValidationQueueBackgroundService : BackgroundService
             {
                 var idList = string.Join(",", chunk);
                 var sql = $"SELECT `{idColumn}` AS delemen_id, `dev_page` " +
-                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList}) AND `dev_page` IS NOT NULL";
+                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList}) {refFilter}AND `dev_page` IS NOT NULL";
 
                 using var cmd = connection.CreateCommand();
                 cmd.CommandText = sql;
@@ -1074,6 +1098,79 @@ public class ValidationQueueBackgroundService : BackgroundService
             _logger.LogWarning(ex, "Failed to resolve dokumen_elemen_visual columns");
             return null;
         }
+    }
+
+    private async Task<(string? RefTypeColumn, string? RefIdColumn)> ResolveVisualRefColumnsAsync(
+        KorektorBukuDbContext db,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var connection = db.Database.GetDbConnection();
+            var shouldClose = connection.State != ConnectionState.Open;
+            if (shouldClose)
+                await connection.OpenAsync(cancellationToken);
+
+            var columns = new List<string>();
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS " +
+                                  "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dokumen_elemen_visual'";
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var name = reader.GetString(0);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        columns.Add(name);
+                }
+            }
+
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+
+            if (columns.Count == 0)
+                return (null, null);
+
+            var refTypeColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_tipe", StringComparison.OrdinalIgnoreCase));
+            var refIdColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_id", StringComparison.OrdinalIgnoreCase))
+                ?? columns.FirstOrDefault(c => c.Equals("dokumen_id", StringComparison.OrdinalIgnoreCase));
+
+            return (refTypeColumn, refIdColumn);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve dokumen_elemen_visual ref columns");
+            return (null, null);
+        }
+    }
+
+    private static string BuildVisualRefFilterClause(
+        string? refTypeColumn,
+        string? refIdColumn,
+        string? refType,
+        uint? refId)
+    {
+        if (string.IsNullOrWhiteSpace(refTypeColumn) && string.IsNullOrWhiteSpace(refIdColumn))
+            return string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(refIdColumn) && refId.HasValue)
+        {
+            if (!string.IsNullOrWhiteSpace(refTypeColumn) && !string.IsNullOrWhiteSpace(refType))
+            {
+                var escapedRefType = refType.Replace("'", "''");
+                return $"AND `{refTypeColumn}` = '{escapedRefType}' AND `{refIdColumn}` = {refId.Value} ";
+            }
+
+            return $"AND `{refIdColumn}` = {refId.Value} ";
+        }
+
+        if (!string.IsNullOrWhiteSpace(refTypeColumn) && !string.IsNullOrWhiteSpace(refType))
+        {
+            var escapedRefType = refType.Replace("'", "''");
+            return $"AND `{refTypeColumn}` = '{escapedRefType}' ";
+        }
+
+        return string.Empty;
     }
 
     private static string? ExtractPlainText(string? json)
@@ -1281,4 +1378,24 @@ public class ValidationQueueBackgroundService : BackgroundService
 
         return message.Length <= 50 ? message : message[..50];
     }
+
+    private static (string RefType, uint RefId) ResolveSectionRef(Antrian queue)
+    {
+        if (string.Equals(queue.AntrianTipe, "buku", StringComparison.OrdinalIgnoreCase) &&
+            queue.BabId.HasValue)
+        {
+            return ("buku", queue.BabId.Value);
+        }
+
+        if (string.Equals(queue.AntrianTipe, "dokumen", StringComparison.OrdinalIgnoreCase) &&
+            queue.DokumenId.HasValue)
+        {
+            return ("dokumen", queue.DokumenId.Value);
+        }
+
+        // Best-effort fallback for inconsistent queue payload.
+        var fallbackId = queue.DokumenId ?? queue.BabId ?? 0u;
+        return ("dokumen", fallbackId);
+    }
 }
+

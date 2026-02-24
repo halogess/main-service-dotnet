@@ -10,8 +10,12 @@ public class DokumenSection
     [Column("dsec_id")]
     public uint DsecId { get; set; }
 
-    [Column("dokumen_id")]
-    public uint? DokumenId { get; set; }
+    [Column("dsec_ref_tipe")]
+    [MaxLength(10)]
+    public string DsecRefTipe { get; set; } = "dokumen";
+
+    [Column("dsec_ref_id")]
+    public uint DsecRefId { get; set; }
 
     [Column("dsec_index")]
     public uint? DsecIndex { get; set; }

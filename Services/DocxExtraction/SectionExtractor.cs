@@ -13,10 +13,18 @@ public static class SectionExtractor
     /// Extracts section properties from OpenXML SectionProperties element
     /// </summary>
     public static DokumenSection ExtractSectionProperties(SectionProperties sectPr, int dokumenId, int sectionIndex)
+        => ExtractSectionProperties(sectPr, "dokumen", (uint)dokumenId, sectionIndex);
+
+    /// <summary>
+    /// Extracts section properties from OpenXML SectionProperties element
+    /// with flexible reference target (dokumen/buku).
+    /// </summary>
+    public static DokumenSection ExtractSectionProperties(SectionProperties sectPr, string refTipe, uint refId, int sectionIndex)
     {
         var section = new DokumenSection
         {
-            DokumenId = (uint)dokumenId,
+            DsecRefTipe = string.IsNullOrWhiteSpace(refTipe) ? "dokumen" : refTipe.Trim().ToLowerInvariant(),
+            DsecRefId = refId,
             DsecIndex = (uint)sectionIndex
         };
         

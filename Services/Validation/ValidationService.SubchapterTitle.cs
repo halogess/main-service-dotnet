@@ -93,7 +93,7 @@ public partial class ValidationService
         var bodyElements = await (from e in _db.DokumenElemens
             join p in _db.DokumenParts on e.DpartId equals p.DpartId
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
-            where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
+            where s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
             select new BodyElementInfo
             {
@@ -1136,6 +1136,7 @@ public partial class ValidationService
         var (idColumn, labelColumn) = await ResolveVisualColumnsAsync(cancellationToken);
         if (string.IsNullOrWhiteSpace(idColumn))
             return;
+        var (refTypeColumn, refIdColumn) = await ResolveVisualRefColumnsAsync(cancellationToken);
 
         var connection = _db.Database.GetDbConnection();
         var shouldClose = connection.State != ConnectionState.Open;
@@ -1144,11 +1145,19 @@ public partial class ValidationService
 
         int? page = null;
         double? y1 = null;
+        string? visualRefType = null;
+        ulong? visualRefId = null;
         var hasElementBelow = false;
 
         try
         {
-            var sql = $"SELECT `dev_page`, `dev_bbox_y1` FROM `dokumen_elemen_visual` WHERE `{idColumn}` = @id LIMIT 1";
+            var selectRefColumns = string.Empty;
+            if (!string.IsNullOrWhiteSpace(refTypeColumn))
+                selectRefColumns += $", `{refTypeColumn}` AS ref_tipe";
+            if (!string.IsNullOrWhiteSpace(refIdColumn))
+                selectRefColumns += $", `{refIdColumn}` AS ref_id";
+
+            var sql = $"SELECT `dev_page`, `dev_bbox_y1`{selectRefColumns} FROM `dokumen_elemen_visual` WHERE `{idColumn}` = @id LIMIT 1";
 
             using var cmd = connection.CreateCommand();
             cmd.CommandText = sql;
@@ -1162,6 +1171,10 @@ public partial class ValidationService
                 {
                     page = reader["dev_page"] != DBNull.Value ? Convert.ToInt32(reader["dev_page"]) : null;
                     y1 = reader["dev_bbox_y1"] != DBNull.Value ? Convert.ToDouble(reader["dev_bbox_y1"]) : null;
+                    if (!string.IsNullOrWhiteSpace(refTypeColumn) && reader["ref_tipe"] != DBNull.Value)
+                        visualRefType = reader["ref_tipe"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(refIdColumn) && reader["ref_id"] != DBNull.Value)
+                        visualRefId = Convert.ToUInt64(reader["ref_id"]);
                 }
             }
             if (!page.HasValue || !y1.HasValue)
@@ -1173,12 +1186,18 @@ public partial class ValidationService
             var labelFilter = labelExpr != null
                 ? $"AND ({labelExpr} IS NULL OR {labelExpr} NOT IN ('footnote', 'page_footer', 'footer'))"
                 : string.Empty;
+            var refFilter = BuildVisualRefFilterClause(
+                refTypeColumn,
+                refIdColumn,
+                string.IsNullOrWhiteSpace(visualRefType) ? "dokumen" : visualRefType,
+                visualRefId);
 
             var belowSql = $"SELECT 1 FROM `dokumen_elemen_visual` " +
                            $"WHERE `dev_page` = @page " +
                            $"AND `dev_bbox_y0` IS NOT NULL " +
                            $"AND `dev_bbox_y0` > @y1 " +
                            $"AND `{idColumn}` <> @id " +
+                           $"{refFilter}" +
                            $"{labelFilter} " +
                            "LIMIT 1";
 
@@ -1517,6 +1536,7 @@ public partial class ValidationService
             .ToList();
     }
 }
+
 
 
 

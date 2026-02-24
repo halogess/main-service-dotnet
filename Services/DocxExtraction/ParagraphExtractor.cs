@@ -149,7 +149,15 @@ public class ParagraphExtractor
                 return "subtitle";
         }
 
-        if (pPr.NumberingProperties?.NumberingId?.Val?.Value != null)
+        if (_styleResolver != null)
+        {
+            var (numId, ilvl) = _styleResolver.GetEffectiveNumberingProperties(p);
+            if (numId.HasValue && numId.Value > 0)
+                return $"list-item-{numId.Value}-{ilvl}";
+        }
+
+        if (pPr.NumberingProperties?.NumberingId?.Val?.Value != null &&
+            pPr.NumberingProperties.NumberingId.Val.Value > 0)
         {
             var numId = pPr.NumberingProperties.NumberingId.Val.Value;
             var ilvl = pPr.NumberingProperties.NumberingLevelReference?.Val?.Value ?? 0;
@@ -292,6 +300,7 @@ public class ParagraphExtractor
         int itemIndex = 0;
         var helper = new ParagraphContentHelper();
         var paragraphStyleId = p.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+        var paragraphPlainText = Regex.Replace(p.InnerText ?? string.Empty, "\\s+", " ").Trim();
         var isCaptionParagraph = IsCaptionParagraph(p, paragraphStyleId);
         
         // --- Numbering Extraction Logic (delegated to NumberingExtractor) ---
@@ -358,7 +367,17 @@ public class ParagraphExtractor
                 }
                 else
                 {
-                    ClearNumberingContinuationState();
+                    // XML-driven behavior:
+                    // - Paragraph without numbering (source=none) is neutral and should not
+                    //   reset continuation candidate by itself.
+                    // - Explicit numId=0 on empty placeholder paragraph is also treated
+                    //   as neutral (common in generated docs).
+                    var preserveContinuation =
+                        source == "none" ||
+                        (source == "disabled" && string.IsNullOrWhiteSpace(paragraphPlainText));
+
+                    if (!preserveContinuation)
+                        ClearNumberingContinuationState();
                 }
             }
             catch (Exception ex)

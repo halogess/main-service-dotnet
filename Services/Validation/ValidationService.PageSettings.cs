@@ -7,6 +7,14 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public partial class ValidationService
 {
+    private sealed class NomorHalamanSectionRule
+    {
+        public bool? Continue { get; init; }
+        public bool? DifferentFirstPage { get; init; }
+        public bool? FirstPageIsEmpty { get; init; }
+        public string? NumberFormat { get; init; }
+    }
+
     public async Task<ValidationResult> ValidatePageSettingsAsync(int dokumenId, CancellationToken cancellationToken = default)
     {
         var result = new ValidationResult();
@@ -33,10 +41,10 @@ public partial class ValidationService
         if (aturan == null)
             return result;
 
-        // Get aturan details for page settings
+        // Get aturan details for page settings + nomor halaman
         var aturanDetails = await _db.AturanDetails
             .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
-            .Where(d => d.AturanDetailKategori == "Pengaturan Halaman")
+            .Where(d => d.AturanDetailKategori == "Pengaturan Halaman" || d.AturanDetailKategori == "Nomor Halaman")
             .ToListAsync(cancellationToken);
 
         // Parse rules
@@ -46,12 +54,38 @@ public partial class ValidationService
         GutterRule? gutterRule = null;
         ColumnRule? columnRule = null;
         PageNumberingRule? pageNumberingRule = null;
+        var nomorHalamanRules = new Dictionary<string, NomorHalamanSectionRule>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var detail in aturanDetails)
         {
             try
             {
-                switch (detail.AturanDetailKey?.ToLower())
+                var kategori = (detail.AturanDetailKategori ?? string.Empty).Trim();
+                var key = (detail.AturanDetailKey ?? string.Empty).Trim().ToLowerInvariant();
+
+                if (kategori.Equals("Nomor Halaman", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parsedRule = ParseNomorHalamanSectionRule(detail.AturanDetailJsonValue);
+                    switch (key)
+                    {
+                        case "nomor_halaman_awal":
+                            nomorHalamanRules["awal"] = parsedRule;
+                            break;
+                        case "nomor_halaman_isi":
+                            nomorHalamanRules["isi"] = parsedRule;
+                            break;
+                        case "nomor_halaman_akhir":
+                            nomorHalamanRules["akhir"] = parsedRule;
+                            break;
+                        case "nomor_halaman_lampiran":
+                            nomorHalamanRules["lampiran"] = parsedRule;
+                            break;
+                    }
+
+                    continue;
+                }
+
+                switch (key)
                 {
                     case "paper":
                         paperRule = JsonSerializer.Deserialize<PaperSectionRule>(detail.AturanDetailJsonValue ?? "{}");
@@ -88,7 +122,7 @@ public partial class ValidationService
 
         // Get all sections for this dokumen
         var sections = await _db.DokumenSections
-            .Where(s => s.DokumenId == (uint)dokumenId)
+            .Where(s => s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId)
             .OrderBy(s => s.DsecIndex)
             .ToListAsync(cancellationToken);
 
@@ -156,7 +190,11 @@ public partial class ValidationService
             ValidateColumnCount(result, section, effectiveColumnRule, i + 1, sectionType, sectionPageMap);
 
             // Validate page numbering
-            if (pageNumberingRule?.Section != null)
+            if (nomorHalamanRules.TryGetValue(sectionType, out var nomorHalamanRule))
+            {
+                ValidateNomorHalamanRule(result, section, nomorHalamanRule, i + 1, sectionType, sectionPageMap);
+            }
+            else if (pageNumberingRule?.Section != null)
             {
                 var expectedNumbering = GetExpectedPageNumbering(pageNumberingRule.Section, sectionType);
                 ValidatePageNumbering(result, section, expectedNumbering, i + 1, sectionType, sectionPageMap);
@@ -168,17 +206,22 @@ public partial class ValidationService
 
     private string DetermineSectionType(DokumenSection section, int sectionIndex, int totalSections, string? dokumenTipe)
     {
+        // Strong signal: dokumen_tipe is already semantic (awal/isi/akhir/lampiran).
+        var normalizedDokumenTipe = (dokumenTipe ?? string.Empty).Trim().ToLowerInvariant();
+        if (normalizedDokumenTipe is "awal" or "isi" or "akhir" or "lampiran")
+            return normalizedDokumenTipe;
+
         // Determine section type based on page numbering format and position
         // This is more accurate than just using position
-        
+
         var pageNumFormat = section.DsecPageNumFormat?.ToLower();
-        
+
         // Roman numerals typically indicate front matter (awal)
         if (pageNumFormat == "lowerroman" || pageNumFormat == "upperroman")
         {
             return "awal";
         }
-        
+
         // Check if this section restarts page numbering from 1 with decimal
         // This typically indicates the start of main content (isi)
         if (pageNumFormat == "decimal" && section.DsecPageNumStart == 1 && sectionIndex > 0)
@@ -186,14 +229,14 @@ public partial class ValidationService
             // This is likely the start of "isi" section
             return "isi";
         }
-        
+
         // If only one section, check dokumen_tipe to determine
         if (totalSections == 1)
         {
             // Single section documents are typically "isi"
             return "isi";
         }
-        
+
         // First section without roman numerals could still be "awal" or "isi"
         if (sectionIndex == 0)
         {
@@ -202,11 +245,11 @@ public partial class ValidationService
                 return "awal";
             return "isi";
         }
-        
+
         // Last section could be "akhir" or "lampiran"
         // Without more content analysis, we default to "isi"
         // Lampiran detection would require content analysis (looking for "LAMPIRAN" text)
-        
+
         // Middle sections are "isi" by default
         return "isi";
     }
@@ -635,6 +678,291 @@ public partial class ValidationService
         }
     }
 
+    private void ValidateNomorHalamanRule(
+        ValidationResult result,
+        DokumenSection section,
+        NomorHalamanSectionRule rule,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
+    {
+        if (!string.IsNullOrWhiteSpace(rule.NumberFormat))
+        {
+            result.IncrementTotalChecks();
+            var expectedFormat = rule.NumberFormat!.Trim().ToLowerInvariant();
+            var actualFormat = (section.DsecPageNumFormat ?? "decimal").Trim().ToLowerInvariant();
+
+            if (actualFormat == expectedFormat)
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Pengaturan Halaman",
+                    Field = "page_number_format",
+                    Message = $"Format nomor halaman section {sectionNumber} (bagian {sectionType}) tidak sesuai",
+                    Expected = expectedFormat,
+                    Actual = actualFormat,
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("page_number_format", section, sectionPageMap)
+                });
+            }
+        }
+
+        if (rule.Continue.HasValue)
+        {
+            result.IncrementTotalChecks();
+            var expectedContinue = rule.Continue.Value;
+            var actualContinue = !section.DsecPageNumStart.HasValue || section.DsecPageNumStart.Value == 0;
+
+            if (actualContinue == expectedContinue)
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Pengaturan Halaman",
+                    Field = "page_number_continue",
+                    Message = $"Pengaturan lanjutan nomor halaman section {sectionNumber} (bagian {sectionType}) tidak sesuai",
+                    Expected = expectedContinue ? "continue" : "restart",
+                    Actual = actualContinue ? "continue" : "restart",
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("page_number_start", section, sectionPageMap)
+                });
+            }
+        }
+
+        if (rule.DifferentFirstPage.HasValue)
+        {
+            result.IncrementTotalChecks();
+            if (section.DsecHasTitlePage == rule.DifferentFirstPage.Value)
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Pengaturan Halaman",
+                    Field = "different_first_page",
+                    Message = $"Pengaturan different first page section {sectionNumber} (bagian {sectionType}) tidak sesuai",
+                    Expected = rule.DifferentFirstPage.Value ? "true" : "false",
+                    Actual = section.DsecHasTitlePage ? "true" : "false",
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("page_numbering", section, sectionPageMap)
+                });
+            }
+        }
+
+        // With current extraction data we cannot validate first-page emptiness directly.
+        // We use title-page flag as best-effort proxy.
+        if (rule.FirstPageIsEmpty == true)
+        {
+            result.IncrementTotalChecks();
+            if (section.DsecHasTitlePage)
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Pengaturan Halaman",
+                    Field = "first_page_is_empty",
+                    Message = $"Halaman pertama section {sectionNumber} (bagian {sectionType}) seharusnya dipisahkan untuk nomor halaman",
+                    Expected = "true",
+                    Actual = "false",
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("page_numbering", section, sectionPageMap)
+                });
+            }
+        }
+    }
+
+    private static NomorHalamanSectionRule ParseNomorHalamanSectionRule(string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return new NomorHalamanSectionRule();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(rawJson);
+            var root = doc.RootElement;
+
+            return new NomorHalamanSectionRule
+            {
+                Continue = ReadFlexibleBoolProperty(root, "continue"),
+                DifferentFirstPage = ReadFlexibleBoolProperty(root, "different_first_page"),
+                FirstPageIsEmpty = ReadNestedFlexibleBool(root, "first_page", "is_empty"),
+                NumberFormat = NormalizeNomorHalamanFormat(ExtractNomorHalamanFormat(root))
+            };
+        }
+        catch (JsonException)
+        {
+            return new NomorHalamanSectionRule();
+        }
+    }
+
+    private static string? ExtractNomorHalamanFormat(JsonElement root)
+    {
+        // 1) Root-level number_format.type
+        if (TryGetPropertyIgnoreCase(root, "number_format", out var numberFormat))
+        {
+            var type = TryGetNumberFormatType(numberFormat);
+            if (!string.IsNullOrWhiteSpace(type))
+                return type;
+        }
+
+        // 2) first_page.number_format.type
+        if (TryGetPropertyIgnoreCase(root, "first_page", out var firstPage) &&
+            TryGetPropertyIgnoreCase(firstPage, "number_format", out var firstPageNumberFormat))
+        {
+            var type = TryGetNumberFormatType(firstPageNumberFormat);
+            if (!string.IsNullOrWhiteSpace(type))
+                return type;
+        }
+
+        // 3) default_page.number_format.type
+        if (TryGetPropertyIgnoreCase(root, "default_page", out var defaultPage) &&
+            TryGetPropertyIgnoreCase(defaultPage, "number_format", out var defaultPageNumberFormat))
+        {
+            var type = TryGetNumberFormatType(defaultPageNumberFormat);
+            if (!string.IsNullOrWhiteSpace(type))
+                return type;
+        }
+
+        return null;
+    }
+
+    private static string? TryGetNumberFormatType(JsonElement numberFormat)
+    {
+        if (numberFormat.ValueKind == JsonValueKind.Object &&
+            TryGetPropertyIgnoreCase(numberFormat, "type", out var typeElement))
+        {
+            return ReadFlexibleString(typeElement);
+        }
+
+        return ReadFlexibleString(numberFormat);
+    }
+
+    private static bool? ReadNestedFlexibleBool(JsonElement root, string parentName, string childName)
+    {
+        if (!TryGetPropertyIgnoreCase(root, parentName, out var parent))
+            return null;
+
+        return ReadFlexibleBoolProperty(parent, childName);
+    }
+
+    private static bool? ReadFlexibleBoolProperty(JsonElement element, string propertyName)
+    {
+        if (!TryGetPropertyIgnoreCase(element, propertyName, out var value))
+            return null;
+
+        return ReadFlexibleBool(value);
+    }
+
+    private static bool? ReadFlexibleBool(JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.True:
+                return true;
+            case JsonValueKind.False:
+                return false;
+            case JsonValueKind.Number:
+                if (value.TryGetInt32(out var number))
+                    return number != 0;
+                break;
+            case JsonValueKind.String:
+            {
+                var raw = value.GetString();
+                if (string.IsNullOrWhiteSpace(raw))
+                    return null;
+
+                if (bool.TryParse(raw, out var boolValue))
+                    return boolValue;
+
+                if (int.TryParse(raw, out var intValue))
+                    return intValue != 0;
+                break;
+            }
+            case JsonValueKind.Object:
+                if (TryGetPropertyIgnoreCase(value, "value", out var nested))
+                    return ReadFlexibleBool(nested);
+                break;
+        }
+
+        return null;
+    }
+
+    private static string? ReadFlexibleString(JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.String:
+            {
+                var raw = value.GetString();
+                return string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
+            }
+            case JsonValueKind.Number:
+                return value.GetRawText();
+            case JsonValueKind.True:
+            case JsonValueKind.False:
+                return value.GetBoolean().ToString().ToLowerInvariant();
+            case JsonValueKind.Object:
+                if (TryGetPropertyIgnoreCase(value, "value", out var nested))
+                    return ReadFlexibleString(nested);
+                break;
+        }
+
+        return null;
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement element, string propertyName, out JsonElement value)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.Name.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
+    }
+
+    private static string? NormalizeNomorHalamanFormat(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "arab" => "decimal",
+            "arabic" => "decimal",
+            "desimal" => "decimal",
+            "decimal" => "decimal",
+            "roman" => "lowerroman",
+            "romawi" => "lowerroman",
+            "lower_roman" => "lowerroman",
+            "upper_roman" => "upperroman",
+            "lower_letter" => "lowerletter",
+            "upper_letter" => "upperletter",
+            "none" => null,
+            _ => normalized
+        };
+    }
+
     private async Task<Dictionary<uint, int>> LoadSectionPageMapAsync(
         IReadOnlyList<DokumenSection> sections,
         CancellationToken cancellationToken)
@@ -912,3 +1240,4 @@ public partial class ValidationService
         return "CUSTOM";
     }
 }
+

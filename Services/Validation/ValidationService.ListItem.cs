@@ -83,7 +83,7 @@ public partial class ValidationService
         var bodyElements = await (from e in _db.DokumenElemens
             join p in _db.DokumenParts on e.DpartId equals p.DpartId
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
-            where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
+            where s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
             select new { e.DelemenId, e.DelemenType, e.DelemenJsonTree })
             .ToListAsync(cancellationToken);
@@ -677,3 +677,4 @@ public partial class ValidationService
         }
     }
 }
+

@@ -79,6 +79,8 @@ public class KorektorBukuDbContext : DbContext
         modelBuilder.Entity<DokumenSection>(entity =>
         {
             entity.HasKey(e => e.DsecId);
+            entity.Property(e => e.DsecRefTipe)
+                .HasColumnType("enum('buku','dokumen')");
         });
 
         modelBuilder.Entity<DokumenPart>(entity =>

@@ -83,7 +83,7 @@ public partial class ValidationService
         var bodyElements = await (from e in _db.DokumenElemens
             join p in _db.DokumenParts on e.DpartId equals p.DpartId
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
-            where s.DokumenId == (uint)dokumenId && p.DpartType == "body"
+            where s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
             select new BodyElementInfo { DelemenId = e.DelemenId, DelemenType = e.DelemenType, DelemenJsonTree = e.DelemenJsonTree })
             .ToListAsync(cancellationToken);
@@ -1725,6 +1725,77 @@ public partial class ValidationService
         }
     }
 
+    private async Task<(string? RefTypeColumn, string? RefIdColumn)> ResolveVisualRefColumnsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var connection = _db.Database.GetDbConnection();
+            var shouldClose = connection.State != ConnectionState.Open;
+            if (shouldClose)
+                await connection.OpenAsync(cancellationToken);
+
+            var columns = new List<string>();
+            using (var cmd = connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS " +
+                                  "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dokumen_elemen_visual'";
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    var name = reader.GetString(0);
+                    if (!string.IsNullOrWhiteSpace(name))
+                        columns.Add(name);
+                }
+            }
+
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+
+            if (columns.Count == 0)
+                return (null, null);
+
+            var refTypeColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_tipe", StringComparison.OrdinalIgnoreCase));
+            var refIdColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_id", StringComparison.OrdinalIgnoreCase))
+                ?? columns.FirstOrDefault(c => c.Equals("dokumen_id", StringComparison.OrdinalIgnoreCase));
+
+            return (refTypeColumn, refIdColumn);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to resolve dokumen_elemen_visual ref columns");
+            return (null, null);
+        }
+    }
+
+    private static string BuildVisualRefFilterClause(
+        string? refTypeColumn,
+        string? refIdColumn,
+        string? refType,
+        ulong? refId)
+    {
+        if (string.IsNullOrWhiteSpace(refTypeColumn) && string.IsNullOrWhiteSpace(refIdColumn))
+            return string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(refIdColumn) && refId.HasValue)
+        {
+            if (!string.IsNullOrWhiteSpace(refTypeColumn) && !string.IsNullOrWhiteSpace(refType))
+            {
+                var escapedRefType = refType.Replace("'", "''");
+                return $"AND `{refTypeColumn}` = '{escapedRefType}' AND `{refIdColumn}` = {refId.Value} ";
+            }
+
+            return $"AND `{refIdColumn}` = {refId.Value} ";
+        }
+
+        if (!string.IsNullOrWhiteSpace(refTypeColumn) && !string.IsNullOrWhiteSpace(refType))
+        {
+            var escapedRefType = refType.Replace("'", "''");
+            return $"AND `{refTypeColumn}` = '{escapedRefType}' ";
+        }
+
+        return string.Empty;
+    }
+
     private static string NormalizeWhitespace(string input)
     {
         if (string.IsNullOrWhiteSpace(input))
@@ -1879,3 +1950,4 @@ public partial class ValidationService
                rule?.Font?.FontStyle?.Underline != null;
     }
 }
+

@@ -433,7 +433,7 @@ public class TestingController : ControllerBase
             // Delete existing elements and media
             // Get all part IDs for this dokumen through sections
             var partIds = await _db.DokumenParts
-                .Where(p => p.Section != null && p.Section.DokumenId == dokumenId)
+                .Where(p => p.Section != null && p.Section.DsecRefTipe == "dokumen" && p.Section.DsecRefId == dokumenId)
                 .Select(p => p.DpartId)
                 .ToListAsync();
             
@@ -450,7 +450,7 @@ public class TestingController : ControllerBase
 
             // Get updated part IDs after re-extraction
             var newPartIds = await _db.DokumenParts
-                .Where(p => p.Section != null && p.Section.DokumenId == dokumenId)
+                .Where(p => p.Section != null && p.Section.DsecRefTipe == "dokumen" && p.Section.DsecRefId == dokumenId)
                 .Select(p => p.DpartId)
                 .ToListAsync();
             var newCount = await _db.DokumenElemens.CountAsync(e => e.DpartId.HasValue && newPartIds.Contains(e.DpartId.Value));
@@ -466,3 +466,4 @@ public class TestingController : ControllerBase
         }
     }
 }
+

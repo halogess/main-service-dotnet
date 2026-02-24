@@ -85,6 +85,12 @@ public class PdfQueueBackgroundService : BackgroundService
                             await docxExtraction.ExtractDocxToDatabase(fullFilePath, (int)queue.DokumenId.Value);
                             _logger.LogInformation("Extracted DOCX elements for dokumen ID: {DokumenId}", queue.DokumenId);
                         }
+                        else if (queue.AntrianTipe == "buku" && queue.BabId.HasValue)
+                        {
+                            var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
+                            await docxExtraction.ExtractDocxToDatabase(fullFilePath, "buku", queue.BabId.Value);
+                            _logger.LogInformation("Extracted DOCX elements for buku bab ID: {BabId}", queue.BabId);
+                        }
 
                         var credential = await db.AdobeCredentials
                             .Where(c => c.AdobeCredentialsStatus == "active" && c.AdobeCredentialsQuotaUsed < c.AdobeCredentialsQuotaLimit)

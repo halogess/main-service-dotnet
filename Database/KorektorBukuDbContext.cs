@@ -49,6 +49,8 @@ public class KorektorBukuDbContext : DbContext
         modelBuilder.Entity<Bab>(entity =>
         {
             entity.HasKey(e => e.BabId);
+            entity.Property(e => e.BabTipe).HasMaxLength(100);
+            entity.Property(e => e.BabImagesPath).HasMaxLength(255);
         });
 
         modelBuilder.Entity<Dokumen>(entity =>

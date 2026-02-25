@@ -10,6 +10,10 @@ public class Bab
     [Column("bab_id")]
     public uint BabId { get; set; }
 
+    [Column("bab_tipe")]
+    [MaxLength(100)]
+    public string? BabTipe { get; set; }
+
     [Column("buku_id")]
     public uint BukuId { get; set; }
 
@@ -27,6 +31,10 @@ public class Bab
     [Column("bab_pdf_path")]
     [MaxLength(255)]
     public string? BabPdfPath { get; set; }
+
+    [Column("bab_images_path")]
+    [MaxLength(255)]
+    public string? BabImagesPath { get; set; }
 
     [Column("bab_skor")]
     public int? BabSkor { get; set; }

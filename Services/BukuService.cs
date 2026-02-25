@@ -55,6 +55,8 @@ public class BukuService : IBukuService
                 {
                     BukuId = (uint)buku.BukuId,
                     BabOrder = babOrder,
+                    BabTipe = "bab",
+                    BabImagesPath = Path.Combine("buku", nrp, buku.BukuId.ToString(), "images", babOrder.ToString()).Replace('\\', '/'),
                     BabFilename = ""
                 };
 

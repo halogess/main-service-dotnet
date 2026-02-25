@@ -17,7 +17,7 @@ public class DokumenPart
 
     /// <summary>
     /// Link to section - ALL parts are tied to a section
-    /// Referensi induk (dokumen/buku) bisa diturunkan via Section.DsecRefTipe + Section.DsecRefId
+    /// Referensi induk (dokumen/bab) bisa diturunkan via Section.DsecRefTipe + Section.DsecRefId
     /// </summary>
     [Column("dsec_id")]
     public uint DsecId { get; set; }

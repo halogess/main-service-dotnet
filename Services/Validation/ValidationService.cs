@@ -1022,6 +1022,7 @@ public class ValidationError
 public interface IValidationService
 {
     Task<ValidationResult> ValidateDokumenAsync(int dokumenId, CancellationToken cancellationToken = default);
+    Task<ValidationResult> ValidateBabAsync(uint babId, CancellationToken cancellationToken = default);
     Task<ValidationResult> ValidatePageSettingsAsync(int dokumenId, CancellationToken cancellationToken = default);
 }
 
@@ -1050,7 +1051,135 @@ public partial class ValidationService : IValidationService
         _logger = logger;
     }
 
+    private sealed class ValidationTargetContext
+    {
+        public string SectionRefType { get; init; } = "dokumen";
+        public uint SectionRefId { get; init; }
+        public string? DokumenTipe { get; init; }
+        public uint? BabId { get; init; }
+    }
+
+    private sealed class ValidationTargetResolution
+    {
+        public bool Exists { get; init; }
+        public string? DokumenTipe { get; init; }
+    }
+
+    private ValidationTargetContext? _activeValidationTarget;
+
+    private async Task<ValidationTargetResolution> ResolveValidationTargetAsync(
+        int dokumenId,
+        CancellationToken cancellationToken)
+    {
+        if (_activeValidationTarget != null)
+        {
+            return new ValidationTargetResolution
+            {
+                Exists = true,
+                DokumenTipe = _activeValidationTarget.DokumenTipe
+            };
+        }
+
+        var dokumen = await _db.Dokumens
+            .AsNoTracking()
+            .Where(d => d.DokumenId == dokumenId)
+            .Select(d => new { d.DokumenTipe })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return new ValidationTargetResolution
+        {
+            Exists = dokumen != null,
+            DokumenTipe = dokumen?.DokumenTipe
+        };
+    }
+
+    private (string RefType, uint RefId) ResolveSectionRefForValidation(int dokumenId)
+    {
+        if (_activeValidationTarget != null)
+            return (_activeValidationTarget.SectionRefType, _activeValidationTarget.SectionRefId);
+
+        return ("dokumen", (uint)dokumenId);
+    }
+
+    private bool IsBabScopedValidation()
+        => string.Equals(_activeValidationTarget?.SectionRefType, "bab", StringComparison.OrdinalIgnoreCase);
+
+    public async Task<ValidationResult> ValidateBabAsync(uint babId, CancellationToken cancellationToken = default)
+    {
+        var babExists = await _db.Babs
+            .AsNoTracking()
+            .AnyAsync(b => b.BabId == babId, cancellationToken);
+
+        if (!babExists)
+        {
+            var missingResult = new ValidationResult();
+            missingResult.Errors.Add(new ValidationError
+            {
+                Category = "Buku",
+                Field = "bab_id",
+                Message = "Bab tidak ditemukan"
+            });
+            return missingResult;
+        }
+
+        var previousContext = _activeValidationTarget;
+        _activeValidationTarget = new ValidationTargetContext
+        {
+            SectionRefType = "bab",
+            SectionRefId = babId,
+            DokumenTipe = "isi",
+            BabId = babId
+        };
+
+        try
+        {
+            return await ValidateCoreAsync((int)babId, cancellationToken);
+        }
+        finally
+        {
+            _activeValidationTarget = previousContext;
+        }
+    }
+
     public async Task<ValidationResult> ValidateDokumenAsync(int dokumenId, CancellationToken cancellationToken = default)
+    {
+        var dokumen = await _db.Dokumens
+            .AsNoTracking()
+            .Where(d => d.DokumenId == dokumenId)
+            .Select(d => new { d.DokumenTipe })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (dokumen == null)
+        {
+            var missingResult = new ValidationResult();
+            missingResult.Errors.Add(new ValidationError
+            {
+                Category = "Dokumen",
+                Field = "dokumen_id",
+                Message = "Dokumen tidak ditemukan"
+            });
+            return missingResult;
+        }
+
+        var previousContext = _activeValidationTarget;
+        _activeValidationTarget = new ValidationTargetContext
+        {
+            SectionRefType = "dokumen",
+            SectionRefId = (uint)dokumenId,
+            DokumenTipe = dokumen.DokumenTipe
+        };
+
+        try
+        {
+            return await ValidateCoreAsync(dokumenId, cancellationToken);
+        }
+        finally
+        {
+            _activeValidationTarget = previousContext;
+        }
+    }
+
+    private async Task<ValidationResult> ValidateCoreAsync(int dokumenId, CancellationToken cancellationToken)
     {
         var result = new ValidationResult();
 
@@ -1080,9 +1209,12 @@ public partial class ValidationService : IValidationService
         var listItemResult = await ValidateListItemAsync(dokumenId, classification.ListItemIds, cancellationToken);
         result.MergeFrom(listItemResult);
 
-        // Validate footnotes
-        var footnoteResult = await ValidateFootnoteAsync(dokumenId, cancellationToken);
-        result.MergeFrom(footnoteResult);
+        // Footnote extraction currently stored only for dokumen flow.
+        if (!IsBabScopedValidation())
+        {
+            var footnoteResult = await ValidateFootnoteAsync(dokumenId, cancellationToken);
+            result.MergeFrom(footnoteResult);
+        }
 
         // Validate bibliography
         var daftarPustakaResult = await ValidateDaftarPustakaAsync(dokumenId, cancellationToken);
@@ -1161,11 +1293,12 @@ public partial class ValidationService : IValidationService
         CancellationToken cancellationToken)
     {
         var classification = new ElementClassification();
+        var (sectionRefType, sectionRefId) = ResolveSectionRefForValidation(dokumenId);
 
         var bodyElements = await (from e in _db.DokumenElemens
             join p in _db.DokumenParts on e.DpartId equals p.DpartId
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
-            where s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId && p.DpartType == "body"
+            where s.DsecRefTipe == sectionRefType && s.DsecRefId == sectionRefId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
             select new BodyElementInfo { DelemenId = e.DelemenId, DelemenType = e.DelemenType, DelemenJsonTree = e.DelemenJsonTree })
             .ToListAsync(cancellationToken);

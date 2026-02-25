@@ -17,8 +17,8 @@ public partial class ValidationService
     {
         var result = new ValidationResult();
 
-        var dokumen = await _db.Dokumens.FindAsync(new object[] { dokumenId }, cancellationToken);
-        if (dokumen == null)
+        var target = await ResolveValidationTargetAsync(dokumenId, cancellationToken);
+        if (!target.Exists)
         {
             result.Errors.Add(new ValidationError
             {
@@ -80,10 +80,11 @@ public partial class ValidationService
             return result;
         }
 
+        var (sectionRefType, sectionRefId) = ResolveSectionRefForValidation(dokumenId);
         var bodyElements = await (from e in _db.DokumenElemens
             join p in _db.DokumenParts on e.DpartId equals p.DpartId
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
-            where s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId && p.DpartType == "body"
+            where s.DsecRefTipe == sectionRefType && s.DsecRefId == sectionRefId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
             select new BodyElementInfo { DelemenId = e.DelemenId, DelemenType = e.DelemenType, DelemenJsonTree = e.DelemenJsonTree })
             .ToListAsync(cancellationToken);

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
@@ -134,29 +135,48 @@ public sealed class ValidationReportService : IValidationReportService
             var pages = ParsePages(kesalahan.KesalahanLokasi);
             var pagesText = FormatPageRanges(pages);
             var (firstPage, firstY) = ParseLocationSortKey(kesalahan.KesalahanLokasi);
+            var evidence = ExtractEvidence(kesalahan.KesalahanLokasi);
+            var isPageSettings = IsPageSettingsCategory(kesalahan.KesalahanKategori);
+            var orderedDetails = kesalahan.Details
+                .OrderBy(d => d.KesalahanDetailId)
+                .ToList();
+            var problematicText = FormatProblematicText(
+                !string.IsNullOrWhiteSpace(evidence)
+                    ? evidence
+                    : orderedDetails.FirstOrDefault()?.KesalahanDetailJudul);
+            var elementKey = $"kesalahan:{kesalahan.KesalahanId}";
 
-            foreach (var detail in kesalahan.Details.OrderBy(d => d.KesalahanDetailId))
+            if (isPageSettings)
+            {
+                var (sectionNumber, sectionType) = ExtractPageSettingsSectionContext(orderedDetails);
+                elementKey = BuildPageSettingsElementKey(firstPage, sectionNumber, sectionType);
+                problematicText = string.Empty;
+            }
+
+            foreach (var detail in orderedDetails)
             {
                 rows.Add(new ValidationReportRow
                 {
+                    ElementKey = elementKey,
                     Category = kesalahan.KesalahanKategori,
+                    ProblematicText = problematicText,
                     Title = detail.KesalahanDetailJudul,
                     Explanation = FormatNullableText(detail.KesalahanDetailPenjelasan),
-                    Steps = FormatSteps(detail.KesalahanDetailSteps),
                     Pages = pagesText,
-                    FirstPage = firstPage,
+                    Page = firstPage,
                     FirstY = firstY,
+                    SortPriority = isPageSettings ? 0 : 1,
                     IsRequired = detail.KesalahanIsRequired
                 });
             }
         }
 
         return rows
-            .OrderBy(r => NormalizeSortPage(r.FirstPage))
+            .OrderBy(r => NormalizeSortPage(r.Page))
+            .ThenBy(r => r.SortPriority)
+            .ThenBy(r => r.ElementKey)
             .ThenBy(r => r.FirstY)
-            .ThenBy(r => r.Category)
             .ThenBy(r => r.Title)
-            .Select((row, index) => row with { Index = index + 1 })
             .ToList();
     }
 
@@ -331,47 +351,123 @@ public sealed class ValidationReportService : IValidationReportService
         return string.Join(", ", ranges);
     }
 
-    private static string FormatNullableText(string? text)
-        => string.IsNullOrWhiteSpace(text) ? "-" : text.Trim();
-
-    private static string FormatSteps(string? stepsJson)
+    private static string? ExtractEvidence(string? lokasiJson)
     {
-        var steps = ParseSteps(stepsJson);
-        if (steps.Count == 0)
-            return "-";
-
-        return string.Join("; ", steps);
-    }
-
-    private static List<string> ParseSteps(string? stepsJson)
-    {
-        if (string.IsNullOrWhiteSpace(stepsJson))
-            return new List<string>();
+        if (string.IsNullOrWhiteSpace(lokasiJson))
+            return null;
 
         try
         {
-            var steps = JsonSerializer.Deserialize<List<string>>(stepsJson);
-            return steps == null
-                ? new List<string>()
-                : steps.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+            using var doc = JsonDocument.Parse(lokasiJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (!item.TryGetProperty("evidence", out var evidenceEl) ||
+                    evidenceEl.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                var evidence = evidenceEl.GetString();
+                if (string.IsNullOrWhiteSpace(evidence))
+                    continue;
+
+                return NormalizeInlineWhitespace(evidence);
+            }
         }
         catch (JsonException)
         {
-            return new List<string>();
+            // Ignore parsing errors
         }
+
+        return null;
     }
+
+    private static string FormatProblematicText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "-";
+
+        var normalized = NormalizeInlineWhitespace(text);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return "-";
+
+        const int maxLength = 50;
+        return normalized.Length <= maxLength
+            ? normalized
+            : normalized[..maxLength] + "...";
+    }
+
+    private static (string? SectionNumber, string? SectionType) ExtractPageSettingsSectionContext(
+        IReadOnlyList<KesalahanDetail> details)
+    {
+        if (details == null || details.Count == 0)
+            return (null, null);
+
+        foreach (var detail in details)
+        {
+            var combined = string.Join(" ", new[]
+            {
+                detail.KesalahanDetailJudul,
+                detail.KesalahanDetailPenjelasan
+            }.Where(v => !string.IsNullOrWhiteSpace(v)));
+
+            if (string.IsNullOrWhiteSpace(combined))
+                continue;
+
+            var sectionMatch = Regex.Match(combined, @"section\s+(\d+)", RegexOptions.IgnoreCase);
+            var typeMatch = Regex.Match(combined, @"\(\s*bagian\s+([^)]+)\)", RegexOptions.IgnoreCase);
+
+            var sectionNumber = sectionMatch.Success ? sectionMatch.Groups[1].Value.Trim() : null;
+            var sectionType = typeMatch.Success ? typeMatch.Groups[1].Value.Trim() : null;
+
+            if (!string.IsNullOrWhiteSpace(sectionNumber) || !string.IsNullOrWhiteSpace(sectionType))
+                return (sectionNumber, sectionType);
+        }
+
+        return (null, null);
+    }
+
+    private static string BuildPageSettingsElementKey(int page, string? sectionNumber, string? sectionType)
+    {
+        var pagePart = page > 0 ? page.ToString(CultureInfo.InvariantCulture) : "unknown";
+        var sectionPart = string.IsNullOrWhiteSpace(sectionNumber) ? "unknown" : sectionNumber.Trim();
+        var typePart = string.IsNullOrWhiteSpace(sectionType) ? "unknown" : sectionType.Trim().ToLowerInvariant();
+        return $"page-settings:{pagePart}:{sectionPart}:{typePart}";
+    }
+
+    private static string NormalizeInlineWhitespace(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var parts = text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(' ', parts);
+    }
+
+    private static string FormatNullableText(string? text)
+        => string.IsNullOrWhiteSpace(text) ? "-" : NormalizeInlineWhitespace(text);
+
+    private static bool IsPageSettingsCategory(string? category)
+        => string.Equals(category?.Trim(), "pengaturan halaman", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed record ValidationReportRow
 {
-    public int Index { get; init; }
+    public string ElementKey { get; init; } = string.Empty;
     public string Category { get; init; } = string.Empty;
+    public string ProblematicText { get; init; } = "-";
     public string Title { get; init; } = string.Empty;
     public string Explanation { get; init; } = string.Empty;
-    public string Steps { get; init; } = "-";
     public string Pages { get; init; } = "-";
-    public int FirstPage { get; init; }
+    public int Page { get; init; }
     public double FirstY { get; init; } = double.MaxValue;
+    public int SortPriority { get; init; } = 1;
     public bool IsRequired { get; init; }
 }
 
@@ -459,41 +555,70 @@ internal sealed class ValidationReportDocument : IDocument
                 }
 
                 column.Item().Text("Tabel Kesalahan Detail").SemiBold();
-                column.Item().Table(table =>
+
+                var rowsByPage = _data.Rows
+                    .GroupBy(r => r.Page)
+                    .OrderBy(g => g.Key <= 0 ? int.MaxValue : g.Key);
+
+                foreach (var pageGroup in rowsByPage)
                 {
-                    table.ColumnsDefinition(columns =>
-                    {
-                        columns.ConstantColumn(26);
-                        columns.RelativeColumn(2);
-                        columns.RelativeColumn(3);
-                        columns.RelativeColumn(3);
-                        columns.RelativeColumn(3);
-                        columns.ConstantColumn(55);
-                        columns.ConstantColumn(45);
-                    });
+                    var pageText = pageGroup.Key > 0
+                        ? $"Halaman {pageGroup.Key}"
+                        : "Halaman tidak diketahui";
 
-                    table.Header(header =>
-                    {
-                        header.Cell().Element(HeaderCellStyle).Text("No");
-                        header.Cell().Element(HeaderCellStyle).Text("Kategori");
-                        header.Cell().Element(HeaderCellStyle).Text("Judul");
-                        header.Cell().Element(HeaderCellStyle).Text("Penjelasan");
-                        header.Cell().Element(HeaderCellStyle).Text("Langkah perbaikan");
-                        header.Cell().Element(HeaderCellStyle).Text("Halaman");
-                        header.Cell().Element(HeaderCellStyle).Text("Wajib");
-                    });
+                    var orderedRows = pageGroup
+                        .OrderBy(r => r.SortPriority)
+                        .ThenBy(r => r.ElementKey)
+                        .ThenBy(r => r.FirstY)
+                        .ThenBy(r => r.Title)
+                        .ToList();
 
-                    foreach (var row in _data.Rows)
+                    column.Item().PaddingTop(6).Text(pageText).SemiBold();
+                    column.Item().Table(table =>
                     {
-                        table.Cell().Element(BodyCellStyle).Text(row.Index.ToString(CultureInfo.InvariantCulture));
-                        table.Cell().Element(BodyCellStyle).Text(row.Category);
-                        table.Cell().Element(BodyCellStyle).Text(row.Title);
-                        table.Cell().Element(BodyCellStyle).Text(row.Explanation);
-                        table.Cell().Element(BodyCellStyle).Text(row.Steps);
-                        table.Cell().Element(BodyCellStyle).Text(row.Pages);
-                        table.Cell().Element(BodyCellStyle).Text(row.IsRequired ? "Ya" : "Saran");
-                    }
-                });
+                        table.ColumnsDefinition(columns =>
+                        {
+                            columns.RelativeColumn(2);
+                            columns.RelativeColumn(3);
+                            columns.RelativeColumn(2);
+                            columns.RelativeColumn(3);
+                            columns.ConstantColumn(45);
+                        });
+
+                        table.Header(header =>
+                        {
+                            header.Cell().Element(HeaderCellStyle).Text("Kategori");
+                            header.Cell().Element(HeaderCellStyle).Text("Text bermasalah");
+                            header.Cell().Element(HeaderCellStyle).Text("Judul");
+                            header.Cell().Element(HeaderCellStyle).Text("Penjelasan");
+                            header.Cell().Element(HeaderCellStyle).Text("Wajib");
+                        });
+
+                        for (var i = 0; i < orderedRows.Count; i++)
+                        {
+                            var row = orderedRows[i];
+                            var isFirstRowForElement = i == 0 ||
+                                !string.Equals(orderedRows[i - 1].ElementKey, row.ElementKey, StringComparison.Ordinal);
+
+                            if (isFirstRowForElement)
+                            {
+                                var rowSpan = 1;
+                                while (i + rowSpan < orderedRows.Count &&
+                                       string.Equals(orderedRows[i + rowSpan].ElementKey, row.ElementKey, StringComparison.Ordinal))
+                                {
+                                    rowSpan++;
+                                }
+
+                                table.Cell().RowSpan((uint)rowSpan).Element(BodyCellStyle).Text(row.Category);
+                                table.Cell().RowSpan((uint)rowSpan).Element(BodyCellStyle).Text(row.ProblematicText);
+                            }
+
+                            table.Cell().Element(BodyCellStyle).Text(row.Title);
+                            table.Cell().Element(BodyCellStyle).Text(row.Explanation);
+                            table.Cell().Element(BodyCellStyle).Text(row.IsRequired ? "Ya" : "Saran");
+                        }
+                    });
+                }
             });
 
             page.Footer().DefaultTextStyle(x => x.FontSize(7)).Row(row =>

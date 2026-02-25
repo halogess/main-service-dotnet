@@ -5,7 +5,7 @@ namespace ValidasiTugasAkhir.MainService.Models;
 
 public enum KesalahanRefTipe
 {
-    buku,
+    bab,
     dokumen
 }
 

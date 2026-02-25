@@ -150,16 +150,12 @@ public class DokumenController : ControllerBase
                 .ToListAsync();
 
             var orderedKesalahan = kesalahanList
-                .Select(k =>
+                .SelectMany(k => ParseSortKeys(k.KesalahanLokasi).Select(sortKey => new
                 {
-                    var (halamanKe, yTerkecil) = ParseSortKey(k.KesalahanLokasi);
-                    return new
-                    {
-                        Kesalahan = k,
-                        HalamanKe = halamanKe,
-                        YTerkecil = yTerkecil
-                    };
-                })
+                    Kesalahan = k,
+                    HalamanKe = sortKey.HalamanKe,
+                    YTerkecil = sortKey.YTerkecil
+                }))
                 .OrderBy(x => NormalizeSortPage(x.HalamanKe))
                 .ThenBy(x => x.YTerkecil)
                 .ThenBy(x => x.Kesalahan.KesalahanId)
@@ -229,6 +225,61 @@ public class DokumenController : ControllerBase
         }
     }
 
+    [HttpGet("{id}/docx")]
+    public async Task<IActionResult> DownloadDokumenDocx(int id)
+    {
+        var currentNrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
+
+        var dokumen = await _db.Dokumens.FindAsync(id);
+        if (dokumen == null)
+            return NotFound(new { message = "Dokumen tidak ditemukan" });
+
+        if (role != "admin" && dokumen.MhsNrp != currentNrp)
+            return Forbid();
+
+        if (string.IsNullOrWhiteSpace(dokumen.DokumenDocxPath))
+            return NotFound(new { message = "File DOCX dokumen tidak ditemukan" });
+
+        if (!TryResolveStorageFilePath(dokumen.DokumenDocxPath, out var fullPath))
+            return BadRequest(new { message = "Path file tidak valid" });
+
+        if (!System.IO.File.Exists(fullPath))
+            return NotFound(new { message = "File DOCX dokumen tidak ditemukan" });
+
+        var downloadName = BuildDocxDownloadFileName(dokumen.DokumenFilename, dokumen.DokumenId);
+        return PhysicalFile(
+            fullPath,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            downloadName);
+    }
+
+    [HttpGet("{id}/pdf")]
+    public async Task<IActionResult> DownloadDokumenPdf(int id)
+    {
+        var currentNrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
+
+        var dokumen = await _db.Dokumens.FindAsync(id);
+        if (dokumen == null)
+            return NotFound(new { message = "Dokumen tidak ditemukan" });
+
+        if (role != "admin" && dokumen.MhsNrp != currentNrp)
+            return Forbid();
+
+        if (string.IsNullOrWhiteSpace(dokumen.DokumenPdfPath))
+            return NotFound(new { message = "File PDF dokumen belum tersedia" });
+
+        if (!TryResolveStorageFilePath(dokumen.DokumenPdfPath, out var fullPath))
+            return BadRequest(new { message = "Path file tidak valid" });
+
+        if (!System.IO.File.Exists(fullPath))
+            return NotFound(new { message = "File PDF dokumen belum tersedia" });
+
+        var downloadName = BuildPdfDownloadFileName(dokumen.DokumenFilename, dokumen.DokumenId);
+        return PhysicalFile(fullPath, "application/pdf", downloadName);
+    }
+
     [HttpGet("{dokumenId}/image/{page}")]
     public async Task<IActionResult> GetDokumenImage(int dokumenId, int page)
     {
@@ -292,6 +343,48 @@ public class DokumenController : ControllerBase
         };
     }
 
+    private static bool TryResolveStorageFilePath(string filePath, out string fullPath)
+    {
+        fullPath = string.Empty;
+
+        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+        var fullStoragePath = Path.GetFullPath(storagePath);
+        var candidatePath = Path.IsPathRooted(filePath)
+            ? filePath
+            : Path.Combine(storagePath, filePath);
+
+        var resolved = Path.GetFullPath(candidatePath);
+        if (!resolved.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        fullPath = resolved;
+        return true;
+    }
+
+    private static string BuildDocxDownloadFileName(string? dokumenFilename, int dokumenId)
+    {
+        if (!string.IsNullOrWhiteSpace(dokumenFilename))
+        {
+            var fileName = Path.GetFileName(dokumenFilename.Trim());
+            if (!string.IsNullOrWhiteSpace(fileName))
+                return fileName;
+        }
+
+        return $"dokumen_{dokumenId}.docx";
+    }
+
+    private static string BuildPdfDownloadFileName(string? dokumenFilename, int dokumenId)
+    {
+        if (!string.IsNullOrWhiteSpace(dokumenFilename))
+        {
+            var baseName = Path.GetFileNameWithoutExtension(dokumenFilename.Trim());
+            if (!string.IsNullOrWhiteSpace(baseName))
+                return baseName + ".pdf";
+        }
+
+        return $"dokumen_{dokumenId}.pdf";
+    }
+
     private static (bool HasNumber, int Number, string Name) GetImageSortKey(string filePath)
     {
         var name = Path.GetFileNameWithoutExtension(filePath);
@@ -319,20 +412,18 @@ public class DokumenController : ControllerBase
     private static int NormalizeSortPage(int halamanKe)
         => halamanKe <= 0 ? int.MaxValue : halamanKe;
 
-    private static (int HalamanKe, double YTerkecil) ParseSortKey(string? lokasiJson)
+    private static List<(int HalamanKe, double YTerkecil)> ParseSortKeys(string? lokasiJson)
     {
         if (string.IsNullOrWhiteSpace(lokasiJson))
-            return (-1, double.MaxValue);
+            return new List<(int HalamanKe, double YTerkecil)> { (-1, double.MaxValue) };
 
-        var hasValue = false;
-        var bestPage = -1;
-        var bestY = double.MaxValue;
+        var bestByPage = new Dictionary<int, double>();
 
         try
         {
             using var doc = JsonDocument.Parse(lokasiJson);
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
-                return (-1, double.MaxValue);
+                return new List<(int HalamanKe, double YTerkecil)> { (-1, double.MaxValue) };
 
             foreach (var item in doc.RootElement.EnumerateArray())
             {
@@ -358,14 +449,10 @@ public class DokumenController : ControllerBase
                     yTerkecil = parsedY;
                 }
 
-                if (!hasValue ||
-                    NormalizeSortPage(halamanKe) < NormalizeSortPage(bestPage) ||
-                    (NormalizeSortPage(halamanKe) == NormalizeSortPage(bestPage) && yTerkecil < bestY))
-                {
-                    hasValue = true;
-                    bestPage = halamanKe;
-                    bestY = yTerkecil;
-                }
+                if (bestByPage.TryGetValue(halamanKe, out var existingY))
+                    bestByPage[halamanKe] = Math.Min(existingY, yTerkecil);
+                else
+                    bestByPage[halamanKe] = yTerkecil;
             }
         }
         catch (JsonException)
@@ -373,6 +460,16 @@ public class DokumenController : ControllerBase
             // Ignore parsing errors
         }
 
-        return hasValue ? (bestPage, bestY) : (-1, double.MaxValue);
+        if (bestByPage.Count == 0)
+            return new List<(int HalamanKe, double YTerkecil)> { (-1, double.MaxValue) };
+
+        if (bestByPage.Keys.Any(page => page > 0))
+            bestByPage.Remove(-1);
+
+        return bestByPage
+            .Select(kv => (HalamanKe: kv.Key, YTerkecil: kv.Value))
+            .OrderBy(x => NormalizeSortPage(x.HalamanKe))
+            .ThenBy(x => x.YTerkecil)
+            .ToList();
     }
 }

@@ -19,9 +19,8 @@ public partial class ValidationService
     {
         var result = new ValidationResult();
 
-        // Get dokumen info
-        var dokumen = await _db.Dokumens.FindAsync(new object[] { dokumenId }, cancellationToken);
-        if (dokumen == null)
+        var target = await ResolveValidationTargetAsync(dokumenId, cancellationToken);
+        if (!target.Exists)
         {
             result.Errors.Add(new ValidationError
             {
@@ -120,9 +119,12 @@ public partial class ValidationService
         if (columnRule?.Count == 1)
             effectiveColumnRule = columnRule;
 
-        // Get all sections for this dokumen
+        var dokumenTipe = target.DokumenTipe;
+        var (sectionRefType, sectionRefId) = ResolveSectionRefForValidation(dokumenId);
+
+        // Get all sections for current validation target
         var sections = await _db.DokumenSections
-            .Where(s => s.DsecRefTipe == "dokumen" && s.DsecRefId == (uint)dokumenId)
+            .Where(s => s.DsecRefTipe == sectionRefType && s.DsecRefId == sectionRefId)
             .OrderBy(s => s.DsecIndex)
             .ToListAsync(cancellationToken);
 
@@ -139,14 +141,14 @@ public partial class ValidationService
 
         var sectionPageMap = await LoadSectionPageMapAsync(sections, cancellationToken);
 
-        _logger.LogInformation("Validating {Count} sections for dokumen ID: {DokumenId}, tipe: {DokumenTipe}",
-            sections.Count, dokumenId, dokumen.DokumenTipe);
+        _logger.LogInformation("Validating {Count} sections for ref {RefType}:{RefId}, logical ID: {DokumenId}, tipe: {DokumenTipe}",
+            sections.Count, sectionRefType, sectionRefId, dokumenId, dokumenTipe);
 
         // Validate each section
         for (int i = 0; i < sections.Count; i++)
         {
             var section = sections[i];
-            var sectionType = DetermineSectionType(section, i, sections.Count, dokumen.DokumenTipe);
+            var sectionType = DetermineSectionType(section, i, sections.Count, dokumenTipe);
 
             _logger.LogInformation("Section {Index}: Type={SectionType}, PageFormat={PageFormat}, " +
                 "Size={Width}x{Height} twips, Orientation={Orientation}, " +

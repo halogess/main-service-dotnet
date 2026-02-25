@@ -17,7 +17,7 @@ public static class SectionExtractor
 
     /// <summary>
     /// Extracts section properties from OpenXML SectionProperties element
-    /// with flexible reference target (dokumen/buku).
+    /// with flexible reference target (dokumen/bab).
     /// </summary>
     public static DokumenSection ExtractSectionProperties(SectionProperties sectPr, string refTipe, uint refId, int sectionIndex)
     {

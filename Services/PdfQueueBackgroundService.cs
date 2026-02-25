@@ -88,8 +88,8 @@ public class PdfQueueBackgroundService : BackgroundService
                         else if (queue.AntrianTipe == "buku" && queue.BabId.HasValue)
                         {
                             var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
-                            await docxExtraction.ExtractDocxToDatabase(fullFilePath, "buku", queue.BabId.Value);
-                            _logger.LogInformation("Extracted DOCX elements for buku bab ID: {BabId}", queue.BabId);
+                            await docxExtraction.ExtractDocxToDatabase(fullFilePath, "bab", queue.BabId.Value);
+                            _logger.LogInformation("Extracted DOCX elements for bab ID: {BabId}", queue.BabId);
                         }
 
                         var credential = await db.AdobeCredentials
@@ -142,15 +142,15 @@ public class PdfQueueBackgroundService : BackgroundService
                                 var allBabsCompleted = !await db.Antrians
                                     .AnyAsync(a => a.BukuId == queue.BukuId && 
                                                    a.AntrianTipe == "buku" && 
-                                                   a.AntrianExtractionStatus != "completed" && 
-                                                   a.AntrianExtractionStatus != "failed", stoppingToken);
+                                                   a.AntrianId != queue.AntrianId &&
+                                                   a.AntrianExtractionStatus != "completed", stoppingToken);
 
                                 if (allBabsCompleted && queue.BukuId.HasValue)
                                 {
                                     var buku = await db.Bukus.FindAsync(new object[] { (int)queue.BukuId.Value }, stoppingToken);
                                     if (buku != null)
                                     {
-                                        buku.BukuStatus = "selesai_convert";
+                                        buku.BukuStatus = "diproses";
                                         buku.BukuUpdatedAt = DateTime.Now;
                                         _logger.LogInformation("All babs completed for buku ID: {BukuId}", queue.BukuId);
                                     }

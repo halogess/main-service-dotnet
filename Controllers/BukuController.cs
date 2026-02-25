@@ -181,71 +181,69 @@ public class BukuController : ControllerBase
             return Forbid();
 
         var bukuId = (uint)id;
-        var babs = await _db.Babs
-            .Where(b => b.BukuId == bukuId)
-            .OrderBy(b => b.BabOrder)
-            .ToListAsync();
+        var isFinalStatus =
+            string.Equals(buku.BukuStatus, "lolos", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(buku.BukuStatus, "tidak_lolos", StringComparison.OrdinalIgnoreCase);
 
-        var antrianList = await _db.Antrians
-            .Where(a => a.AntrianTipe == "buku" && a.BukuId == bukuId)
-            .OrderByDescending(a => a.AntrianCreatedAt)
-            .ThenByDescending(a => a.AntrianId)
-            .ToListAsync();
-
-        var queueByBabId = antrianList
-            .Where(a => a.BabId.HasValue)
-            .GroupBy(a => a.BabId!.Value)
-            .ToDictionary(g => g.Key, g => g.First());
-
-        var mahasiswa = await (from m in _sttsDb.Mahasiswas
-                               where m.MhsNrp == buku.MhsNrp
-                               join j in _sttsDb.Jurusans on m.JurKode equals j.JurKode into jGroup
-                               from j in jGroup.DefaultIfEmpty()
-                               select new
-                               {
-                                   m.MhsNama,
-                                   JurSingkat = j != null ? j.JurSingkat : "Unknown"
-                               })
+        var mahasiswa = await _sttsDb.Mahasiswas
+            .Where(m => m.MhsNrp == buku.MhsNrp)
+            .Select(m => new { m.MhsNama })
             .FirstOrDefaultAsync();
 
-        var babData = babs.Select(b =>
+        var response = new Dictionary<string, object?>
         {
-            queueByBabId.TryGetValue(b.BabId, out var queue);
-            return new
-            {
-                bab_id = b.BabId,
-                bab_order = b.BabOrder,
-                filename = b.BabFilename,
-                has_pdf = !string.IsNullOrWhiteSpace(b.BabPdfPath),
-                extraction_status = queue?.AntrianExtractionStatus,
-                labeling_status = queue?.AntrianLabelingStatus,
-                validation_status = queue?.AntrianValidationStatus,
-                error_message = queue?.AntrianErrorMessage,
-                queue_updated_at = queue?.AntrianUpdatedAt
-            };
-        }).ToList();
+            ["id"] = buku.BukuId,
+            ["judul"] = buku.BukuJudul,
+            ["nama"] = mahasiswa?.MhsNama ?? "Unknown",
+            ["status"] = buku.BukuStatus,
+            ["jumlah_bab"] = buku.BukuJumlahBab,
+            ["created_at"] = buku.BukuCreatedAt,
+            ["updated_at"] = buku.BukuUpdatedAt
+        };
 
-        return Ok(new
+        if (isFinalStatus)
         {
-            id = buku.BukuId,
-            judul = buku.BukuJudul,
-            nrp = buku.MhsNrp,
-            nama = mahasiswa?.MhsNama ?? "Unknown",
-            jurusan = mahasiswa?.JurSingkat ?? "Unknown",
-            status = buku.BukuStatus,
-            skor = buku.BukuSkor ?? 0,
-            jumlah_kesalahan = buku.BukuJumlahKesalahan ?? 0,
-            jumlah_bab = buku.BukuJumlahBab,
-            created_at = buku.BukuCreatedAt,
-            updated_at = buku.BukuUpdatedAt,
-            progress = new
+            var babs = await _db.Babs
+                .Where(b => b.BukuId == bukuId)
+                .OrderBy(b => b.BabOrder)
+                .ToListAsync();
+
+            var antrianList = await _db.Antrians
+                .Where(a => a.AntrianTipe == "buku" && a.BukuId == bukuId)
+                .OrderByDescending(a => a.AntrianCreatedAt)
+                .ThenByDescending(a => a.AntrianId)
+                .ToListAsync();
+
+            var queueByBabId = antrianList
+                .Where(a => a.BabId.HasValue)
+                .GroupBy(a => a.BabId!.Value)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            var babData = babs.Select(b =>
             {
-                extraction = BuildQueueProgress(antrianList.Select(a => a.AntrianExtractionStatus).ToList()),
-                labeling = BuildQueueProgress(antrianList.Select(a => a.AntrianLabelingStatus).ToList()),
-                validation = BuildQueueProgress(antrianList.Select(a => a.AntrianValidationStatus).ToList())
-            },
-            bab = babData
-        });
+                queueByBabId.TryGetValue(b.BabId, out var queue);
+                return (object)new
+                {
+                    bab_id = b.BabId,
+                    bab_order = b.BabOrder,
+                    bab_skor = b.BabSkor,
+                    bab_jumlah_kesalahan = b.BabJumlahKesalahan,
+                    filename = b.BabFilename,
+                    has_pdf = !string.IsNullOrWhiteSpace(b.BabPdfPath),
+                    extraction_status = queue?.AntrianExtractionStatus,
+                    labeling_status = queue?.AntrianLabelingStatus,
+                    validation_status = queue?.AntrianValidationStatus,
+                    error_message = queue?.AntrianErrorMessage,
+                    queue_updated_at = queue?.AntrianUpdatedAt
+                };
+            }).ToList();
+
+            response["skor"] = buku.BukuSkor ?? 0;
+            response["jumlah_kesalahan"] = buku.BukuJumlahKesalahan ?? 0;
+            response["bab"] = babData;
+        }
+
+        return Ok(response);
     }
 
     private IActionResult GetBukuForAdmin(string? status, string sort, int limit, int offset, string? nrp, string? jurusan, string? search, DateTime? startDate, DateTime? endDate)
@@ -352,15 +350,4 @@ public class BukuController : ControllerBase
         return Ok(new { data = result, total = totalCount, limit, offset });
     }
 
-    private static object BuildQueueProgress(List<string?> statuses)
-    {
-        return new
-        {
-            total = statuses.Count,
-            in_queue = statuses.Count(s => s == "in_queue"),
-            processing = statuses.Count(s => s == "processing"),
-            completed = statuses.Count(s => s == "completed"),
-            failed = statuses.Count(s => s == "failed")
-        };
-    }
 }

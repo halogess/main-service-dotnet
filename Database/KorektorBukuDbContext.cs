@@ -9,6 +9,7 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<Bab> Babs { get; set; }
     public DbSet<Dokumen> Dokumens { get; set; }
     public DbSet<DokumenElemen> DokumenElemens { get; set; }
+    public DbSet<DokumenElemenVisual> DokumenElemenVisuals { get; set; }
     public DbSet<DokumenMedia> DokumenMedias { get; set; }
     public DbSet<DokumenSection> DokumenSections { get; set; }
     public DbSet<DokumenPart> DokumenParts { get; set; }
@@ -71,6 +72,14 @@ public class KorektorBukuDbContext : DbContext
                 .HasForeignKey(e => e.DpartId);
         });
 
+        modelBuilder.Entity<DokumenElemenVisual>(entity =>
+        {
+            entity.HasKey(e => e.DevId);
+            entity.Property(e => e.DevRefTipe)
+                .HasColumnType("enum('dokumen','bab')");
+            entity.Property(e => e.DevText).HasColumnType("longtext");
+        });
+
         modelBuilder.Entity<DokumenMedia>(entity =>
         {
             entity.HasKey(e => e.DokumenMediaId);
@@ -80,7 +89,7 @@ public class KorektorBukuDbContext : DbContext
         {
             entity.HasKey(e => e.DsecId);
             entity.Property(e => e.DsecRefTipe)
-                .HasColumnType("enum('buku','dokumen')");
+                .HasColumnType("enum('bab','dokumen')");
         });
 
         modelBuilder.Entity<DokumenPart>(entity =>
@@ -211,8 +220,12 @@ public class KorektorBukuDbContext : DbContext
             entity.HasKey(e => e.KesalahanId);
             entity.Property(e => e.KesalahanLokasi).HasColumnType("varchar(255)");
             entity.Property(e => e.KesalahanRefTipe)
-                .HasConversion<string>()
-                .HasColumnType("enum('buku','dokumen')");
+                .HasConversion(
+                    v => v.ToString(),
+                    v => string.Equals(v, "buku", StringComparison.OrdinalIgnoreCase)
+                        ? KesalahanRefTipe.bab
+                        : Enum.Parse<KesalahanRefTipe>(v, true))
+                .HasColumnType("enum('bab','dokumen')");
             entity.HasMany(e => e.Details)
                 .WithOne(d => d.Kesalahan)
                 .HasForeignKey(d => d.KesalahanId)

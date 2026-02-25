@@ -90,26 +90,41 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 
                                 // Update dokumen with validation results
                                 dokumen.DokumenSkor = (int)Math.Round(validationResult.Score);
-                                dokumen.DokumenJumlahKesalahan = validationResult.Errors.Count;
                                 dokumen.DokumenUpdatedAt = DateTime.Now;
 
-                                _logger.LogInformation("Validated dokumen ID: {DokumenId}, Score: {Score}, Errors: {ErrorCount}", 
-                                    queue.DokumenId, validationResult.Score, validationResult.Errors.Count);
-
-                                if (validationResult.Errors.Count > 0)
+                                var rawErrorCount = validationResult.Errors.Count;
+                                var storedErrorCount = 0;
+                                if (rawErrorCount > 0)
                                 {
                                     // Notify: Enriching errors with AI
                                     await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "enriching", 85);
                                     var (sectionRefType, sectionRefId) = ResolveSectionRef(queue);
 
-                                    await EnrichAndStoreErrorsAsync(
+                                    storedErrorCount = await EnrichAndStoreErrorsAsync(
                                         db,
                                         queue.AntrianId,
                                         queue.DokumenId.Value,
                                         sectionRefType,
                                         sectionRefId,
+                                        KesalahanRefTipe.dokumen,
+                                        queue.DokumenId.Value,
                                         validationResult.Errors,
                                         stoppingToken);
+                                }
+                                dokumen.DokumenJumlahKesalahan = storedErrorCount;
+
+                                _logger.LogInformation(
+                                    "Validated dokumen ID: {DokumenId}, Score: {Score}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
+                                    queue.DokumenId,
+                                    validationResult.Score,
+                                    rawErrorCount,
+                                    storedErrorCount);
+                                if (rawErrorCount > 0 && storedErrorCount == 0)
+                                {
+                                    _logger.LogWarning(
+                                        "No persisted kesalahan details for dokumen ID: {DokumenId} despite {RawErrorCount} raw validation errors",
+                                        queue.DokumenId,
+                                        rawErrorCount);
                                 }
 
                                 var activeAturan = await db.Aturans
@@ -157,8 +172,41 @@ public class ValidationQueueBackgroundService : BackgroundService
                             var bab = await db.Babs.FindAsync(new object[] { queue.BabId.Value }, stoppingToken);
                             if (bab != null)
                             {
-                                // TODO: Implement bab validation
-                                _logger.LogInformation("Validated bab ID: {BabId}", queue.BabId);
+                                validationResult = await validationService.ValidateBabAsync(queue.BabId.Value, stoppingToken);
+                                bab.BabSkor = (int)Math.Round(validationResult.Score);
+                                var rawErrorCount = validationResult.Errors.Count;
+                                var storedErrorCount = 0;
+                                if (rawErrorCount > 0)
+                                {
+                                    var (sectionRefType, sectionRefId) = ResolveSectionRef(queue);
+                                    storedErrorCount = await EnrichAndStoreErrorsAsync(
+                                        db,
+                                        queue.AntrianId,
+                                        queue.BabId.Value,
+                                        sectionRefType,
+                                        sectionRefId,
+                                        KesalahanRefTipe.bab,
+                                        queue.BabId.Value,
+                                        validationResult.Errors,
+                                        stoppingToken,
+                                        babOrder: bab.BabOrder);
+                                }
+                                bab.BabJumlahKesalahan = storedErrorCount;
+
+                                _logger.LogInformation(
+                                    "Validated bab ID: {BabId} (BukuId: {BukuId}), Score: {Score}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
+                                    queue.BabId,
+                                    queue.BukuId,
+                                    validationResult.Score,
+                                    rawErrorCount,
+                                    storedErrorCount);
+                                if (rawErrorCount > 0 && storedErrorCount == 0)
+                                {
+                                    _logger.LogWarning(
+                                        "No persisted kesalahan details for bab ID: {BabId} despite {RawErrorCount} raw validation errors",
+                                        queue.BabId,
+                                        rawErrorCount);
+                                }
                             }
                         }
 
@@ -185,18 +233,58 @@ public class ValidationQueueBackgroundService : BackgroundService
                             var allBabsValidated = !await db.Antrians
                                 .AnyAsync(a => a.BukuId == queue.BukuId && 
                                                a.AntrianTipe == "buku" && 
-                                               a.AntrianValidationStatus != "completed" && 
-                                               a.AntrianValidationStatus != "failed", stoppingToken);
+                                               a.AntrianId != queue.AntrianId &&
+                                               a.AntrianValidationStatus != "completed", stoppingToken);
 
                             if (allBabsValidated)
                             {
                                 var buku = await db.Bukus.FindAsync(new object[] { (int)queue.BukuId.Value }, stoppingToken);
                                 if (buku != null)
                                 {
-                                    buku.BukuStatus = "selesai";
+                                    var bukuRefId = (uint)queue.BukuId.Value;
+                                    var babScores = await db.Babs
+                                        .Where(b => b.BukuId == bukuRefId)
+                                        .Select(b => b.BabSkor)
+                                        .ToListAsync(stoppingToken);
+
+                                    var scoredBabScores = babScores
+                                        .Where(score => score.HasValue)
+                                        .Select(score => (decimal)score!.Value)
+                                        .ToList();
+                                    var allBabsHaveScore = babScores.Count > 0 && babScores.Count == scoredBabScores.Count;
+                                    var averageScore = allBabsHaveScore
+                                        ? scoredBabScores.Average()
+                                        : 0m;
+
+                                    var activeAturan = await db.Aturans
+                                        .Where(a => a.AturanStatus == 1)
+                                        .OrderByDescending(a => a.AturanCreatedAt)
+                                        .FirstOrDefaultAsync(stoppingToken);
+                                    var minimumScore = (decimal)(activeAturan?.AturanSkorMinimum ?? 80u);
+                                    var isLolos = allBabsHaveScore && scoredBabScores.All(score => score >= minimumScore);
+
+                                    var totalKesalahan = await (
+                                        from detail in db.KesalahanDetails
+                                        join parent in db.Kesalahans on detail.KesalahanId equals parent.KesalahanId
+                                        join babRef in db.Babs on parent.KesalahanRefId equals babRef.BabId
+                                        where parent.KesalahanRefTipe == KesalahanRefTipe.bab &&
+                                              babRef.BukuId == bukuRefId
+                                        select detail.KesalahanDetailId
+                                    ).CountAsync(stoppingToken);
+
+                                    var finalStatus = isLolos ? "lolos" : "tidak_lolos";
+                                    buku.BukuStatus = finalStatus;
+                                    buku.BukuJumlahKesalahan = totalKesalahan;
+                                    buku.BukuSkor = (int)Math.Round(averageScore);
                                     buku.BukuUpdatedAt = DateTime.Now;
-                                    await wsService.NotifyBukuStatusChanged(buku.MhsNrp, (int)queue.BukuId.Value, "selesai");
-                                    _logger.LogInformation("All babs validated for buku ID: {BukuId}", queue.BukuId);
+                                    await wsService.NotifyBukuStatusChanged(buku.MhsNrp, (int)queue.BukuId.Value, finalStatus);
+                                    _logger.LogInformation(
+                                        "All babs validated for buku ID: {BukuId}. FinalStatus={FinalStatus}, BookScore={BookScore}, MinimumScore={MinimumScore}, TotalKesalahan={TotalKesalahan}",
+                                        queue.BukuId,
+                                        finalStatus,
+                                        buku.BukuSkor,
+                                        minimumScore,
+                                        totalKesalahan);
                                 }
                             }
                         }
@@ -252,17 +340,20 @@ public class ValidationQueueBackgroundService : BackgroundService
     // EmailService is available but not integrated.
     // Re-add SendValidationEmailNotificationAsync when ready to enable email notifications.
 
-    private async Task EnrichAndStoreErrorsAsync(
+    private async Task<int> EnrichAndStoreErrorsAsync(
         KorektorBukuDbContext db,
         uint antrianId,
         uint dokumenId,
         string sectionRefType,
         uint sectionRefId,
+        KesalahanRefTipe kesalahanRefTipe,
+        uint kesalahanRefId,
         IReadOnlyList<ValidationError> errors,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        byte? babOrder = null)
     {
         if (errors.Count == 0)
-            return;
+            return 0;
 
         var aturan = await db.Aturans
             .Where(a => a.AturanStatus == 1)
@@ -285,7 +376,7 @@ public class ValidationQueueBackgroundService : BackgroundService
             errors,
             cancellationToken);
         if (llmErrors.Count == 0)
-            return;
+            return 0;
 
         var detailByIndex = new ConcurrentDictionary<int, GeminiErrorDetail>();
         var pending = new ConcurrentQueue<BatchErrorItem>(
@@ -484,9 +575,11 @@ public class ValidationQueueBackgroundService : BackgroundService
         if (tasks.Count > 0)
             await Task.WhenAll(tasks);
 
-        // Group errors by category + elemen_id (fallback to lokasi when elemen_id is missing)
+        // Group errors by category + field/expected + elemen_id (fallback to lokasi when elemen_id is missing).
+        // This prevents unrelated page-setting fields with null lokasi from collapsing into one parent row.
         var errorGroups = new Dictionary<string, (Kesalahan Parent, List<KesalahanDetail> Details)>();
         var skipLogs = new List<LlmApiLog>();
+        var storedDetailCount = 0;
         var errorsToStore = llmErrors;
         for (int i = 0; i < errorsToStore.Count; i++)
         {
@@ -527,19 +620,21 @@ public class ValidationQueueBackgroundService : BackgroundService
             var category = GetDisplayCategory(error);
             category = Truncate(category, 100);
 
-            var lokasi = BuildKesalahanLokasi(error);
+            var lokasi = BuildKesalahanLokasi(error, babOrder);
+            var fieldKey = string.IsNullOrWhiteSpace(error.Field) ? "-" : error.Field.Trim().ToLowerInvariant();
+            var expectedKey = string.IsNullOrWhiteSpace(error.Expected) ? "-" : error.Expected.Trim().ToLowerInvariant();
             
             var groupKey = error.DokumenElemenId.HasValue
-                ? $"{category}|elemen:{error.DokumenElemenId.Value}"
-                : $"{category}|{lokasi ?? "null"}";
+                ? $"{category}|field:{fieldKey}|expected:{expectedKey}|elemen:{error.DokumenElemenId.Value}"
+                : $"{category}|field:{fieldKey}|expected:{expectedKey}|{lokasi ?? "null"}";
 
             if (!errorGroups.TryGetValue(groupKey, out var group))
             {
                 var parent = new Kesalahan
                 {
                     KesalahanKategori = category,
-                    KesalahanRefTipe = KesalahanRefTipe.dokumen,
-                    KesalahanRefId = dokumenId,
+                    KesalahanRefTipe = kesalahanRefTipe,
+                    KesalahanRefId = kesalahanRefId,
                     KesalahanLokasi = lokasi
                 };
                 group = (parent, new List<KesalahanDetail>());
@@ -553,6 +648,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                 KesalahanDetailSteps = stepsJson,
                 KesalahanIsRequired = error.IsRequired
             });
+            storedDetailCount++;
         }
 
         if (skipLogs.Count > 0)
@@ -574,6 +670,8 @@ public class ValidationQueueBackgroundService : BackgroundService
 
         if (errorGroups.Count == 0 && skipLogs.Count > 0)
             await db.SaveChangesAsync(cancellationToken);
+
+        return storedDetailCount;
     }
 
     private async Task<List<GeminiErrorDetail>> FetchGuidanceForBatchAsync(
@@ -1285,34 +1383,75 @@ public class ValidationQueueBackgroundService : BackgroundService
         };
     }
 
-    private static string? BuildKesalahanLokasi(ValidationError error)
+    private static string? BuildKesalahanLokasi(ValidationError error, byte? babOrder = null)
     {
-        if (error.Locations.Count == 0)
-            return null;
-
         var jsonOptions = new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
         };
+        var evidence = NormalizeEvidence(error.Evidence);
+
+        if (error.Locations.Count == 0)
+        {
+            if (!babOrder.HasValue)
+                return null;
+
+            var fallback = new List<Dictionary<string, object?>>
+            {
+                new()
+                {
+                    ["halaman_ke"] = null,
+                    ["bbox"] = null,
+                    ["bab_order"] = babOrder.Value
+                }
+            };
+            if (!string.IsNullOrWhiteSpace(evidence))
+                fallback[0]["evidence"] = evidence;
+
+            return JsonSerializer.Serialize(fallback, jsonOptions);
+        }
 
         var orderedLocations = error.Locations
             .Where(loc => loc != null)
             .OrderBy(loc => loc.HalamanKe <= 0 ? int.MaxValue : loc.HalamanKe)
             .ToList();
 
-        var locations = orderedLocations.Select(loc => new Dictionary<string, object?>
+        var locations = orderedLocations.Select(loc =>
         {
-            ["halaman_ke"] = loc.HalamanKe,
-            ["bbox"] = loc.Bbox != null ? new
+            var payload = new Dictionary<string, object?>
             {
-                x0 = loc.Bbox.X0,
-                y0 = loc.Bbox.Y0,
-                x1 = loc.Bbox.X1,
-                y1 = loc.Bbox.Y1
-            } : null
+                ["halaman_ke"] = loc.HalamanKe,
+                ["bbox"] = loc.Bbox != null ? new
+                {
+                    x0 = loc.Bbox.X0,
+                    y0 = loc.Bbox.Y0,
+                    x1 = loc.Bbox.X1,
+                    y1 = loc.Bbox.Y1
+                } : null
+            };
+
+            if (babOrder.HasValue)
+                payload["bab_order"] = babOrder.Value;
+            if (!string.IsNullOrWhiteSpace(evidence))
+                payload["evidence"] = evidence;
+
+            return payload;
         }).ToList();
 
-        return JsonSerializer.Serialize(locations);
+        return JsonSerializer.Serialize(locations, jsonOptions);
+    }
+
+    private static string? NormalizeEvidence(string? evidence)
+    {
+        if (string.IsNullOrWhiteSpace(evidence))
+            return null;
+
+        var normalized = evidence
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+
+        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
     }
 
     private static string GetDisplayCategory(ValidationError error)
@@ -1384,7 +1523,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         if (string.Equals(queue.AntrianTipe, "buku", StringComparison.OrdinalIgnoreCase) &&
             queue.BabId.HasValue)
         {
-            return ("buku", queue.BabId.Value);
+            return ("bab", queue.BabId.Value);
         }
 
         if (string.Equals(queue.AntrianTipe, "dokumen", StringComparison.OrdinalIgnoreCase) &&

@@ -44,8 +44,8 @@ public partial class ValidationService
     {
         var result = new ValidationResult();
 
-        var dokumen = await _db.Dokumens.FindAsync(new object[] { dokumenId }, cancellationToken);
-        if (dokumen == null)
+        var target = await ResolveValidationTargetAsync(dokumenId, cancellationToken);
+        if (!target.Exists)
         {
             result.Errors.Add(new ValidationError
             {
@@ -55,6 +55,9 @@ public partial class ValidationService
             });
             return result;
         }
+
+        if (IsBabScopedValidation())
+            return result;
 
         var aturan = await _db.Aturans
             .Where(a => a.AturanStatus == 1)

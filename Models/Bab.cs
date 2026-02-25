@@ -27,4 +27,10 @@ public class Bab
     [Column("bab_pdf_path")]
     [MaxLength(255)]
     public string? BabPdfPath { get; set; }
+
+    [Column("bab_skor")]
+    public int? BabSkor { get; set; }
+
+    [Column("bab_jumlah_kesalahan")]
+    public int? BabJumlahKesalahan { get; set; }
 }

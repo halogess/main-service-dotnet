@@ -179,28 +179,61 @@ public partial class GeminiService
         if (pages.Count == 0)
             return (infos, payloads);
 
+        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+        string? imagesDir = null;
+
+        // Default flow: dokumen/{nrp}/{dokumen_id}/images/<page>.jpg
         var dokumen = await _db.Dokumens
             .Where(d => d.DokumenId == (int)dokumenId)
             .Select(d => new { d.DokumenId, d.MhsNrp })
             .FirstOrDefaultAsync(cancellationToken);
 
-        if (dokumen == null || string.IsNullOrWhiteSpace(dokumen.MhsNrp))
-            return (infos, payloads);
+        if (dokumen != null && !string.IsNullOrWhiteSpace(dokumen.MhsNrp))
+        {
+            imagesDir = Path.GetFullPath(Path.Combine(
+                storagePath,
+                "dokumen",
+                dokumen.MhsNrp,
+                dokumen.DokumenId.ToString(),
+                "images"));
+        }
+        else
+        {
+            // Buku flow: buku/{nrp}/{buku_id}/images/{bab_order}/<page>.jpg
+            var bab = await _db.Babs
+                .Where(b => b.BabId == dokumenId)
+                .Select(b => new { b.BukuId, b.BabOrder })
+                .FirstOrDefaultAsync(cancellationToken);
 
-        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
-        var imagesDir = Path.GetFullPath(Path.Combine(
-            storagePath,
-            "dokumen",
-            dokumen.MhsNrp,
-            dokumen.DokumenId.ToString(),
-            "images"));
+            if (bab != null && bab.BabOrder.HasValue)
+            {
+                var buku = await _db.Bukus
+                    .Where(b => b.BukuId == (int)bab.BukuId)
+                    .Select(b => new { b.BukuId, b.MhsNrp })
+                    .FirstOrDefaultAsync(cancellationToken);
+
+                if (buku != null && !string.IsNullOrWhiteSpace(buku.MhsNrp))
+                {
+                    imagesDir = Path.GetFullPath(Path.Combine(
+                        storagePath,
+                        "buku",
+                        buku.MhsNrp,
+                        buku.BukuId.ToString(),
+                        "images",
+                        bab.BabOrder.Value.ToString()));
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(imagesDir))
+            return (infos, payloads);
 
         if (!Directory.Exists(imagesDir))
             return (infos, payloads);
 
         var allowedExts = new[]
         {
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"
+            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff", ".webp"
         };
 
         for (var i = 0; i < pages.Count; i++)

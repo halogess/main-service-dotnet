@@ -466,8 +466,8 @@ Menyimpan kesalahan yang ditemukan per kategori.
 |-------|------|-----------|------------|
 | `kesalahan_id` | uint | **PK** - ID kesalahan | Identifikasi kesalahan |
 | `kesalahan_kategori` | varchar(100) | Kategori: `font`, `margin`, `paragraph`, `image` | Pengelompokan |
-| `kesalahan_ref_tipe` | enum | `buku` atau `dokumen` | Referensi target |
-| `kesalahan_ref_id` | uint | ID buku atau dokumen | FK dinamis |
+| `kesalahan_ref_tipe` | enum | `bab` atau `dokumen` | Referensi target |
+| `kesalahan_ref_id` | uint | ID bab atau dokumen | FK dinamis |
 | `kesalahan_lokasi` | varchar(255) | Lokasi kesalahan (halaman, baris) | Navigasi user |
 
 **Relasi:**

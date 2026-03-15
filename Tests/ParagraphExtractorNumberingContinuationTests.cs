@@ -12,6 +12,49 @@ namespace Tests;
 public class ParagraphExtractorNumberingContinuationTests
 {
     [Fact]
+    public void ExtractParagraphContentSorted_ShouldKeepSequentialLabels_WhenDirectNumIdSwitchesWithinAlgorithmBlock()
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"numbering-direct-switch-{Guid.NewGuid():N}.docx");
+
+        try
+        {
+            CreateDocWithDirectNumIdSwitchInAlgorithmBlock(tempPath);
+
+            using var doc = WordprocessingDocument.Open(tempPath, false);
+            var numberingPart = doc.MainDocumentPart?.NumberingDefinitionsPart;
+            var stylesPart = doc.MainDocumentPart?.StyleDefinitionsPart;
+            Assert.NotNull(numberingPart);
+            Assert.NotNull(stylesPart);
+
+            var logger = new Mock<ILogger>().Object;
+            var extractor = new ParagraphExtractor(logger, new DrawingExtractor(logger));
+            extractor.SetStyleResolver(new StyleResolver(stylesPart, null, null, numberingPart));
+            extractor.ResetNumberingState();
+
+            var counters = new Dictionary<int, Dictionary<int, int>>();
+            var paragraphs = doc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().ToList();
+            var labels = new List<string>();
+
+            foreach (var paragraph in paragraphs)
+            {
+                var content = extractor.ExtractParagraphContentSorted(paragraph, numberingPart, counters);
+                var label = TryGetLabel(content);
+                if (!string.IsNullOrEmpty(label))
+                    labels.Add(label);
+            }
+
+            Assert.Equal(
+                new[] { "01:\t", "02:\t", "03:\t", "04:\t", "01:\t", "02:\t", "03:\t" },
+                labels);
+        }
+        finally
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+    }
+
+    [Fact]
     public void ExtractParagraphContentSorted_ShouldContinueRestartedNumId_WhenFollowingParagraphUsesStyleNumbering()
     {
         var tempPath = Path.Combine(Path.GetTempPath(), $"numbering-continuation-{Guid.NewGuid():N}.docx");
@@ -263,6 +306,94 @@ public class ParagraphExtractorNumberingContinuationTests
                 new NumberingId { Val = 38 })));
         body.Append(CreateStyledParagraph("line-2", "STTSSegmenProgramContent"));
         body.Append(CreateStyledParagraph("line-3", "STTSSegmenProgramContent"));
+
+        main.Document.Save();
+    }
+
+    private static void CreateDocWithDirectNumIdSwitchInAlgorithmBlock(string path)
+    {
+        using var doc = WordprocessingDocument.Create(path, DocumentFormat.OpenXml.WordprocessingDocumentType.Document);
+        var main = doc.AddMainDocumentPart();
+        main.Document = new Document(new Body());
+
+        var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
+        stylesPart.Styles = new Styles(
+            new Style
+            {
+                Type = StyleValues.Paragraph,
+                Default = true,
+                StyleId = "Normal",
+                StyleName = new StyleName { Val = "Normal" }
+            },
+            new Style
+            {
+                Type = StyleValues.Paragraph,
+                StyleId = "STTSSegmenProgram",
+                StyleName = new StyleName { Val = "[STTS] Segmen Program" }
+            },
+            new Style
+            {
+                Type = StyleValues.Paragraph,
+                StyleId = "STTSAlgoritmaContent",
+                StyleName = new StyleName { Val = "[STTS] Algoritma Content" }
+            });
+        stylesPart.Styles.Save();
+
+        var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
+        numberingPart.Numbering = new Numbering(
+            new AbstractNum(
+                new Level(
+                    new StartNumberingValue { Val = 1 },
+                    new NumberingFormat { Val = NumberFormatValues.DecimalZero },
+                    new LevelText { Val = "%1:" })
+                { LevelIndex = 0 })
+            { AbstractNumberId = 1 },
+            new NumberingInstance(
+                new AbstractNumId { Val = 1 },
+                new LevelOverride(
+                    new StartOverrideNumberingValue { Val = 1 })
+                { LevelIndex = 0 })
+            { NumberID = 6 },
+            new NumberingInstance(
+                new AbstractNumId { Val = 1 },
+                new LevelOverride(
+                    new StartOverrideNumberingValue { Val = 1 })
+                { LevelIndex = 0 })
+            { NumberID = 7 });
+        numberingPart.Numbering.Save();
+
+        var body = main.Document.Body!;
+        body.Append(CreateStyledParagraph("Segmen Program 5.1", "STTSSegmenProgram"));
+        body.Append(CreateStyledParagraph("Route::get('/login', function () {", "STTSAlgoritmaContent",
+            new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 6 })));
+        body.Append(CreateStyledParagraph("return view('login');", "STTSAlgoritmaContent",
+            new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 6 })));
+        body.Append(CreateStyledParagraph("})->name('login');", "STTSAlgoritmaContent",
+            new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 6 })));
+        body.Append(CreateStyledParagraph("Route::post('/login', [LoginController::class, 'login']);", "STTSAlgoritmaContent",
+            new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 6 })));
+
+        body.Append(CreateStyledParagraph("Segmen Program 5.2", "STTSSegmenProgram"));
+        body.Append(CreateStyledParagraph("public function login(Request $request)", "STTSAlgoritmaContent",
+            new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 7 })));
+        body.Append(CreateStyledParagraph("{", "STTSAlgoritmaContent",
+            new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 6 })));
+        body.Append(CreateStyledParagraph("$this->autoChecking();", "STTSAlgoritmaContent",
+            new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 6 })));
 
         main.Document.Save();
     }

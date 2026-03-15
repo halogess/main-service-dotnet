@@ -12,6 +12,20 @@ obj/
 # Logs
 *.log
 
+# Local test/build artifacts
+TestResults/
+**/TestResults/
+*.trx
+test_output.txt
+build_output.txt
+build_log.txt
+build_errors.txt
+build_check.txt
+DebugElementCount/output.txt
+DebugElementCount/consistency_check.txt
+DebugElementCount/identity_check.txt
+DebugSections/test_output.txt
+
 # Storage (user data)
 storage/
 

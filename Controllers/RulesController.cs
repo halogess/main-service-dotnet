@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
 
@@ -103,6 +104,28 @@ public class RulesController : ControllerBase
         if (await _db.Aturans.AnyAsync(a => a.AturanVersi == request.aturan_versi))
             return BadRequest(new { message = "aturan_versi sudah ada" });
 
+        var normalizedDetails = new List<(RulesDetailRequest Detail, string? NormalizedJson)>();
+        if (request.details != null)
+        {
+            for (var index = 0; index < request.details.Count; index++)
+            {
+                var detail = request.details[index];
+                string? normalizedJson = null;
+                if (detail.aturan_detail_json_value != null)
+                {
+                    if (!AturanDetailJsonNormalizer.TryNormalize(detail.aturan_detail_json_value, out normalizedJson, out var errorMessage))
+                    {
+                        var detailLabel = !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
+                            ? detail.aturan_detail_key
+                            : $"index {index}";
+                        return BadRequest(new { message = $"json_value tidak valid untuk detail {detailLabel}: {errorMessage}" });
+                    }
+                }
+
+                normalizedDetails.Add((detail, normalizedJson));
+            }
+        }
+
         var aturan = new Aturan
         {
             AturanVersi = request.aturan_versi,
@@ -115,18 +138,18 @@ public class RulesController : ControllerBase
         await _db.SaveChangesAsync();
 
         // Create details if provided
-        if (request.details != null && request.details.Count > 0)
+        if (normalizedDetails.Count > 0)
         {
-            foreach (var d in request.details)
+            foreach (var (detailRequest, normalizedJson) in normalizedDetails)
             {
                 var detail = new AturanDetail
                 {
                     AturanId = aturan.AturanId,
-                    AturanDetailKategori = d.aturan_detail_kategori,
-                    AturanDetailKey = d.aturan_detail_key,
-                    AturanDetailJsonValue = d.aturan_detail_json_value,
-                    AturanDetailStatus = d.aturan_detail_status ?? 1,
-                    AturanDetailCatatan = d.aturan_detail_catatan
+                    AturanDetailKategori = detailRequest.aturan_detail_kategori,
+                    AturanDetailKey = detailRequest.aturan_detail_key,
+                    AturanDetailJsonValue = normalizedJson,
+                    AturanDetailStatus = detailRequest.aturan_detail_status ?? 1,
+                    AturanDetailCatatan = detailRequest.aturan_detail_catatan
                 };
                 _db.AturanDetails.Add(detail);
             }
@@ -144,6 +167,30 @@ public class RulesController : ControllerBase
         if (aturan == null)
             return NotFound(new { message = "Aturan tidak ditemukan" });
 
+        var normalizedDetails = new List<(RulesDetailUpdateRequest Detail, string? NormalizedJson)>();
+        if (request.details != null)
+        {
+            for (var index = 0; index < request.details.Count; index++)
+            {
+                var detail = request.details[index];
+                string? normalizedJson = null;
+                if (detail.aturan_detail_json_value != null)
+                {
+                    if (!AturanDetailJsonNormalizer.TryNormalize(detail.aturan_detail_json_value, out normalizedJson, out var errorMessage))
+                    {
+                        var detailLabel = detail.aturan_detail_id.HasValue
+                            ? $"aturan_detail_id {detail.aturan_detail_id.Value}"
+                            : !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
+                                ? detail.aturan_detail_key
+                                : $"index {index}";
+                        return BadRequest(new { message = $"json_value tidak valid untuk detail {detailLabel}: {errorMessage}" });
+                    }
+                }
+
+                normalizedDetails.Add((detail, normalizedJson));
+            }
+        }
+
         // Update aturan fields
         if (request.aturan_versi != null)
         {
@@ -158,29 +205,27 @@ public class RulesController : ControllerBase
         if (request.aturan_template_file_path != null)
             aturan.AturanTemplateFilePath = request.aturan_template_file_path;
 
-        await _db.SaveChangesAsync();
-
         // Update details if provided
-        if (request.details != null)
+        if (normalizedDetails.Count > 0)
         {
-            foreach (var d in request.details)
+            foreach (var (detailRequest, normalizedJson) in normalizedDetails)
             {
-                if (d.aturan_detail_id.HasValue && d.aturan_detail_id.Value > 0)
+                if (detailRequest.aturan_detail_id.HasValue && detailRequest.aturan_detail_id.Value > 0)
                 {
                     // Update existing detail
-                    var existing = await _db.AturanDetails.FindAsync(d.aturan_detail_id.Value);
+                    var existing = await _db.AturanDetails.FindAsync(detailRequest.aturan_detail_id.Value);
                     if (existing != null && existing.AturanId == id)
                     {
-                        if (d.aturan_detail_kategori != null)
-                            existing.AturanDetailKategori = d.aturan_detail_kategori;
-                        if (d.aturan_detail_key != null)
-                            existing.AturanDetailKey = d.aturan_detail_key;
-                        if (d.aturan_detail_json_value != null)
-                            existing.AturanDetailJsonValue = d.aturan_detail_json_value;
-                        if (d.aturan_detail_status.HasValue)
-                            existing.AturanDetailStatus = d.aturan_detail_status.Value;
-                        if (d.aturan_detail_catatan != null)
-                            existing.AturanDetailCatatan = d.aturan_detail_catatan;
+                        if (detailRequest.aturan_detail_kategori != null)
+                            existing.AturanDetailKategori = detailRequest.aturan_detail_kategori;
+                        if (detailRequest.aturan_detail_key != null)
+                            existing.AturanDetailKey = detailRequest.aturan_detail_key;
+                        if (detailRequest.aturan_detail_json_value != null)
+                            existing.AturanDetailJsonValue = normalizedJson;
+                        if (detailRequest.aturan_detail_status.HasValue)
+                            existing.AturanDetailStatus = detailRequest.aturan_detail_status.Value;
+                        if (detailRequest.aturan_detail_catatan != null)
+                            existing.AturanDetailCatatan = detailRequest.aturan_detail_catatan;
                     }
                 }
                 else
@@ -189,17 +234,18 @@ public class RulesController : ControllerBase
                     var newDetail = new AturanDetail
                     {
                         AturanId = id,
-                        AturanDetailKategori = d.aturan_detail_kategori,
-                        AturanDetailKey = d.aturan_detail_key,
-                        AturanDetailJsonValue = d.aturan_detail_json_value,
-                        AturanDetailStatus = d.aturan_detail_status ?? 1,
-                        AturanDetailCatatan = d.aturan_detail_catatan
+                        AturanDetailKategori = detailRequest.aturan_detail_kategori,
+                        AturanDetailKey = detailRequest.aturan_detail_key,
+                        AturanDetailJsonValue = normalizedJson,
+                        AturanDetailStatus = detailRequest.aturan_detail_status ?? 1,
+                        AturanDetailCatatan = detailRequest.aturan_detail_catatan
                     };
                     _db.AturanDetails.Add(newDetail);
                 }
             }
-            await _db.SaveChangesAsync();
         }
+
+        await _db.SaveChangesAsync();
 
         return Ok(new { message = "Aturan berhasil diupdate", aturan_id = aturan.AturanId });
     }

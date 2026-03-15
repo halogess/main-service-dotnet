@@ -86,7 +86,12 @@ public partial class ValidationService
             join s in _db.DokumenSections on p.DsecId equals s.DsecId
             where s.DsecRefTipe == sectionRefType && s.DsecRefId == sectionRefId && p.DpartType == "body"
             orderby s.DsecIndex, e.DelemenSequence
-            select new { e.DelemenId, e.DelemenType, e.DelemenJsonTree })
+            select new BodyElementInfo
+            {
+                DelemenId = e.DelemenId,
+                DelemenType = e.DelemenType,
+                DelemenJsonTree = e.DelemenJsonTree
+            })
             .ToListAsync(cancellationToken);
 
         if (bodyElements.Count == 0)
@@ -154,6 +159,7 @@ public partial class ValidationService
 
         var listItemErrorStart = result.Errors.Count;
         var listLevelByElementId = new Dictionary<ulong, string>(listItemElements.Count);
+        var subchapterIndexByElementId = BuildSubchapterIndexMap(bodyElements, labelMap);
 
         foreach (var (elementId, elementType, elementLabel, content) in listItemElements)
         {
@@ -178,7 +184,12 @@ public partial class ValidationService
             pageLayoutsById.TryGetValue(elementId, out var pageLayout);
 
             var level = TryParseListItemLevel(elementType, paragraphFormat, elementLabel);
-            var mergeSet = level.HasValue ? $"list_level_{level.Value + 1}" : "list_level_unknown";
+            var subchapterIndex = subchapterIndexByElementId.TryGetValue(elementId, out var subchapter)
+                ? subchapter
+                : 0;
+            var mergeSet = level.HasValue
+                ? $"subbab_{subchapterIndex}_list_level_{level.Value + 1}"
+                : $"subbab_{subchapterIndex}_list_level_unknown";
             listLevelByElementId[elementId] = mergeSet;
 
             ValidateListItemFont(result, rule, elementTextFormats!, content.TextRuns, evidence, locations);
@@ -193,6 +204,29 @@ public partial class ValidationService
         MergeIdenticalListItemErrorsByLevel(result.Errors, listItemErrorStart, listLevelByElementId);
 
         return result;
+    }
+
+    private static Dictionary<ulong, int> BuildSubchapterIndexMap(
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, string> labelMap)
+    {
+        var map = new Dictionary<ulong, int>();
+        var subchapterIndex = 0;
+
+        foreach (var elem in bodyElements)
+        {
+            var elementId = elem.DelemenId;
+            if (labelMap.TryGetValue(elementId, out var rawLabel))
+            {
+                var normalized = NormalizeLabel(rawLabel);
+                if (normalized == "judul_subbab")
+                    subchapterIndex++;
+            }
+
+            map[elementId] = subchapterIndex;
+        }
+
+        return map;
     }
 
     private readonly record struct ListItemErrorMergeKey(

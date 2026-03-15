@@ -24,7 +24,6 @@ public partial class GeminiService : IGeminiService
     private readonly string _structuredModel;
     private readonly string _fallbackModel;
     private readonly string _apiBaseUrl;
-    private readonly string _errorGuidanceSystemInstruction;
     private readonly double _generationTemperature;
     private readonly double _generationTopP;
     private readonly int _generationTopK;
@@ -79,8 +78,6 @@ public partial class GeminiService : IGeminiService
         ""type"": ""object"",
         ""properties"": {
           ""index"": { ""type"": ""integer"", ""minimum"": 0 },
-          ""is_error"": { ""type"": ""boolean"" },
-          ""skip_reason"": { ""type"": ""string"", ""maxLength"": 200 },
           ""title"": { ""type"": ""string"", ""maxLength"": 100 },
           ""explanation"": { ""type"": ""string"", ""maxLength"": 500 },
           ""steps"": {
@@ -88,16 +85,9 @@ public partial class GeminiService : IGeminiService
             ""items"": { ""type"": ""string"", ""maxLength"": 200 },
             ""minItems"": 1,
             ""maxItems"": 6
-          },
-          ""location"": {
-            ""type"": ""object"",
-            ""properties"": {
-              ""halaman_ke"": { ""type"": ""integer"" },
-              ""section"": { ""type"": ""string"" }
-            }
           }
         },
-        ""required"": [""index"", ""is_error"", ""skip_reason"", ""title"", ""explanation"", ""steps"", ""location""]
+        ""required"": [""index"", ""title"", ""explanation"", ""steps""]
       }
     }
   },
@@ -139,8 +129,7 @@ public partial class GeminiService : IGeminiService
         var cacheHours = Math.Max(0, _configuration.GetValue("Gemini:CacheHours", 24));
         CacheExpiry = TimeSpan.FromHours(cacheHours);
 
-        // Load prompt from file
-        _errorGuidanceSystemInstruction = LoadPromptFile("Prompts/ErrorGuidanceSystemInstruction.txt");
+        _logger.LogInformation("Gemini running in template-only mode (system prompt disabled).");
 
         if (IsGemmaModel(_analysisModel))
         {
@@ -156,29 +145,6 @@ public partial class GeminiService : IGeminiService
                 _fallbackModel = _analysisModel;
             }
         }
-    }
-
-    private string LoadPromptFile(string relativePath)
-    {
-        var basePath = AppContext.BaseDirectory;
-        var fullPath = Path.Combine(basePath, relativePath);
-        
-        if (File.Exists(fullPath))
-        {
-            _logger.LogInformation("Loaded prompt file: {Path}", relativePath);
-            return File.ReadAllText(fullPath);
-        }
-
-        // Fallback: try from current directory (development)
-        var devPath = Path.Combine(Directory.GetCurrentDirectory(), relativePath);
-        if (File.Exists(devPath))
-        {
-            _logger.LogInformation("Loaded prompt file from dev path: {Path}", devPath);
-            return File.ReadAllText(devPath);
-        }
-
-        _logger.LogWarning("Prompt file not found: {Path}, using empty string", relativePath);
-        return string.Empty;
     }
 
     private static TimeSpan[] BuildRetryDelays(IConfiguration configuration, int maxRetries)
@@ -320,7 +286,7 @@ public partial class GeminiService : IGeminiService
         {
             response = await GenerateContentWithRetryAsync(
                 prompt,
-                _errorGuidanceSystemInstruction,
+                null,
                 generationConfig,
                 imagePayloads,
                 cancellationToken,
@@ -331,6 +297,36 @@ public partial class GeminiService : IGeminiService
                 totalBatches);
 
             parsed = TryParseErrorGuidance(response, out results);
+            if (parsed)
+            {
+                NormalizeGuidanceIndices(errors.Count, results);
+                if (!ValidateGuidanceContract(errors.Count, results, out var contractIssue))
+                {
+                    parsed = false;
+                    results = new List<GeminiErrorDetail>();
+                    _logger.LogWarning(
+                        "Guidance JSON contract invalid (attempt {Attempt}/{Max}): {Issue}. Response preview: {Preview}",
+                        attempt,
+                        _maxParseAttempts,
+                        contractIssue,
+                        BuildResponsePreview(response, 500));
+                    await LogLlmRequestAsync(
+                        antrianId,
+                        null,
+                        BuildLlmLogMessage("contract_fail", errorCount: errors.Count, attempt: attempt, maxAttempts: _maxParseAttempts, batchNumber: batchNumber, totalBatches: totalBatches),
+                        0,
+                        cancellationToken,
+                        batchNumber: batchNumber,
+                        totalBatches: totalBatches,
+                        errorCount: errors.Count);
+
+                    if (attempt < _maxParseAttempts)
+                        await Task.Delay(_parseRetryDelay, cancellationToken);
+
+                    continue;
+                }
+            }
+
             if (!parsed)
             {
                 _logger.LogWarning(
@@ -359,7 +355,6 @@ public partial class GeminiService : IGeminiService
             results = new List<GeminiErrorDetail>();
         }
 
-        NormalizeGuidanceIndices(errors.Count, results);
         ApplyGuardrails(enhancedErrors, results);
         LogGuidanceDiagnostics(results, response);
         await LogLlmRequestAsync(
@@ -400,12 +395,9 @@ public partial class GeminiService : IGeminiService
             results.Add(new GeminiErrorDetail
             {
                 Index = context.Index,
-                IsError = true,
-                SkipReason = string.Empty,
                 Title = BuildFallbackTitle(error),
                 Explanation = BuildFallbackExplanation(error),
-                Steps = BuildFallbackSteps(context),
-                Location = BuildFallbackLocation(error)
+                Steps = BuildFallbackSteps(context)
             });
         }
 
@@ -432,23 +424,6 @@ public partial class GeminiService : IGeminiService
         var expected = string.IsNullOrWhiteSpace(error.Expected) ? "-" : error.Expected;
         var actual = string.IsNullOrWhiteSpace(error.Actual) ? "-" : error.Actual;
         return $"{message} (expected: {expected}, actual: {actual})";
-    }
-
-    private static GeminiErrorLocation BuildFallbackLocation(ValidationError error)
-    {
-        var location = new GeminiErrorLocation
-        {
-            HalamanKe = 0,
-            Section = "-"
-        };
-
-        if (error.Locations.Count > 0 && error.Locations[0] != null && error.Locations[0].HalamanKe > 0)
-            location.HalamanKe = error.Locations[0].HalamanKe;
-
-        if (error.SectionIndex.HasValue)
-            location.Section = error.SectionIndex.Value.ToString(CultureInfo.InvariantCulture);
-
-        return location;
     }
 
     private void LogGuidanceDiagnostics(List<GeminiErrorDetail> results, string response)
@@ -563,6 +538,68 @@ public partial class GeminiService : IGeminiService
             results[i].Index = next;
             used.Add(next);
         }
+    }
+
+    private static bool ValidateGuidanceContract(int errorCount, List<GeminiErrorDetail> results, out string issue)
+    {
+        issue = string.Empty;
+
+        if (errorCount < 0)
+        {
+            issue = "invalid_error_count";
+            return false;
+        }
+
+        if (results.Count != errorCount)
+        {
+            issue = $"count_mismatch expected={errorCount} actual={results.Count}";
+            return false;
+        }
+
+        var seen = new HashSet<int>();
+        for (var i = 0; i < results.Count; i++)
+        {
+            var detail = results[i];
+
+            if (detail.Index < 0 || detail.Index >= errorCount)
+            {
+                issue = $"index_out_of_range index={detail.Index}";
+                return false;
+            }
+
+            if (!seen.Add(detail.Index))
+            {
+                issue = $"duplicate_index index={detail.Index}";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(detail.Title))
+            {
+                issue = $"empty_title index={detail.Index}";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(detail.Explanation))
+            {
+                issue = $"empty_explanation index={detail.Index}";
+                return false;
+            }
+
+            if (detail.Steps == null || detail.Steps.Count < 1 || detail.Steps.Count > 6)
+            {
+                issue = $"invalid_steps_count index={detail.Index}";
+                return false;
+            }
+
+            if (detail.Steps.Any(string.IsNullOrWhiteSpace))
+            {
+                issue = $"empty_step index={detail.Index}";
+                return false;
+            }
+
+        }
+
+        return true;
     }
 
     private async Task<string> GenerateContentWithRetryAsync(

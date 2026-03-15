@@ -187,6 +187,7 @@ public class DokumenController : ControllerBase
             filesize_bytes = dokumen.DokumenFilesizeBytes,
             status = dokumen.DokumenStatus,
             skor = dokumen.DokumenSkor,
+            skor_minimal = dokumen.DokumenSkorMinimal,
             jumlah_kesalahan = dokumen.DokumenJumlahKesalahan,
             created_at = dokumen.DokumenCreatedAt,
             updated_at = dokumen.DokumenUpdatedAt,

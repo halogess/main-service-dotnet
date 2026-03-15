@@ -51,7 +51,7 @@ public class FileService : IFileService
             using var wordDoc = WordprocessingDocument.Open(memoryStream, false);
             
             var extendedProps = wordDoc.ExtendedFilePropertiesPart
-                ?? throw new InvalidOperationException("File tidak memiliki extended properties. Kemungkinan bukan file Word asli");
+                ?? throw new InvalidOperationException("File tidak dikenali sebagai dokumen Microsoft Word. Pastikan Anda mengunggah file .docx yang berasal dari Microsoft Word");
 
             var application = extendedProps.Properties?.Application?.Text;
             if (string.IsNullOrEmpty(application) || !application.Contains("Microsoft"))

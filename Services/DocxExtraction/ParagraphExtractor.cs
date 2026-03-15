@@ -66,7 +66,17 @@ public class ParagraphExtractor
         public bool FromDirectOrContinuation { get; set; }
     }
 
+    private sealed class DirectNumberingRunState
+    {
+        public string? StyleId { get; set; }
+        public int? NumId { get; set; }
+        public int Ilvl { get; set; }
+        public int? AbstractNumId { get; set; }
+        public bool IsActive { get; set; }
+    }
+
     private readonly NumberingContinuationState _numberingContinuation = new();
+    private readonly DirectNumberingRunState _directNumberingRun = new();
 
     public ParagraphExtractor(ILogger logger, DrawingExtractor drawingExtractor)
     {
@@ -124,6 +134,7 @@ public class ParagraphExtractor
     public void ResetNumberingState()
     {
         ClearNumberingContinuationState();
+        ClearDirectNumberingRunState();
     }
 
 
@@ -174,6 +185,82 @@ public class ParagraphExtractor
         _numberingContinuation.Ilvl = 0;
         _numberingContinuation.AbstractNumId = null;
         _numberingContinuation.FromDirectOrContinuation = false;
+    }
+
+    private static bool IsAlgorithmCodeStyle(string? styleId)
+    {
+        if (string.IsNullOrWhiteSpace(styleId))
+            return false;
+
+        return styleId.Equals("STTSAlgoritmaContent", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void ClearDirectNumberingRunState()
+    {
+        _directNumberingRun.StyleId = null;
+        _directNumberingRun.NumId = null;
+        _directNumberingRun.Ilvl = 0;
+        _directNumberingRun.AbstractNumId = null;
+        _directNumberingRun.IsActive = false;
+    }
+
+    private bool TryResolveDirectRunNumId(
+        NumberingDefinitionsPart numberingPart,
+        string? styleId,
+        int directNumId,
+        int ilvl,
+        out int continuedNumId)
+    {
+        continuedNumId = 0;
+
+        if (!IsAlgorithmCodeStyle(styleId))
+            return false;
+
+        if (!_directNumberingRun.IsActive ||
+            !_directNumberingRun.NumId.HasValue ||
+            _directNumberingRun.NumId.Value <= 0)
+            return false;
+
+        if (!string.Equals(_directNumberingRun.StyleId, styleId, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (_directNumberingRun.Ilvl != ilvl)
+            return false;
+
+        if (_directNumberingRun.NumId.Value == directNumId)
+            return false;
+
+        var previousAbstractId = _directNumberingRun.AbstractNumId
+            ?? NumberingResolver.GetAbstractNumberId(numberingPart, _directNumberingRun.NumId.Value);
+        var currentAbstractId = NumberingResolver.GetAbstractNumberId(numberingPart, directNumId);
+
+        if (!previousAbstractId.HasValue || !currentAbstractId.HasValue)
+            return false;
+
+        if (previousAbstractId.Value != currentAbstractId.Value)
+            return false;
+
+        continuedNumId = _directNumberingRun.NumId.Value;
+        return true;
+    }
+
+    private void UpdateDirectNumberingRunState(
+        NumberingDefinitionsPart numberingPart,
+        string? styleId,
+        int numId,
+        int ilvl)
+    {
+        if (!IsAlgorithmCodeStyle(styleId))
+        {
+            ClearDirectNumberingRunState();
+            return;
+        }
+
+        _directNumberingRun.StyleId = styleId;
+        _directNumberingRun.NumId = numId;
+        _directNumberingRun.Ilvl = ilvl;
+        _directNumberingRun.AbstractNumId = NumberingResolver.GetAbstractNumberId(numberingPart, numId);
+        _directNumberingRun.IsActive = true;
     }
 
     private bool TryResolveContinuationNumId(
@@ -328,6 +415,12 @@ public class ParagraphExtractor
                         numId = directNumId;
                         ilvl = directNumPr.NumberingLevelReference?.Val?.Value ?? 0;
                         source = "direct";
+
+                        if (TryResolveDirectRunNumId(numberingPart, paragraphStyleId, directNumId, ilvl, out var continuedDirectNumId))
+                        {
+                            numId = continuedDirectNumId;
+                            source = "direct-run-alias";
+                        }
                     }
                 }
                 else if (_styleResolver != null)
@@ -355,12 +448,22 @@ public class ParagraphExtractor
                     if (!string.IsNullOrEmpty(label))
                         numberingText = label;
 
+                    var fromDirectOrContinuation =
+                        source == "direct" ||
+                        source == "direct-run-alias" ||
+                        source == "continuation";
+
                     UpdateNumberingContinuationState(
                         numberingPart,
                         paragraphStyleId,
                         numId.Value,
                         ilvl,
-                        source == "direct" || source == "continuation");
+                        fromDirectOrContinuation);
+
+                    if (source == "direct" || source == "direct-run-alias")
+                        UpdateDirectNumberingRunState(numberingPart, paragraphStyleId, numId.Value, ilvl);
+                    else
+                        ClearDirectNumberingRunState();
 
                     _logger.LogInformation("Numbering: source={Source}, numId={NumId}, ilvl={Ilvl}, label={Label}", 
                         source, numId, ilvl, label);
@@ -378,17 +481,27 @@ public class ParagraphExtractor
 
                     if (!preserveContinuation)
                         ClearNumberingContinuationState();
+
+                    var preserveDirectRun =
+                        IsAlgorithmCodeStyle(paragraphStyleId) &&
+                        string.IsNullOrWhiteSpace(paragraphPlainText) &&
+                        (source == "none" || source == "disabled");
+
+                    if (!preserveDirectRun)
+                        ClearDirectNumberingRunState();
                 }
             }
             catch (Exception ex)
             {
                 ClearNumberingContinuationState();
+                ClearDirectNumberingRunState();
                 _logger.LogWarning(ex, "Failed to resolve numbering for paragraph");
             }
         }
         else
         {
             ClearNumberingContinuationState();
+            ClearDirectNumberingRunState();
         }
         
         if (!string.IsNullOrEmpty(numberingText) && !isCaptionParagraph)

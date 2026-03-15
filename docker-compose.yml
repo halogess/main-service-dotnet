@@ -6,7 +6,7 @@ services:
       - "5062:5062"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_URLS=http://+:5062
+      - ASPNETCORE_HTTP_PORTS=5062
       - STORAGE_PATH=/app/storage
       - ConnectionStrings__SttsDbConnection=${ConnectionStrings__SttsDbConnection}
       - ConnectionStrings__KorektorBukuDbConnection=${ConnectionStrings__KorektorBukuDbConnection}

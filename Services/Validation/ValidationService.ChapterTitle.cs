@@ -180,7 +180,23 @@ public partial class ValidationService
         }
         result.IncrementPassedChecks();
 
-        var firstElement = bodyElements[0];
+        BodyElementInfo? firstElement = null;
+        foreach (var elem in bodyElements)
+        {
+            if (!contentById.TryGetValue(elem.DelemenId, out var content))
+            {
+                content = ParseElementContent(elem.DelemenJsonTree);
+                contentById[elem.DelemenId] = content;
+            }
+
+            if (IsEmptyElement(content))
+                continue;
+
+            firstElement = elem;
+            break;
+        }
+
+        firstElement ??= bodyElements[0];
         result.IncrementTotalChecks();
         if (!titleIds.Contains(firstElement.DelemenId))
         {
@@ -309,12 +325,19 @@ public partial class ValidationService
 
         // Check for empty line after title (based on struktur_konten rule)
         var requireEmptyLineAfter = rule?.StrukturKonten?.SatuBarisKosongSetelah?.Value ?? true;
-        var nextElementIndex = titleBlock.Count;
+        var firstTitleElementIndex = bodyElements.FindIndex(e => titleIds.Contains(e.DelemenId));
+        var nextElementIndex = firstTitleElementIndex;
+        while (nextElementIndex >= 0 &&
+               nextElementIndex < bodyElements.Count &&
+               titleIds.Contains(bodyElements[nextElementIndex].DelemenId))
+        {
+            nextElementIndex++;
+        }
         
         if (requireEmptyLineAfter)
         {
             result.IncrementTotalChecks();
-            if (nextElementIndex < bodyElements.Count)
+            if (nextElementIndex >= 0 && nextElementIndex < bodyElements.Count)
             {
                 var emptyContent = ParseElementContent(bodyElements[nextElementIndex].DelemenJsonTree);
                 if (IsEmptyElement(emptyContent))
@@ -430,29 +453,12 @@ public partial class ValidationService
             }
         }
 
-        var indentationValue = rule?.Paragraph?.Indentation?.Value;
-        if (!string.IsNullOrWhiteSpace(indentationValue) &&
-            indentationValue.Equals("none", StringComparison.OrdinalIgnoreCase) &&
-            titleParagraphs.Count > 0)
-        {
-            result.IncrementTotalChecks();
-            if (titleParagraphs.All(pf => !HasIndentation(pf!)))
-            {
-                result.IncrementPassedChecks();
-            }
-            else
-            {
-                var indentationDetails = GetIndentationDetails(titleParagraphs!);
-                result.Errors.Add(new ValidationError
-                {
-                    Category = "Isi Buku",
-                    Field = "judul_bab",
-                    Message = "Indentasi judul bab harus none (left, right, special harus 0)",
-                    Expected = "Left: 0, Right: 0, Special: 0",
-                    Actual = indentationDetails
-                });
-            }
-        }
+        ValidateTitleParagraphIndentationRule(
+            result,
+            titleParagraphs!,
+            rule?.Paragraph?.Indentation,
+            field: "judul_bab",
+            subjectLabel: "judul bab");
 
         var spacingRule = rule?.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true && titleParagraphs.Count > 0)
@@ -929,7 +935,9 @@ public partial class ValidationService
 
         // Load text format for the empty paragraph's paragraph mark
         var emptyElement = await _db.DokumenElemens
+            .AsNoTracking()
             .Where(e => e.DelemenId == emptyElementId)
+            .Select(e => new { e.DelemenJsonTree })
             .FirstOrDefaultAsync(cancellationToken);
 
         if (emptyElement == null)
@@ -1208,7 +1216,8 @@ public partial class ValidationService
     private static bool IsListLabel(string? label)
     {
         var normalized = NormalizeLabel(label);
-        return normalized.StartsWith("list_level_", StringComparison.OrdinalIgnoreCase);
+        return normalized.Equals("list_item", StringComparison.OrdinalIgnoreCase) ||
+               normalized.StartsWith("list_level_", StringComparison.OrdinalIgnoreCase);
     }
 
     private static int? TryParseListLabelLevel(string? label)
@@ -1909,6 +1918,130 @@ public partial class ValidationService
         return details.Count > 0 ? string.Join("; ", details.Distinct()) : "unknown";
     }
 
+    private static void ValidateTitleParagraphIndentationRule(
+        ValidationResult result,
+        IReadOnlyList<DokumenFormatParagraf?> paragraphs,
+        TitleParagraphIndentationRule? indentationRule,
+        string field,
+        string subjectLabel,
+        string? evidence = null,
+        IReadOnlyList<ErrorLocation>? locations = null)
+    {
+        if (paragraphs == null || paragraphs.Count == 0 || indentationRule == null)
+            return;
+
+        var normalizedParagraphs = paragraphs.Where(p => p != null).Select(p => p!).ToList();
+        if (normalizedParagraphs.Count == 0)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(indentationRule.Value) &&
+            indentationRule.Value.Equals("none", StringComparison.OrdinalIgnoreCase))
+        {
+            result.IncrementTotalChecks();
+            if (normalizedParagraphs.All(pf => !HasIndentation(pf)))
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = field,
+                    Message = $"Indentasi {subjectLabel} harus none (left, right, special harus 0)",
+                    Expected = "Left: 0, Right: 0, Special: 0",
+                    Actual = GetIndentationDetails(normalizedParagraphs.Cast<DokumenFormatParagraf?>().ToList()),
+                    Evidence = evidence,
+                    Locations = locations?.ToList() ?? new List<ErrorLocation>()
+                });
+            }
+
+            return;
+        }
+
+        var hasExplicitComponents =
+            indentationRule.LeftIndent != null ||
+            indentationRule.RightIndent != null ||
+            indentationRule.FirstLineIndent != null ||
+            indentationRule.Hanging != null;
+
+        if (!hasExplicitComponents)
+            return;
+
+        ValidateIndentationComponent(
+            result,
+            normalizedParagraphs,
+            indentationRule.LeftIndent?.Value ?? 0m,
+            GetLeftIndentCm,
+            field,
+            $"Left indent {subjectLabel} tidak sesuai",
+            evidence,
+            locations);
+
+        ValidateIndentationComponent(
+            result,
+            normalizedParagraphs,
+            indentationRule.RightIndent?.Value ?? 0m,
+            GetRightIndentCm,
+            field,
+            $"Right indent {subjectLabel} tidak sesuai",
+            evidence,
+            locations);
+
+        ValidateIndentationComponent(
+            result,
+            normalizedParagraphs,
+            indentationRule.FirstLineIndent?.Value ?? 0m,
+            GetFirstLineIndentCm,
+            field,
+            $"First line indent {subjectLabel} tidak sesuai",
+            evidence,
+            locations);
+
+        ValidateIndentationComponent(
+            result,
+            normalizedParagraphs,
+            indentationRule.Hanging?.Value ?? 0m,
+            GetHangingIndentCm,
+            field,
+            $"Hanging indent {subjectLabel} tidak sesuai",
+            evidence,
+            locations);
+    }
+
+    private static void ValidateIndentationComponent(
+        ValidationResult result,
+        IReadOnlyList<DokumenFormatParagraf> paragraphs,
+        decimal? expected,
+        Func<DokumenFormatParagraf, decimal> selector,
+        string field,
+        string message,
+        string? evidence,
+        IReadOnlyList<ErrorLocation>? locations)
+    {
+        if (!expected.HasValue || paragraphs.Count == 0)
+            return;
+
+        result.IncrementTotalChecks();
+        var actuals = paragraphs.Select(selector).ToList();
+        if (actuals.All(actual => IsWithinTolerance(actual, expected.Value, 0.05m)))
+        {
+            result.IncrementPassedChecks();
+            return;
+        }
+
+        result.Errors.Add(new ValidationError
+        {
+            Category = "Isi Buku",
+            Field = field,
+            Message = message,
+            Expected = expected.Value.ToString(CultureInfo.InvariantCulture) + " cm",
+            Actual = string.Join(", ", actuals.Select(actual => actual.ToString("F2", CultureInfo.InvariantCulture) + " cm").Distinct()),
+            Evidence = evidence,
+            Locations = locations?.ToList() ?? new List<ErrorLocation>()
+        });
+    }
+
     private static decimal? GetLineSpacing(DokumenFormatParagraf format)
     {
         if (!format.DfpSpacingLineTwips.HasValue)
@@ -1930,6 +2063,25 @@ public partial class ValidationService
             : format.DfpIndEndTwips ?? 0;
 
         return rightTwips / 1440.0m * 2.54m;
+    }
+
+    private static decimal GetLeftIndentCm(DokumenFormatParagraf format)
+    {
+        var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
+            ? format.DfpIndLeftTwips.Value
+            : format.DfpIndStartTwips ?? 0;
+
+        return leftTwips / 1440.0m * 2.54m;
+    }
+
+    private static decimal GetFirstLineIndentCm(DokumenFormatParagraf format)
+    {
+        return (format.DfpIndFirstLineTwips ?? 0) / 1440.0m * 2.54m;
+    }
+
+    private static decimal GetHangingIndentCm(DokumenFormatParagraf format)
+    {
+        return (format.DfpIndHangingTwips ?? 0) / 1440.0m * 2.54m;
     }
 
     private static decimal? TwipsToPoints(uint? twips)

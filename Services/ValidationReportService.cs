@@ -17,6 +17,13 @@ public interface IValidationReportService
         string? role,
         bool refresh,
         CancellationToken cancellationToken);
+
+    Task<ValidationReportResult> GenerateBukuReportAsync(
+        int bukuId,
+        string? requesterNrp,
+        string? role,
+        bool refresh,
+        CancellationToken cancellationToken);
 }
 
 public sealed record ValidationReportResult(byte[] Content, string FileName);
@@ -24,11 +31,16 @@ public sealed record ValidationReportResult(byte[] Content, string FileName);
 public sealed class ValidationReportService : IValidationReportService
 {
     private readonly KorektorBukuDbContext _db;
+    private readonly SttsDbContext _sttsDb;
     private readonly ILogger<ValidationReportService> _logger;
 
-    public ValidationReportService(KorektorBukuDbContext db, ILogger<ValidationReportService> logger)
+    public ValidationReportService(
+        KorektorBukuDbContext db,
+        SttsDbContext sttsDb,
+        ILogger<ValidationReportService> logger)
     {
         _db = db;
+        _sttsDb = sttsDb;
         _logger = logger;
     }
 
@@ -111,6 +123,117 @@ public sealed class ValidationReportService : IValidationReportService
         return new ValidationReportResult(pdfBytes, reportFileName);
     }
 
+    public async Task<ValidationReportResult> GenerateBukuReportAsync(
+        int bukuId,
+        string? requesterNrp,
+        string? role,
+        bool refresh,
+        CancellationToken cancellationToken)
+    {
+        var buku = await _db.Bukus.FindAsync(new object[] { bukuId }, cancellationToken);
+        if (buku == null)
+            throw new KeyNotFoundException("Buku tidak ditemukan");
+
+        if (!string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(buku.MhsNrp, requesterNrp, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException();
+
+        var isValidatedStatus =
+            string.Equals(buku.BukuStatus, "lolos", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(buku.BukuStatus, "tidak_lolos", StringComparison.OrdinalIgnoreCase);
+        var hasValidationResult = buku.BukuJumlahKesalahan.HasValue;
+
+        if (!isValidatedStatus && !hasValidationResult)
+            throw new InvalidOperationException("Buku belum divalidasi");
+
+        var reportStatus = isValidatedStatus
+            ? buku.BukuStatus
+            : (buku.BukuJumlahKesalahan!.Value == 0 ? "lolos" : "tidak_lolos");
+        var includeCertificate = string.Equals(reportStatus, "lolos", StringComparison.OrdinalIgnoreCase);
+
+        var (reportFullPath, reportRelativePath, reportFileName) = ResolveBukuReportPath(buku, bukuId);
+
+        if (!refresh && File.Exists(reportFullPath))
+        {
+            if (string.IsNullOrWhiteSpace(buku.BukuReportPath) ||
+                !string.Equals(buku.BukuReportPath, reportRelativePath, StringComparison.OrdinalIgnoreCase))
+            {
+                buku.BukuReportPath = reportRelativePath;
+                buku.BukuUpdatedAt = DateTime.Now;
+                await _db.SaveChangesAsync(cancellationToken);
+            }
+
+            var existing = await File.ReadAllBytesAsync(reportFullPath, cancellationToken);
+            return new ValidationReportResult(existing, reportFileName);
+        }
+
+        var babs = await _db.Babs
+            .Where(b => b.BukuId == (uint)bukuId)
+            .OrderBy(b => b.BabOrder)
+            .ThenBy(b => b.BabId)
+            .ToListAsync(cancellationToken);
+        var babById = babs.ToDictionary(b => b.BabId);
+        var babIds = babById.Keys.ToList();
+
+        var kesalahanList = babIds.Count == 0
+            ? new List<Kesalahan>()
+            : await _db.Kesalahans
+                .Include(k => k.Details)
+                .Where(k => k.KesalahanRefTipe == KesalahanRefTipe.bab && babIds.Contains(k.KesalahanRefId))
+                .OrderBy(k => k.KesalahanId)
+                .ToListAsync(cancellationToken);
+
+        var rows = BuildBukuRows(kesalahanList, babById);
+        var summary = BuildBukuSummary(rows);
+
+        var mahasiswaName = await _sttsDb.Mahasiswas
+            .Where(m => m.MhsNrp == buku.MhsNrp)
+            .Select(m => m.MhsNama)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var babSummaries = babs
+            .Select(b => new BukuValidationReportBabSummary
+            {
+                BabId = b.BabId,
+                BabOrder = b.BabOrder,
+                Filename = b.BabFilename,
+                Skor = b.BabSkor,
+                SkorMinimal = b.BabSkorMinimal,
+                JumlahKesalahan = b.BabJumlahKesalahan
+            })
+            .ToList();
+
+        var generatedAt = DateTime.Now;
+        var data = new BukuValidationReportData
+        {
+            GeneratedAt = generatedAt,
+            BukuId = buku.BukuId,
+            Nrp = buku.MhsNrp,
+            Nama = mahasiswaName,
+            Judul = buku.BukuJudul,
+            Status = reportStatus,
+            Skor = buku.BukuSkor,
+            TotalKesalahan = buku.BukuJumlahKesalahan,
+            IncludeCertificate = includeCertificate,
+            VerificationCode = GenerateVerificationCode(buku.BukuId, generatedAt),
+            Summary = summary,
+            Babs = babSummaries,
+            Rows = rows
+        };
+
+        QuestPDF.Settings.License = LicenseType.Community;
+        var pdfBytes = new BukuValidationReportDocument(data).GeneratePdf();
+
+        Directory.CreateDirectory(Path.GetDirectoryName(reportFullPath)!);
+        await File.WriteAllBytesAsync(reportFullPath, pdfBytes, cancellationToken);
+
+        buku.BukuReportPath = reportRelativePath;
+        buku.BukuUpdatedAt = DateTime.Now;
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return new ValidationReportResult(pdfBytes, reportFileName);
+    }
+
     private static (string FullPath, string RelativePath, string FileName) ResolveReportPath(Dokumen dokumen, int dokumenId)
     {
         var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
@@ -125,6 +248,30 @@ public sealed class ValidationReportService : IValidationReportService
         var fullPath = Path.Combine(reportDir, fileName);
         var relativePath = Path.Combine(relativeDir, fileName);
         return (fullPath, relativePath, fileName);
+    }
+
+    private static (string FullPath, string RelativePath, string FileName) ResolveBukuReportPath(Buku buku, int bukuId)
+    {
+        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+        var fullStoragePath = Path.GetFullPath(storagePath);
+
+        var relativeDir = Path.Combine("buku", buku.MhsNrp, bukuId.ToString(), "report");
+        var reportDir = Path.GetFullPath(Path.Combine(storagePath, relativeDir));
+        if (!reportDir.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Path report tidak valid");
+
+        var fileName = $"report_validasi_buku_{bukuId}.pdf";
+        var fullPath = Path.Combine(reportDir, fileName);
+        var relativePath = Path.Combine(relativeDir, fileName);
+        return (fullPath, relativePath, fileName);
+    }
+
+    private static string GenerateVerificationCode(int bukuId, DateTime generatedAt)
+    {
+        var prefix = $"{bukuId:D4}{generatedAt.ToString("yyMMddHHmmss", CultureInfo.InvariantCulture)}";
+        var merged = $"{prefix}{Guid.NewGuid():N}";
+        var compact = merged[..16].ToLowerInvariant();
+        return $"{compact[..4]}-{compact.Substring(4, 4)}-{compact.Substring(8, 4)}-{compact.Substring(12, 4)}";
     }
 
     private static List<ValidationReportRow> BuildRows(List<Kesalahan> kesalahanList)
@@ -197,6 +344,93 @@ public sealed class ValidationReportService : IValidationReportService
             RequiredDetails = required,
             OptionalDetails = optional,
             PagesText = FormatPageRanges(pages)
+        };
+    }
+
+    private static List<BukuValidationReportRow> BuildBukuRows(
+        IReadOnlyList<Kesalahan> kesalahanList,
+        IReadOnlyDictionary<uint, Bab> babById)
+    {
+        var rows = new List<BukuValidationReportRow>();
+        foreach (var kesalahan in kesalahanList)
+        {
+            if (!babById.TryGetValue(kesalahan.KesalahanRefId, out var bab))
+                continue;
+
+            var pages = ParsePages(kesalahan.KesalahanLokasi);
+            var pagesText = FormatPageRanges(pages);
+            var (firstPage, firstY) = ParseLocationSortKey(kesalahan.KesalahanLokasi);
+            var evidence = ExtractEvidence(kesalahan.KesalahanLokasi);
+            var isPageSettings = IsPageSettingsCategory(kesalahan.KesalahanKategori);
+            var orderedDetails = kesalahan.Details
+                .OrderBy(d => d.KesalahanDetailId)
+                .ToList();
+            var problematicText = FormatProblematicText(
+                !string.IsNullOrWhiteSpace(evidence)
+                    ? evidence
+                    : orderedDetails.FirstOrDefault()?.KesalahanDetailJudul);
+            var elementKey = $"bab:{bab.BabId}:kesalahan:{kesalahan.KesalahanId}";
+
+            if (isPageSettings)
+            {
+                var (sectionNumber, sectionType) = ExtractPageSettingsSectionContext(orderedDetails);
+                elementKey = $"bab:{bab.BabId}:{BuildPageSettingsElementKey(firstPage, sectionNumber, sectionType)}";
+                problematicText = string.Empty;
+            }
+
+            foreach (var detail in orderedDetails)
+            {
+                rows.Add(new BukuValidationReportRow
+                {
+                    BabId = bab.BabId,
+                    BabOrder = bab.BabOrder,
+                    BabFilename = bab.BabFilename,
+                    ElementKey = elementKey,
+                    Category = kesalahan.KesalahanKategori,
+                    ProblematicText = problematicText,
+                    Title = detail.KesalahanDetailJudul,
+                    Explanation = FormatNullableText(detail.KesalahanDetailPenjelasan),
+                    Pages = pagesText,
+                    Page = firstPage,
+                    FirstY = firstY,
+                    SortPriority = isPageSettings ? 0 : 1,
+                    IsRequired = detail.KesalahanIsRequired
+                });
+            }
+        }
+
+        return rows
+            .OrderBy(r => NormalizeSortBabOrder(r.BabOrder))
+            .ThenBy(r => NormalizeSortPage(r.Page))
+            .ThenBy(r => r.SortPriority)
+            .ThenBy(r => r.ElementKey)
+            .ThenBy(r => r.FirstY)
+            .ThenBy(r => r.Title)
+            .ToList();
+    }
+
+    private static BukuValidationReportSummary BuildBukuSummary(IReadOnlyList<BukuValidationReportRow> rows)
+    {
+        var total = rows.Count;
+        var required = rows.Count(r => r.IsRequired);
+        var optional = total - required;
+        var pages = rows
+            .SelectMany(r => ParsePagesFromFormatted(r.Pages))
+            .Distinct()
+            .OrderBy(p => p)
+            .ToList();
+        var affectedBabCount = rows
+            .Select(r => r.BabId)
+            .Distinct()
+            .Count();
+
+        return new BukuValidationReportSummary
+        {
+            TotalDetails = total,
+            RequiredDetails = required,
+            OptionalDetails = optional,
+            PagesText = FormatPageRanges(pages),
+            AffectedBabCount = affectedBabCount
         };
     }
 
@@ -291,6 +525,9 @@ public sealed class ValidationReportService : IValidationReportService
 
     private static int NormalizeSortPage(int page)
         => page <= 0 ? int.MaxValue : page;
+
+    private static int NormalizeSortBabOrder(byte? babOrder)
+        => babOrder.HasValue ? babOrder.Value : int.MaxValue;
 
     private static List<int> ParsePagesFromFormatted(string? pagesText)
     {
@@ -493,6 +730,59 @@ public sealed record ValidationReportData
     public IReadOnlyList<ValidationReportRow> Rows { get; init; } = new List<ValidationReportRow>();
 }
 
+public sealed record BukuValidationReportBabSummary
+{
+    public uint BabId { get; init; }
+    public byte? BabOrder { get; init; }
+    public string? Filename { get; init; }
+    public int? Skor { get; init; }
+    public int? SkorMinimal { get; init; }
+    public int? JumlahKesalahan { get; init; }
+}
+
+public sealed record BukuValidationReportRow
+{
+    public uint BabId { get; init; }
+    public byte? BabOrder { get; init; }
+    public string? BabFilename { get; init; }
+    public string ElementKey { get; init; } = string.Empty;
+    public string Category { get; init; } = string.Empty;
+    public string ProblematicText { get; init; } = "-";
+    public string Title { get; init; } = string.Empty;
+    public string Explanation { get; init; } = string.Empty;
+    public string Pages { get; init; } = "-";
+    public int Page { get; init; }
+    public double FirstY { get; init; } = double.MaxValue;
+    public int SortPriority { get; init; } = 1;
+    public bool IsRequired { get; init; }
+}
+
+public sealed record BukuValidationReportSummary
+{
+    public int TotalDetails { get; init; }
+    public int RequiredDetails { get; init; }
+    public int OptionalDetails { get; init; }
+    public string PagesText { get; init; } = "-";
+    public int AffectedBabCount { get; init; }
+}
+
+public sealed record BukuValidationReportData
+{
+    public DateTime GeneratedAt { get; init; }
+    public int BukuId { get; init; }
+    public string? Nrp { get; init; }
+    public string? Nama { get; init; }
+    public string? Judul { get; init; }
+    public string? Status { get; init; }
+    public int? Skor { get; init; }
+    public int? TotalKesalahan { get; init; }
+    public bool IncludeCertificate { get; init; }
+    public string? VerificationCode { get; init; }
+    public BukuValidationReportSummary Summary { get; init; } = new();
+    public IReadOnlyList<BukuValidationReportBabSummary> Babs { get; init; } = new List<BukuValidationReportBabSummary>();
+    public IReadOnlyList<BukuValidationReportRow> Rows { get; init; } = new List<BukuValidationReportRow>();
+}
+
 internal sealed class ValidationReportDocument : IDocument
 {
     private static readonly CultureInfo IdCulture = new("id-ID");
@@ -681,4 +971,296 @@ internal sealed class ValidationReportDocument : IDocument
 
     private static string FormatPrintedDateTime(DateTime date)
         => date.ToString("dd MMMM yyyy HH.mm", IdCulture);
+}
+
+internal sealed class BukuValidationReportDocument : IDocument
+{
+    private static readonly CultureInfo IdCulture = new("id-ID");
+    private readonly BukuValidationReportData _data;
+
+    public BukuValidationReportDocument(BukuValidationReportData data)
+    {
+        _data = data;
+    }
+
+    public DocumentMetadata GetMetadata() => DocumentMetadata.Default;
+
+    public void Compose(IDocumentContainer container)
+    {
+        if (_data.IncludeCertificate)
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(1.2f, Unit.Centimetre);
+                page.DefaultTextStyle(x => x.FontSize(11));
+
+                page.Content()
+                    .Border(2)
+                    .BorderColor(Colors.Blue.Darken2)
+                    .Padding(18)
+                    .Column(column =>
+                    {
+                        column.Spacing(10);
+                        column.Item().AlignCenter().Text("SERTIFIKAT KELULUSAN FORMAT")
+                            .FontSize(28).SemiBold().FontColor(Colors.Blue.Darken2);
+                        column.Item().AlignCenter().Text("Certificate of Formatting Compliance")
+                            .Italic().FontSize(14);
+                        column.Item().PaddingTop(4).LineHorizontal(1).LineColor(Colors.Blue.Darken2);
+
+                        column.Item().PaddingTop(8).AlignCenter().Text("Dengan ini menyatakan bahwa dokumen Tugas Akhir yang berjudul:");
+                        column.Item().AlignCenter().Text($"\"{FormatNullableForCertificate(_data.Judul)}\"")
+                            .FontSize(18).SemiBold().Italic();
+
+                        column.Item().AlignCenter().Text("atas nama:");
+                        column.Item().AlignCenter().Text(FormatNullableForCertificate(_data.Nama))
+                            .FontSize(17).SemiBold();
+                        column.Item().AlignCenter().Text($"NRP: {FormatNullableForCertificate(_data.Nrp)}")
+                            .FontSize(13);
+
+                        column.Item().PaddingTop(5).AlignCenter().Text("telah berhasil melewati proses validasi format otomatis pada:");
+                        column.Item().AlignCenter().Text(
+                                $"Tanggal: {_data.GeneratedAt.ToString("dd MMMM yyyy", IdCulture)}, Pukul: {_data.GeneratedAt.ToString("HH:mm", IdCulture)} WIB")
+                            .SemiBold();
+
+                        column.Item().PaddingTop(5).AlignCenter().Text(text =>
+                        {
+                            text.Span("dan dinyatakan ");
+                            text.Span("MEMENUHI SYARAT").SemiBold();
+                            text.Span(" sesuai dengan pedoman penulisan yang berlaku (Panduan Edisi 2025).");
+                        });
+
+                        column.Item().PaddingTop(8).Text(text =>
+                        {
+                            text.Span("Aspek yang Divalidasi Meliputi: ").SemiBold();
+                            text.Span("Ukuran Halaman, Margin, Header & Footer, Penomoran, Format Bab & Paragraf, ");
+                            text.Span("Format Gambar & Tabel, dan Struktur Sitasi.");
+                        });
+
+                        column.Item().AlignRight().Text($"Kode Verifikasi: {FormatNullableForCertificate(_data.VerificationCode)}")
+                            .FontSize(10);
+                    });
+            });
+        }
+
+        container.Page(page =>
+        {
+            page.Size(PageSizes.A4);
+            page.Margin(1.27f, Unit.Centimetre);
+            page.DefaultTextStyle(x => x.FontSize(9));
+
+            page.Content().Column(column =>
+            {
+                column.Item().AlignCenter().Text("Laporan Validasi Buku").FontSize(16).SemiBold();
+
+                column.Item().PaddingVertical(8).LineHorizontal(1);
+
+                column.Item().Text("Informasi Validasi").SemiBold();
+                column.Item().Table(table =>
+                {
+                    table.ColumnsDefinition(columns =>
+                    {
+                        columns.ConstantColumn(110);
+                        columns.RelativeColumn();
+                        columns.ConstantColumn(110);
+                        columns.RelativeColumn();
+                    });
+
+                    AddBookInfoRow(table, "Buku ID", _data.BukuId.ToString(CultureInfo.InvariantCulture), "NRP", _data.Nrp);
+                    AddBookInfoRow(table, "Nama", _data.Nama, "Judul", _data.Judul);
+                    AddBookInfoRow(table, "Status", _data.Status, "Skor", _data.Skor?.ToString(CultureInfo.InvariantCulture));
+                    AddBookInfoRow(table, "Jumlah kesalahan", _data.TotalKesalahan?.ToString(CultureInfo.InvariantCulture), "Halaman terdampak", _data.Summary.PagesText);
+                });
+
+                column.Item().PaddingVertical(8).LineHorizontal(1);
+
+                column.Item().Text("Ringkasan").SemiBold();
+                column.Item().Row(row =>
+                {
+                    row.RelativeItem().Text($"Total kesalahan: {_data.Summary.TotalDetails}");
+                    row.RelativeItem().Text($"Wajib: {_data.Summary.RequiredDetails}");
+                    row.RelativeItem().Text($"Saran: {_data.Summary.OptionalDetails}");
+                    row.RelativeItem().Text($"BAB terdampak: {_data.Summary.AffectedBabCount}");
+                });
+
+                column.Item().PaddingTop(6).Text("Ringkasan per BAB").SemiBold();
+                column.Item().Table(table =>
+                {
+                    table.ColumnsDefinition(columns =>
+                    {
+                        columns.ConstantColumn(50);
+                        columns.RelativeColumn(3);
+                        columns.ConstantColumn(55);
+                        columns.ConstantColumn(70);
+                        columns.ConstantColumn(60);
+                    });
+
+                    table.Header(header =>
+                    {
+                        header.Cell().Element(BookHeaderCellStyle).Text("BAB");
+                        header.Cell().Element(BookHeaderCellStyle).Text("File");
+                        header.Cell().Element(BookHeaderCellStyle).Text("Skor");
+                        header.Cell().Element(BookHeaderCellStyle).Text("Skor Min");
+                        header.Cell().Element(BookHeaderCellStyle).Text("Kesalahan");
+                    });
+
+                    foreach (var bab in _data.Babs.OrderBy(b => NormalizeSortBabOrder(b.BabOrder)).ThenBy(b => b.BabId))
+                    {
+                        table.Cell().Element(BookBodyCellStyle).Text(FormatBabOrder(bab.BabOrder));
+                        table.Cell().Element(BookBodyCellStyle).Text(string.IsNullOrWhiteSpace(bab.Filename) ? "-" : bab.Filename);
+                        table.Cell().Element(BookBodyCellStyle).Text(bab.Skor?.ToString(CultureInfo.InvariantCulture) ?? "-");
+                        table.Cell().Element(BookBodyCellStyle).Text(bab.SkorMinimal?.ToString(CultureInfo.InvariantCulture) ?? "-");
+                        table.Cell().Element(BookBodyCellStyle).Text((bab.JumlahKesalahan ?? 0).ToString(CultureInfo.InvariantCulture));
+                    }
+                });
+
+                column.Item().PaddingTop(8).Text("Tabel Kesalahan Detail").SemiBold();
+
+                if (_data.Rows.Count == 0)
+                {
+                    column.Item().Text("Tidak ada kesalahan yang ditemukan.");
+                    return;
+                }
+
+                var rowsByBab = _data.Rows
+                    .GroupBy(r => r.BabId)
+                    .OrderBy(g => NormalizeSortBabOrder(g.First().BabOrder))
+                    .ThenBy(g => g.First().BabId);
+
+                foreach (var babGroup in rowsByBab)
+                {
+                    var first = babGroup.First();
+                    var babTitle = $"BAB {FormatBabOrder(first.BabOrder)}";
+                    if (!string.IsNullOrWhiteSpace(first.BabFilename))
+                        babTitle += $" - {first.BabFilename}";
+
+                    column.Item().PaddingTop(6).Text(babTitle).SemiBold();
+
+                    var orderedRows = babGroup
+                        .OrderBy(r => NormalizeSortPage(r.Page))
+                        .ThenBy(r => r.SortPriority)
+                        .ThenBy(r => r.ElementKey)
+                        .ThenBy(r => r.FirstY)
+                        .ThenBy(r => r.Title)
+                        .ToList();
+
+                    column.Item().Table(table =>
+                    {
+                        table.ColumnsDefinition(columns =>
+                        {
+                            columns.RelativeColumn(2);
+                            columns.RelativeColumn(3);
+                            columns.RelativeColumn(2);
+                            columns.RelativeColumn(3);
+                            columns.ConstantColumn(45);
+                            columns.ConstantColumn(45);
+                        });
+
+                        table.Header(header =>
+                        {
+                            header.Cell().Element(BookHeaderCellStyle).Text("Kategori");
+                            header.Cell().Element(BookHeaderCellStyle).Text("Text bermasalah");
+                            header.Cell().Element(BookHeaderCellStyle).Text("Judul");
+                            header.Cell().Element(BookHeaderCellStyle).Text("Penjelasan");
+                            header.Cell().Element(BookHeaderCellStyle).Text("Hal");
+                            header.Cell().Element(BookHeaderCellStyle).Text("Wajib");
+                        });
+
+                        for (var i = 0; i < orderedRows.Count; i++)
+                        {
+                            var row = orderedRows[i];
+                            var isFirstRowForElement = i == 0 ||
+                                !string.Equals(orderedRows[i - 1].ElementKey, row.ElementKey, StringComparison.Ordinal);
+
+                            if (isFirstRowForElement)
+                            {
+                                var rowSpan = 1;
+                                while (i + rowSpan < orderedRows.Count &&
+                                       string.Equals(orderedRows[i + rowSpan].ElementKey, row.ElementKey, StringComparison.Ordinal))
+                                {
+                                    rowSpan++;
+                                }
+
+                                table.Cell().RowSpan((uint)rowSpan).Element(BookBodyCellStyle).Text(row.Category);
+                                table.Cell().RowSpan((uint)rowSpan).Element(BookBodyCellStyle).Text(row.ProblematicText);
+                            }
+
+                            table.Cell().Element(BookBodyCellStyle).Text(row.Title);
+                            table.Cell().Element(BookBodyCellStyle).Text(row.Explanation);
+                            table.Cell().Element(BookBodyCellStyle).Text(row.Pages);
+                            table.Cell().Element(BookBodyCellStyle).Text(row.IsRequired ? "Ya" : "Saran");
+                        }
+                    });
+                }
+            });
+
+            page.Footer().DefaultTextStyle(x => x.FontSize(7)).Row(row =>
+            {
+                row.RelativeItem().AlignLeft().Text($"Dicetak pada: {_data.GeneratedAt.ToString("dd MMMM yyyy HH.mm", IdCulture)}");
+                row.ConstantItem(90).AlignRight().Text(text =>
+                {
+                    text.Span("Halaman ");
+                    text.CurrentPageNumber();
+                    text.Span(" / ");
+                    text.TotalPages();
+                });
+            });
+        });
+    }
+
+    private static string FormatNullableForCertificate(string? value)
+        => string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
+
+    private static string FormatBabOrder(byte? babOrder)
+        => babOrder.HasValue ? babOrder.Value.ToString(CultureInfo.InvariantCulture) : "-";
+
+    private static int NormalizeSortBabOrder(byte? babOrder)
+        => babOrder.HasValue ? babOrder.Value : int.MaxValue;
+
+    private static int NormalizeSortPage(int page)
+        => page <= 0 ? int.MaxValue : page;
+
+    private static void AddBookInfoRow(TableDescriptor table, string label1, string? value1, string label2, string? value2)
+    {
+        table.Cell().Element(BookInfoLabelStyle).Text(label1);
+        table.Cell().Element(BookInfoValueStyle).Text(string.IsNullOrWhiteSpace(value1) ? "-" : value1);
+        table.Cell().Element(BookInfoLabelStyle).Text(label2);
+        table.Cell().Element(BookInfoValueStyle).Text(string.IsNullOrWhiteSpace(value2) ? "-" : value2);
+    }
+
+    private static IContainer BookHeaderCellStyle(IContainer container)
+    {
+        return container
+            .Background(Colors.Grey.Lighten3)
+            .Border(1)
+            .BorderColor(Colors.Grey.Lighten2)
+            .PaddingVertical(4)
+            .PaddingHorizontal(3)
+            .DefaultTextStyle(x => x.FontSize(7).SemiBold());
+    }
+
+    private static IContainer BookBodyCellStyle(IContainer container)
+    {
+        return container
+            .Border(1)
+            .BorderColor(Colors.Grey.Lighten2)
+            .PaddingVertical(3)
+            .PaddingHorizontal(3)
+            .DefaultTextStyle(x => x.FontSize(7));
+    }
+
+    private static IContainer BookInfoLabelStyle(IContainer container)
+    {
+        return container
+            .PaddingVertical(2)
+            .PaddingRight(6)
+            .DefaultTextStyle(x => x.FontSize(7).SemiBold());
+    }
+
+    private static IContainer BookInfoValueStyle(IContainer container)
+    {
+        return container
+            .PaddingVertical(2)
+            .DefaultTextStyle(x => x.FontSize(7));
+    }
 }

@@ -717,10 +717,17 @@ public partial class ValidationService
         {
             result.IncrementTotalChecks();
             var expectedContinue = rule.Continue.Value;
-            var actualContinue = !section.DsecPageNumStart.HasValue || section.DsecPageNumStart.Value == 0;
+            var hasExplicitRestart = section.DsecPageNumStart.HasValue && section.DsecPageNumStart.Value > 0;
+            var actualContinue = !hasExplicitRestart;
+            var canUseManualFallback = CanUseManualPageNumberFallback(section);
 
             if (actualContinue == expectedContinue)
             {
+                result.IncrementPassedChecks();
+            }
+            else if (!expectedContinue && canUseManualFallback)
+            {
+                // Manual numbering in header/footer does not always persist restart metadata.
                 result.IncrementPassedChecks();
             }
             else
@@ -741,8 +748,17 @@ public partial class ValidationService
         if (rule.DifferentFirstPage.HasValue)
         {
             result.IncrementTotalChecks();
-            if (section.DsecHasTitlePage == rule.DifferentFirstPage.Value)
+            var expectedDifferentFirstPage = rule.DifferentFirstPage.Value;
+            var actualDifferentFirstPage = section.DsecHasTitlePage;
+            var canUseManualFallback = CanUseManualPageNumberFallback(section);
+
+            if (actualDifferentFirstPage == expectedDifferentFirstPage)
             {
+                result.IncrementPassedChecks();
+            }
+            else if (expectedDifferentFirstPage && canUseManualFallback)
+            {
+                // Some documents emulate "different first page" manually while visual output remains correct.
                 result.IncrementPassedChecks();
             }
             else
@@ -752,8 +768,8 @@ public partial class ValidationService
                     Category = "Pengaturan Halaman",
                     Field = "different_first_page",
                     Message = $"Pengaturan different first page section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-                    Expected = rule.DifferentFirstPage.Value ? "true" : "false",
-                    Actual = section.DsecHasTitlePage ? "true" : "false",
+                    Expected = expectedDifferentFirstPage ? "true" : "false",
+                    Actual = actualDifferentFirstPage ? "true" : "false",
                     SectionIndex = sectionNumber,
                     Locations = BuildPageSettingsLocations("page_numbering", section, sectionPageMap)
                 });
@@ -765,7 +781,7 @@ public partial class ValidationService
         if (rule.FirstPageIsEmpty == true)
         {
             result.IncrementTotalChecks();
-            if (section.DsecHasTitlePage)
+            if (section.DsecHasTitlePage || CanUseManualPageNumberFallback(section))
             {
                 result.IncrementPassedChecks();
             }
@@ -963,6 +979,12 @@ public partial class ValidationService
             "none" => null,
             _ => normalized
         };
+    }
+
+    private static bool CanUseManualPageNumberFallback(DokumenSection section)
+    {
+        // Manual page numbers can be visually correct without explicit restart metadata.
+        return !section.DsecPageNumStart.HasValue || section.DsecPageNumStart.Value == 0;
     }
 
     private async Task<Dictionary<uint, int>> LoadSectionPageMapAsync(

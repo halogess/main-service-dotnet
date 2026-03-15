@@ -39,6 +39,9 @@ public class Bab
     [Column("bab_skor")]
     public int? BabSkor { get; set; }
 
+    [Column("bab_skor_minimal")]
+    public int? BabSkorMinimal { get; set; }
+
     [Column("bab_jumlah_kesalahan")]
     public int? BabJumlahKesalahan { get; set; }
 }

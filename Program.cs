@@ -41,6 +41,7 @@ builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IFileService, FileService>();
 builder.Services.AddScoped<IDokumenService, DokumenService>();
 builder.Services.AddScoped<IBukuService, BukuService>();
+builder.Services.AddScoped<IBukuArchiveService, BukuArchiveService>();
 builder.Services.AddScoped<IDocxExtractionService, DocxExtractionService>();
 builder.Services.AddScoped<IAturanService, AturanService>();
 builder.Services.AddScoped<IJurusanService, JurusanService>();

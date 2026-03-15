@@ -244,6 +244,7 @@ public partial class ValidationService
                 : null;
 
             var paragraphsAfter = new List<ulong>();
+            var afterParagraphEndIndex = listEnd - 1;
             for (var j = listEnd; j < bodyElements.Count; j++)
             {
                 var nextElem = bodyElements[j];
@@ -251,19 +252,27 @@ public partial class ValidationService
                     break;
 
                 if (!labelMap.TryGetValue(nextElem.DelemenId, out var nextLabel))
-                    break;
+                {
+                    var unlabeledContent = GetContent(nextElem.DelemenId, nextElem.DelemenJsonTree);
+                    if (!string.IsNullOrWhiteSpace(unlabeledContent.PlainText))
+                        break;
+
+                    // Ignore unlabeled blank paragraphs between list item and its explanation.
+                    afterParagraphEndIndex = j;
+                    continue;
+                }
 
                 var normalizedLabel = NormalizeLabel(nextLabel);
                 if (normalizedLabel != "paragraf")
                     break;
 
+                // Keep the structural end index on the last contiguous paragraph element,
+                // even if this paragraph is skipped from paragraph-only validation.
+                afterParagraphEndIndex = j;
+
                 if (paragraphIdSet.Contains(nextElem.DelemenId))
                     paragraphsAfter.Add(nextElem.DelemenId);
             }
-
-            var afterParagraphEndIndex = paragraphsAfter.Count > 0
-                ? listEnd + paragraphsAfter.Count - 1
-                : listEnd - 1;
             listBlocks.Add(new ParagraphListBlockContext
             {
                 StartIndex = i,
@@ -646,31 +655,32 @@ public partial class ValidationService
             }
         }
 
-        if (leftIndentOverrideCm.HasValue)
-        {
-            result.IncrementTotalChecks();
-            var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
-                ? format.DfpIndLeftTwips.Value
-                : format.DfpIndStartTwips ?? 0;
-            var leftCm = leftTwips / 1440.0m * 2.54m;
+        result.IncrementTotalChecks();
+        var expectedLeftIndent = leftIndentOverrideCm ?? 0m;
+        var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
+            ? format.DfpIndLeftTwips.Value
+            : format.DfpIndStartTwips ?? 0;
+        var leftCm = leftTwips / 1440.0m * 2.54m;
 
-            if (Math.Abs(leftCm - leftIndentOverrideCm.Value) <= 0.05m)
+        if (Math.Abs(leftCm - expectedLeftIndent) <= 0.05m)
+        {
+            result.IncrementPassedChecks();
+        }
+        else
+        {
+            var message = leftIndentOverrideCm.HasValue
+                ? "Left indent paragraf setelah list tidak sesuai"
+                : "Left indent paragraf harus 0";
+            result.Errors.Add(new ValidationError
             {
-                result.IncrementPassedChecks();
-            }
-            else
-            {
-                result.Errors.Add(new ValidationError
-                {
-                    Category = "Isi Buku",
-                    Field = "paragraf",
-                    Message = "Left indent paragraf setelah list tidak sesuai",
-                    Expected = leftIndentOverrideCm.Value.ToString(CultureInfo.InvariantCulture) + " cm",
-                    Actual = leftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
-                    Evidence = evidence,
-                    Locations = locations
-                });
-            }
+                Category = "Isi Buku",
+                Field = "paragraf",
+                Message = message,
+                Expected = expectedLeftIndent.ToString(CultureInfo.InvariantCulture) + " cm",
+                Actual = leftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                Evidence = evidence,
+                Locations = locations
+            });
         }
 
         var expectedFirstLineIndent = firstLineIndentOverrideCm ?? rule?.Paragraph?.FirstLineIndent?.Value;

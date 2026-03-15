@@ -67,6 +67,26 @@ public class AturanController : ControllerBase
         });
     }
 
+    // GET: api/aturan/{id}/export (Admin only)
+    [HttpGet("{id}/export")]
+    public async Task<IActionResult> ExportAturan(uint id)
+    {
+        if (HttpContext.Items["Role"]?.ToString() != "admin")
+            return Forbid();
+
+        var result = await _aturanService.GetByIdWithDetailsAsync(id);
+        if (result == null)
+            return NotFound(new { message = "Aturan tidak ditemukan" });
+
+        var fileBytes = AturanExcelExportBuilder.BuildWorkbook(result.Aturan.AturanVersi, result.Details);
+        var safeVersion = string.IsNullOrWhiteSpace(result.Aturan.AturanVersi)
+            ? $"aturan-{id}"
+            : string.Concat(result.Aturan.AturanVersi.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+        var fileName = $"{safeVersion}.xlsx";
+
+        return File(fileBytes, AturanExcelExportBuilder.ContentType, fileName);
+    }
+
     // GET: api/aturan/aktif (Public - All authenticated users) - Returns aturan with details
     [HttpGet("aktif")]
     public async Task<IActionResult> GetAturanAktif()
@@ -185,6 +205,23 @@ public class AturanController : ControllerBase
         if (detailIds.Count != rawDetailIds.Count)
             return BadRequest(new { message = "aturan_detail_id harus unik untuk setiap detail" });
 
+        var normalizedJsonByDetailId = new Dictionary<uint, string>();
+        foreach (var detail in request.details)
+        {
+            if (detail.aturan_detail_id is not { } detailId || detail.json_value == null)
+                continue;
+
+            if (!AturanDetailJsonNormalizer.TryNormalize(detail.json_value, out var normalizedJson, out var errorMessage))
+            {
+                return BadRequest(new
+                {
+                    message = $"json_value tidak valid untuk aturan_detail_id {detailId}: {errorMessage}"
+                });
+            }
+
+            normalizedJsonByDetailId[detailId] = normalizedJson!;
+        }
+
         var existingDetails = await _db.AturanDetails
             .Where(d => d.AturanId == id && detailIds.Contains(d.AturanDetailId))
             .ToListAsync();
@@ -203,8 +240,8 @@ public class AturanController : ControllerBase
                 existing.AturanDetailKategori = d.kategori;
             if (d.key != null)
                 existing.AturanDetailKey = d.key;
-            if (d.json_value != null)
-                existing.AturanDetailJsonValue = d.json_value;
+            if (normalizedJsonByDetailId.TryGetValue(d.aturan_detail_id!.Value, out var normalizedJson))
+                existing.AturanDetailJsonValue = normalizedJson;
             if (d.status.HasValue)
                 existing.AturanDetailStatus = d.status.Value;
             if (d.catatan != null)

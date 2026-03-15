@@ -11,13 +11,20 @@ public interface IBukuService
 public class BukuService : IBukuService
 {
     private readonly IFileService _fileService;
+    private readonly IBukuArchiveService _bukuArchiveService;
     private readonly KorektorBukuDbContext _db;
     private readonly ILogger<BukuService> _logger;
     private readonly IWebSocketService _wsService;
 
-    public BukuService(IFileService fileService, KorektorBukuDbContext db, ILogger<BukuService> logger, IWebSocketService wsService)
+    public BukuService(
+        IFileService fileService,
+        IBukuArchiveService bukuArchiveService,
+        KorektorBukuDbContext db,
+        ILogger<BukuService> logger,
+        IWebSocketService wsService)
     {
         _fileService = fileService;
+        _bukuArchiveService = bukuArchiveService;
         _db = db;
         _logger = logger;
         _wsService = wsService;
@@ -90,6 +97,12 @@ public class BukuService : IBukuService
                 _logger.LogError(ex, "Error processing file {BabOrder}", babOrder);
                 throw;
             }
+        }
+
+        var docxArchivePath = await _bukuArchiveService.RefreshDocxArchiveAsync(buku.BukuId);
+        if (!string.IsNullOrWhiteSpace(docxArchivePath))
+        {
+            await _wsService.NotifyBukuArchiveReady(nrp, buku.BukuId, docxReady: true, pdfReady: false);
         }
 
         _logger.LogInformation("Upload buku selesai: ID={BukuId}", buku.BukuId);

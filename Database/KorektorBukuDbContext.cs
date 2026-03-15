@@ -44,6 +44,15 @@ public class KorektorBukuDbContext : DbContext
             
             entity.Property(e => e.BukuUpdatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
+
+            entity.Property(e => e.BukuReportPath)
+                .HasMaxLength(255);
+
+            entity.Property(e => e.BukuDocxZipPath)
+                .HasMaxLength(100);
+
+            entity.Property(e => e.BukuPdfZipPath)
+                .HasMaxLength(100);
         });
 
         modelBuilder.Entity<Bab>(entity =>

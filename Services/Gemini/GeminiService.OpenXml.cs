@@ -91,6 +91,16 @@ public partial class GeminiService
 
         var elements = await _db.DokumenElemens
             .Where(e => elementIds.Contains(e.DelemenId))
+            .Select(e => new DokumenElemenPayload
+            {
+                DelemenId = e.DelemenId,
+                DpartId = e.DpartId,
+                DelemenSequence = e.DelemenSequence,
+                DelemenType = e.DelemenType,
+                DelemenJsonTree = e.DelemenJsonTree,
+                // Raw XML is intentionally excluded to keep LLM payload compact.
+                DelemenXml = null
+            })
             .ToListAsync(cancellationToken);
 
         var elementById = elements.ToDictionary(e => e.DelemenId);
@@ -133,7 +143,7 @@ public partial class GeminiService
 
             var payload = new OpenXmlContextPayload
             {
-                DokumenElemen = BuildDokumenElemenPayload(element)
+                DokumenElemen = element
             };
 
             if (includeParagraph && formats.ParagraphFormatId.HasValue &&
@@ -358,16 +368,4 @@ public partial class GeminiService
                category.Contains("font", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static DokumenElemenPayload BuildDokumenElemenPayload(DokumenElemen element)
-    {
-        return new DokumenElemenPayload
-        {
-            DelemenId = element.DelemenId,
-            DpartId = element.DpartId,
-            DelemenSequence = element.DelemenSequence,
-            DelemenType = element.DelemenType,
-            DelemenJsonTree = element.DelemenJsonTree,
-            DelemenXml = element.DelemenXml
-        };
-    }
 }

@@ -25,6 +25,7 @@ public class PdfQueueBackgroundService : BackgroundService
                 using var scope = _serviceProvider.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
                 var pdfService = scope.ServiceProvider.GetRequiredService<IPdfConversionService>();
+                var bukuArchiveService = scope.ServiceProvider.GetRequiredService<IBukuArchiveService>();
                 var wsService = scope.ServiceProvider.GetRequiredService<IWebSocketService>();
 
                 var queue = await db.Antrians
@@ -34,6 +35,9 @@ public class PdfQueueBackgroundService : BackgroundService
 
                 if (queue != null)
                 {
+                    string? bukuNrpForArchiveReady = null;
+                    var shouldNotifyBukuArchiveReady = false;
+
                     string filePath = queue.AntrianTipe == "buku" && queue.BabId.HasValue
                         ? (await db.Babs.FindAsync(queue.BabId.Value))?.BabDocxPath ?? ""
                         : queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue
@@ -115,12 +119,6 @@ public class PdfQueueBackgroundService : BackgroundService
                         Directory.CreateDirectory(Path.GetDirectoryName(fullPdfPath)!);
                         await File.WriteAllBytesAsync(fullPdfPath, pdfBytes, stoppingToken);
 
-                        queue.AntrianExtractionStatus = "completed";
-                        queue.AntrianLabelingStatus = "in_queue";
-                        queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = null;
-                        _logger.LogInformation("Completed antrian ID: {AntrianId}, PDF: {PdfPath}", queue.AntrianId, pdfPath);
-
                         if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                         {
                             var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
@@ -150,6 +148,8 @@ public class PdfQueueBackgroundService : BackgroundService
                                     var buku = await db.Bukus.FindAsync(new object[] { (int)queue.BukuId.Value }, stoppingToken);
                                     if (buku != null)
                                     {
+                                        bukuNrpForArchiveReady = buku.MhsNrp;
+                                        shouldNotifyBukuArchiveReady = true;
                                         buku.BukuStatus = "diproses";
                                         buku.BukuUpdatedAt = DateTime.Now;
                                         _logger.LogInformation("All babs completed for buku ID: {BukuId}", queue.BukuId);
@@ -157,6 +157,42 @@ public class PdfQueueBackgroundService : BackgroundService
                                 }
                             }
                         }
+
+                        await db.SaveChangesAsync(stoppingToken);
+
+                        if (queue.AntrianTipe == "buku" && queue.BukuId.HasValue)
+                        {
+                            await EnsureBukuDocxArchiveReadyAsync(
+                                db,
+                                bukuArchiveService,
+                                (int)queue.BukuId.Value,
+                                stoppingToken);
+
+                            var pdfArchivePath = await bukuArchiveService.RefreshPdfArchiveAsync(
+                                (int)queue.BukuId.Value,
+                                stoppingToken);
+
+                            if (string.IsNullOrWhiteSpace(pdfArchivePath))
+                            {
+                                throw new InvalidOperationException(
+                                    $"ZIP PDF buku {queue.BukuId.Value} tidak berhasil dibentuk");
+                            }
+
+                            if (shouldNotifyBukuArchiveReady && !string.IsNullOrWhiteSpace(bukuNrpForArchiveReady))
+                            {
+                                await wsService.NotifyBukuArchiveReady(
+                                    bukuNrpForArchiveReady,
+                                    (int)queue.BukuId.Value,
+                                    docxReady: true,
+                                    pdfReady: true);
+                            }
+                        }
+
+                        queue.AntrianExtractionStatus = "completed";
+                        queue.AntrianLabelingStatus = "in_queue";
+                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianErrorMessage = null;
+                        _logger.LogInformation("Completed antrian ID: {AntrianId}, PDF: {PdfPath}", queue.AntrianId, pdfPath);
                     }
                     catch (FileNotFoundException ex)
                     {
@@ -213,5 +249,42 @@ public class PdfQueueBackgroundService : BackgroundService
         }
 
         _logger.LogInformation("PDF Queue Background Service stopped");
+    }
+
+    private static async Task EnsureBukuDocxArchiveReadyAsync(
+        KorektorBukuDbContext db,
+        IBukuArchiveService bukuArchiveService,
+        int bukuId,
+        CancellationToken cancellationToken)
+    {
+        var buku = await db.Bukus
+            .AsNoTracking()
+            .FirstOrDefaultAsync(b => b.BukuId == bukuId, cancellationToken)
+            ?? throw new KeyNotFoundException($"Buku {bukuId} tidak ditemukan");
+
+        var archiveRelativePath = string.IsNullOrWhiteSpace(buku.BukuDocxZipPath)
+            ? bukuArchiveService.GetDocxArchiveRelativePath(buku.MhsNrp, buku.BukuId)
+            : buku.BukuDocxZipPath;
+
+        if (HasArchiveFile(bukuArchiveService, archiveRelativePath))
+            return;
+
+        var refreshedPath = await bukuArchiveService.RefreshDocxArchiveAsync(bukuId, cancellationToken);
+        if (string.IsNullOrWhiteSpace(refreshedPath))
+        {
+            throw new InvalidOperationException(
+                $"ZIP DOCX buku {bukuId} tidak berhasil dibentuk");
+        }
+    }
+
+    private static bool HasArchiveFile(IBukuArchiveService bukuArchiveService, string? archiveRelativePath)
+    {
+        if (string.IsNullOrWhiteSpace(archiveRelativePath))
+            return false;
+
+        if (!bukuArchiveService.TryResolveStorageFilePath(archiveRelativePath, out var archiveFullPath))
+            return false;
+
+        return File.Exists(archiveFullPath) && new FileInfo(archiveFullPath).Length > 0;
     }
 }

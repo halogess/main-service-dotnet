@@ -56,6 +56,7 @@ public class BabController : ControllerBase
                 b.BabOrder,
                 b.BabFilename,
                 b.BabSkor,
+                b.BabSkorMinimal,
                 b.BabJumlahKesalahan
             })
             .FirstOrDefaultAsync();
@@ -120,6 +121,7 @@ public class BabController : ControllerBase
             filename = bab.BabFilename,
             status = bukuOwner.BukuStatus,
             skor = bab.BabSkor,
+            skor_minimal = bab.BabSkorMinimal,
             jumlah_kesalahan = jumlahKesalahan,
             kesalahan = kesalahanData
         });

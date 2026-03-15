@@ -1559,29 +1559,14 @@ public partial class ValidationService
             }
         }
 
-        var indentationValue = paragraphRule.Indentation?.Value;
-        if (!string.IsNullOrWhiteSpace(indentationValue) &&
-            indentationValue.Equals("none", StringComparison.OrdinalIgnoreCase))
-        {
-            result.IncrementTotalChecks();
-            if (!HasIndentation(format))
-            {
-                result.IncrementPassedChecks();
-            }
-            else
-            {
-                result.Errors.Add(new ValidationError
-                {
-                    Category = "Isi Buku",
-                    Field = field,
-                    Message = $"Indentasi {label} harus none (left, right, special harus 0)",
-                    Expected = "Left: 0, Right: 0, Special: 0",
-                    Actual = GetIndentationDetails(new List<DokumenFormatParagraf?> { format }),
-                    Evidence = evidenceText,
-                    Locations = locations
-                });
-            }
-        }
+        ValidateTitleParagraphIndentationRule(
+            result,
+            new List<DokumenFormatParagraf?> { format },
+            paragraphRule.Indentation,
+            field,
+            $"paragraf {label}",
+            evidenceText,
+            locations);
 
         var spacingRule = paragraphRule.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)

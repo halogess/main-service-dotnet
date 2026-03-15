@@ -90,18 +90,6 @@ public partial class GeminiService
                 var detail = new GeminiErrorDetail
                 {
                     Index = ReadIndexValue(item),
-                    IsError = item.TryGetProperty("is_error", out var isErrorEl)
-                        ? isErrorEl.ValueKind switch
-                        {
-                            JsonValueKind.True => true,
-                            JsonValueKind.False => false,
-                            JsonValueKind.String when bool.TryParse(isErrorEl.GetString(), out var parsed) => parsed,
-                            _ => (bool?)null
-                        }
-                        : null,
-                    SkipReason = item.TryGetProperty("skip_reason", out var skipEl) && skipEl.ValueKind == JsonValueKind.String
-                        ? skipEl.GetString()
-                        : null,
                     Title = item.TryGetProperty("title", out var titleEl) && titleEl.ValueKind == JsonValueKind.String
                         ? titleEl.GetString() ?? string.Empty
                         : string.Empty,
@@ -117,19 +105,6 @@ public partial class GeminiService
                         if (step.ValueKind == JsonValueKind.String)
                             detail.Steps.Add(step.GetString() ?? string.Empty);
                     }
-                }
-
-                if (item.TryGetProperty("location", out var locEl) && locEl.ValueKind == JsonValueKind.Object)
-                {
-                    detail.Location = new GeminiErrorLocation
-                    {
-                        HalamanKe = locEl.TryGetProperty("halaman_ke", out var halamanEl) && halamanEl.TryGetInt32(out var halamanInt)
-                            ? halamanInt
-                            : null,
-                        Section = locEl.TryGetProperty("section", out var sectionEl) && sectionEl.ValueKind == JsonValueKind.String
-                            ? sectionEl.GetString()
-                            : null
-                    };
                 }
 
                 results.Add(detail);

@@ -28,6 +28,9 @@ public class Dokumen
     [Column("dokumen_skor")]
     public int? DokumenSkor { get; set; }
 
+    [Column("dokumen_skor_minimal")]
+    public int? DokumenSkorMinimal { get; set; }
+
     [Column("dokumen_jumlah_kesalahan")]
     public int? DokumenJumlahKesalahan { get; set; }
 

@@ -176,7 +176,19 @@ public partial class ValidationService
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
         var pageNumbersById = await LoadPageNumbersAsync(orderedElementIds, cancellationToken);
-        var pagesWithParagraph = BuildPagesWithParagraph(bodyElements, labelMap, pageNumbersById);
+        var paragraphElementIds = bodyElements
+            .Where(element =>
+                labelMap.TryGetValue(element.DelemenId, out var label) &&
+                NormalizeLabel(label).Equals("paragraf", StringComparison.OrdinalIgnoreCase))
+            .Select(element => element.DelemenId)
+            .Distinct()
+            .ToList();
+        var paragraphPageBboxMap = paragraphElementIds.Count > 0
+            ? await LoadPageBboxMapAsync(paragraphElementIds, cancellationToken)
+            : new Dictionary<int, ErrorBbox>();
+        var pagesWithParagraph = paragraphPageBboxMap.Keys
+            .Where(page => page > 0)
+            .ToHashSet();
 
         var contentCache = new Dictionary<ulong, ElementContentInfo>();
         ElementContentInfo GetContent(ulong elementId, string? json)
@@ -569,29 +581,14 @@ public partial class ValidationService
             }
         }
 
-        var indentationValue = rule.Paragraph.Indentation?.Value;
-        if (!string.IsNullOrWhiteSpace(indentationValue) &&
-            indentationValue.Equals("none", StringComparison.OrdinalIgnoreCase))
-        {
-            result.IncrementTotalChecks();
-            if (!HasIndentation(format))
-            {
-                result.IncrementPassedChecks();
-            }
-            else
-            {
-                result.Errors.Add(new ValidationError
-                {
-                    Category = "Isi Buku",
-                    Field = "gambar",
-                    Message = "Indentasi paragraf gambar harus none (left, right, special harus 0)",
-                    Expected = "Left: 0, Right: 0, Special: 0",
-                    Actual = GetIndentationDetails(new List<DokumenFormatParagraf?> { format }),
-                    Evidence = evidence,
-                    Locations = locations
-                });
-            }
-        }
+        ValidateTitleParagraphIndentationRule(
+            result,
+            new List<DokumenFormatParagraf?> { format },
+            rule.Paragraph.Indentation,
+            field: "gambar",
+            subjectLabel: "paragraf gambar",
+            evidence: evidence,
+            locations: locations);
 
         var spacingRule = rule.Paragraph.Spacing;
         if (!skipAlignmentAndLineSpacing && spacingRule?.LineSpacing?.Value.HasValue == true)
@@ -1250,29 +1247,14 @@ public partial class ValidationService
             }
         }
 
-        var indentationValue = rule.Paragraph.Indentation?.Value;
-        if (!string.IsNullOrWhiteSpace(indentationValue) &&
-            indentationValue.Equals("none", StringComparison.OrdinalIgnoreCase))
-        {
-            result.IncrementTotalChecks();
-            if (!HasIndentation(format))
-            {
-                result.IncrementPassedChecks();
-            }
-            else
-            {
-                result.Errors.Add(new ValidationError
-                {
-                    Category = "Isi Buku",
-                    Field = "caption_gambar",
-                    Message = "Indentasi paragraf caption gambar harus none (left, right, special harus 0)",
-                    Expected = "Left: 0, Right: 0, Special: 0",
-                    Actual = GetIndentationDetails(new List<DokumenFormatParagraf?> { format }),
-                    Evidence = evidence,
-                    Locations = locations
-                });
-            }
-        }
+        ValidateTitleParagraphIndentationRule(
+            result,
+            new List<DokumenFormatParagraf?> { format },
+            rule.Paragraph.Indentation,
+            field: "caption_gambar",
+            subjectLabel: "paragraf caption gambar",
+            evidence: evidence,
+            locations: locations);
 
         var spacingRule = rule.Paragraph.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using ValidasiTugasAkhir.MainService.Services;
 using Microsoft.EntityFrameworkCore;
+using ValidasiTugasAkhir.MainService.Models;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
 
@@ -12,13 +13,23 @@ public class BukuController : ControllerBase
     private readonly SttsDbContext _sttsDb;
     private readonly IBukuService _bukuService;
     private readonly IWebSocketService _wsService;
+    private readonly IValidationReportService _reportService;
+    private readonly IBukuArchiveService _bukuArchiveService;
 
-    public BukuController(KorektorBukuDbContext db, SttsDbContext sttsDb, IBukuService bukuService, IWebSocketService wsService)
+    public BukuController(
+        KorektorBukuDbContext db,
+        SttsDbContext sttsDb,
+        IBukuService bukuService,
+        IWebSocketService wsService,
+        IValidationReportService reportService,
+        IBukuArchiveService bukuArchiveService)
     {
         _db = db;
         _sttsDb = sttsDb;
         _bukuService = bukuService;
         _wsService = wsService;
+        _reportService = reportService;
+        _bukuArchiveService = bukuArchiveService;
     }
 
     [HttpPost]
@@ -197,6 +208,10 @@ public class BukuController : ControllerBase
             ["nama"] = mahasiswa?.MhsNama ?? "Unknown",
             ["status"] = buku.BukuStatus,
             ["jumlah_bab"] = buku.BukuJumlahBab,
+            ["docx_archive_path"] = buku.BukuDocxZipPath,
+            ["pdf_archive_path"] = buku.BukuPdfZipPath,
+            ["docx_archive_ready"] = !string.IsNullOrWhiteSpace(buku.BukuDocxZipPath),
+            ["pdf_archive_ready"] = !string.IsNullOrWhiteSpace(buku.BukuPdfZipPath),
             ["created_at"] = buku.BukuCreatedAt,
             ["updated_at"] = buku.BukuUpdatedAt
         };
@@ -227,6 +242,7 @@ public class BukuController : ControllerBase
                     bab_id = b.BabId,
                     bab_order = b.BabOrder,
                     bab_skor = b.BabSkor,
+                    bab_skor_minimal = b.BabSkorMinimal,
                     bab_jumlah_kesalahan = b.BabJumlahKesalahan,
                     filename = b.BabFilename,
                     has_pdf = !string.IsNullOrWhiteSpace(b.BabPdfPath),
@@ -245,6 +261,103 @@ public class BukuController : ControllerBase
 
         return Ok(response);
     }
+
+    [HttpGet("{id:int}/report")]
+    public async Task<IActionResult> GetValidationReport(int id, [FromQuery] bool refresh = false)
+    {
+        var nrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
+
+        try
+        {
+            var report = await _reportService.GenerateBukuReportAsync(
+                id,
+                nrp,
+                role,
+                refresh,
+                HttpContext.RequestAborted);
+
+            return File(report.Content, "application/pdf", report.FileName);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(new { message = ex.Message });
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return Forbid();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpGet("{id:int}/docx")]
+    public Task<IActionResult> DownloadBukuDocxArchive(int id)
+        => DownloadBukuArchive(id, "docx", "File DOCX buku tidak ditemukan", HttpContext.RequestAborted);
+
+    [HttpGet("{id:int}/pdf")]
+    public Task<IActionResult> DownloadBukuPdfArchive(int id)
+        => DownloadBukuArchive(id, "pdf", "File PDF buku belum tersedia", HttpContext.RequestAborted);
+
+    private async Task<IActionResult> DownloadBukuArchive(
+        int id,
+        string archiveKind,
+        string emptyArchiveMessage,
+        CancellationToken cancellationToken)
+    {
+        var currentNrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
+
+        var buku = await _db.Bukus
+            .FirstOrDefaultAsync(b => b.BukuId == id, cancellationToken);
+
+        if (buku == null)
+            return NotFound(new { message = "Buku tidak ditemukan" });
+
+        if (role != "admin" && !string.Equals(buku.MhsNrp, currentNrp, StringComparison.OrdinalIgnoreCase))
+            return Forbid();
+
+        var cachedArchiveFileName = archiveKind == "docx" ? "buku-docx.zip" : "buku-pdf.zip";
+        var archiveRelativePath = NormalizeRelativePath(
+            archiveKind == "docx"
+                ? buku.BukuDocxZipPath
+                : buku.BukuPdfZipPath);
+
+        if (string.IsNullOrWhiteSpace(archiveRelativePath))
+        {
+            archiveRelativePath = archiveKind == "docx"
+                ? _bukuArchiveService.GetDocxArchiveRelativePath(buku.MhsNrp, buku.BukuId)
+                : _bukuArchiveService.GetPdfArchiveRelativePath(buku.MhsNrp, buku.BukuId);
+        }
+
+        if (!_bukuArchiveService.TryResolveStorageFilePath(archiveRelativePath, out var archiveFullPath))
+            return BadRequest(new { message = "Path file ZIP tidak valid" });
+
+        if (!System.IO.File.Exists(archiveFullPath) || new FileInfo(archiveFullPath).Length == 0)
+        {
+            archiveRelativePath = archiveKind == "docx"
+                ? await _bukuArchiveService.RefreshDocxArchiveAsync(id, cancellationToken)
+                : await _bukuArchiveService.RefreshPdfArchiveAsync(id, cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(archiveRelativePath))
+                return NotFound(new { message = emptyArchiveMessage });
+
+            if (!_bukuArchiveService.TryResolveStorageFilePath(archiveRelativePath, out archiveFullPath))
+                return BadRequest(new { message = "Path file ZIP tidak valid" });
+        }
+
+        if (!System.IO.File.Exists(archiveFullPath) || new FileInfo(archiveFullPath).Length == 0)
+            return NotFound(new { message = emptyArchiveMessage });
+
+        return PhysicalFile(archiveFullPath, "application/zip", cachedArchiveFileName);
+    }
+
+    private static string NormalizeRelativePath(string? filePath)
+        => string.IsNullOrWhiteSpace(filePath)
+            ? string.Empty
+            : filePath.Trim().Replace('\\', '/');
 
     private IActionResult GetBukuForAdmin(string? status, string sort, int limit, int offset, string? nrp, string? jurusan, string? search, DateTime? startDate, DateTime? endDate)
     {

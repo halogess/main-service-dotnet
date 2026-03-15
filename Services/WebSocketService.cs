@@ -12,6 +12,7 @@ public interface IWebSocketService
     Task NotifyDokumenCancelled(string nrp, int dokumenId);
     Task NotifyQueuePositionChanged(string nrp, int position);
     Task NotifyBukuStatusChanged(string nrp, int bukuId, string status);
+    Task NotifyBukuArchiveReady(string nrp, int bukuId, bool docxReady, bool pdfReady);
     Task NotifyBukuCancelled(string nrp, int bukuId);
     Task NotifyValidationProgress(string nrp, int dokumenId, string stage, int progress);
 }
@@ -82,6 +83,18 @@ public class WebSocketService : IWebSocketService
             type = "buku_status_changed",
             buku_id = bukuId,
             status = status,
+            timestamp = DateTime.Now
+        });
+    }
+
+    public async Task NotifyBukuArchiveReady(string nrp, int bukuId, bool docxReady, bool pdfReady)
+    {
+        await SendMessage(nrp, new
+        {
+            type = "buku_archive_ready",
+            buku_id = bukuId,
+            docx_ready = docxReady,
+            pdf_ready = pdfReady,
             timestamp = DateTime.Now
         });
     }

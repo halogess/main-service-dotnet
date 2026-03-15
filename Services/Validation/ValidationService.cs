@@ -20,6 +20,9 @@ public class RuleValue<T>
 
     [JsonPropertyName("is_editable")]
     public bool IsEditable { get; set; }
+
+    [JsonPropertyName("is_hard_constraint")]
+    public bool IsHardConstraint { get; set; }
 }
 
 public class DecimalRuleValue
@@ -30,6 +33,9 @@ public class DecimalRuleValue
 
     [JsonPropertyName("is_editable")]
     public bool IsEditable { get; set; }
+
+    [JsonPropertyName("is_hard_constraint")]
+    public bool IsHardConstraint { get; set; }
 }
 
 public class FlexibleDecimalConverter : JsonConverter<decimal?>
@@ -287,10 +293,34 @@ public class TitleParagraphRule
     public RuleValue<string>? Alignment { get; set; }
 
     [JsonPropertyName("indentation")]
-    public RuleValue<string>? Indentation { get; set; }
+    public TitleParagraphIndentationRule? Indentation { get; set; }
 
     [JsonPropertyName("spacing")]
     public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class TitleParagraphIndentationRule
+{
+    [JsonPropertyName("value")]
+    public string? Value { get; set; }
+
+    [JsonPropertyName("is_editable")]
+    public bool IsEditable { get; set; }
+
+    [JsonPropertyName("is_hard_constraint")]
+    public bool IsHardConstraint { get; set; }
+
+    [JsonPropertyName("left_indent")]
+    public DecimalRuleValue? LeftIndent { get; set; }
+
+    [JsonPropertyName("right_indent")]
+    public DecimalRuleValue? RightIndent { get; set; }
+
+    [JsonPropertyName("first_line_indent")]
+    public DecimalRuleValue? FirstLineIndent { get; set; }
+
+    [JsonPropertyName("hanging")]
+    public DecimalRuleValue? Hanging { get; set; }
 }
 
 public class TitleParagraphSpacingRule
@@ -489,6 +519,9 @@ public class FlexibleStringListRuleValue
 
     [JsonPropertyName("is_editable")]
     public bool IsEditable { get; set; }
+
+    [JsonPropertyName("is_hard_constraint")]
+    public bool IsHardConstraint { get; set; }
 }
 
 public class FlexibleCaptionNumberingRule
@@ -1345,33 +1378,13 @@ public partial class ValidationService : IValidationService
 
         if (listCandidates.Count > 0)
         {
-            var formatIds = listCandidates
-                .Where(c => c.ParagraphFormatId.HasValue)
-                .Select(c => c.ParagraphFormatId!.Value)
-                .Distinct()
-                .ToList();
-
-            var listFormats = formatIds.Count > 0
-                ? await _db.DokumenFormatParagrafs
-                    .Where(p => formatIds.Contains(p.DfpId))
-                    .ToDictionaryAsync(p => p.DfpId, cancellationToken)
-                : new Dictionary<uint, DokumenFormatParagraf>();
-
-            foreach (var (element, paragraphFormatId) in listCandidates)
+            foreach (var (element, _) in listCandidates)
             {
-                var isListByType = IsListItemElement(element.DelemenType);
-                var isListByFormat = paragraphFormatId.HasValue &&
-                                     listFormats.TryGetValue(paragraphFormatId.Value, out var format) &&
-                                     format.DfpIsList;
-
-                if (isListByType || isListByFormat)
-                {
-                    classification.ListItemIds.Add(element.DelemenId);
-                }
-                else if (IsParagraphElement(element.DelemenType))
-                {
-                    classification.ParagraphIds.Add(element.DelemenId);
-                }
+                // Structural label list (list_item/list_level_*) is the strongest signal.
+                // Some DOCX files store manual list text (e.g. "a. ...") as plain paragraph
+                // without numbering metadata, and downgrading them to paragraf causes
+                // paragraph-only checks (like min sentence) to trigger incorrectly.
+                classification.ListItemIds.Add(element.DelemenId);
             }
         }
 

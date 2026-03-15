@@ -89,7 +89,8 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "processing_results", 70);
                                 
                                 // Update dokumen with validation results
-                                dokumen.DokumenSkor = (int)Math.Round(validationResult.Score);
+                                var roundedScore = (int)Math.Round(validationResult.Score);
+                                dokumen.DokumenSkor = roundedScore;
                                 dokumen.DokumenUpdatedAt = DateTime.Now;
 
                                 var rawErrorCount = validationResult.Errors.Count;
@@ -132,8 +133,9 @@ public class ValidationQueueBackgroundService : BackgroundService
                                     .OrderByDescending(a => a.AturanCreatedAt)
                                     .FirstOrDefaultAsync(stoppingToken);
 
-                                var minimumScore = (decimal)(activeAturan?.AturanSkorMinimum ?? 80u);
-                                var isLolos = validationResult.Score >= minimumScore;
+                                var minimumScoreValue = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
+                                dokumen.DokumenSkorMinimal = minimumScoreValue;
+                                var isLolos = roundedScore >= minimumScoreValue;
                                 dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
                                 dokumen.DokumenUpdatedAt = DateTime.Now;
 
@@ -142,15 +144,15 @@ public class ValidationQueueBackgroundService : BackgroundService
                                     _logger.LogWarning(
                                         "No active aturan found when determining validation status for dokumen ID: {DokumenId}. Using default minimum score: {MinimumScore}",
                                         queue.DokumenId,
-                                        minimumScore);
+                                        minimumScoreValue);
                                 }
                                 else
                                 {
                                     _logger.LogInformation(
                                         "Validation status for dokumen ID: {DokumenId} determined by score. Score: {Score}, MinimumScore: {MinimumScore}, AturanId: {AturanId}, Status: {Status}",
                                         queue.DokumenId,
-                                        validationResult.Score,
-                                        minimumScore,
+                                        roundedScore,
+                                        minimumScoreValue,
                                         activeAturan.AturanId,
                                         dokumen.DokumenStatus);
                                 }
@@ -173,7 +175,16 @@ public class ValidationQueueBackgroundService : BackgroundService
                             if (bab != null)
                             {
                                 validationResult = await validationService.ValidateBabAsync(queue.BabId.Value, stoppingToken);
-                                bab.BabSkor = (int)Math.Round(validationResult.Score);
+                                var roundedScore = (int)Math.Round(validationResult.Score);
+                                bab.BabSkor = roundedScore;
+
+                                var activeAturan = await db.Aturans
+                                    .Where(a => a.AturanStatus == 1)
+                                    .OrderByDescending(a => a.AturanCreatedAt)
+                                    .FirstOrDefaultAsync(stoppingToken);
+                                var minimumScoreValue = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
+                                bab.BabSkorMinimal = minimumScoreValue;
+
                                 var rawErrorCount = validationResult.Errors.Count;
                                 var storedErrorCount = 0;
                                 if (rawErrorCount > 0)
@@ -194,10 +205,11 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 bab.BabJumlahKesalahan = storedErrorCount;
 
                                 _logger.LogInformation(
-                                    "Validated bab ID: {BabId} (BukuId: {BukuId}), Score: {Score}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
+                                    "Validated bab ID: {BabId} (BukuId: {BukuId}), Score: {Score}, MinimumScoreAtValidation: {MinimumScore}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
                                     queue.BabId,
                                     queue.BukuId,
-                                    validationResult.Score,
+                                    roundedScore,
+                                    minimumScoreValue,
                                     rawErrorCount,
                                     storedErrorCount);
                                 if (rawErrorCount > 0 && storedErrorCount == 0)
@@ -242,16 +254,16 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 if (buku != null)
                                 {
                                     var bukuRefId = (uint)queue.BukuId.Value;
-                                    var babScores = await db.Babs
+                                    var babResults = await db.Babs
                                         .Where(b => b.BukuId == bukuRefId)
-                                        .Select(b => b.BabSkor)
+                                        .Select(b => new { b.BabSkor, b.BabSkorMinimal })
                                         .ToListAsync(stoppingToken);
 
-                                    var scoredBabScores = babScores
-                                        .Where(score => score.HasValue)
-                                        .Select(score => (decimal)score!.Value)
+                                    var scoredBabScores = babResults
+                                        .Where(result => result.BabSkor.HasValue)
+                                        .Select(result => (decimal)result.BabSkor!.Value)
                                         .ToList();
-                                    var allBabsHaveScore = babScores.Count > 0 && babScores.Count == scoredBabScores.Count;
+                                    var allBabsHaveScore = babResults.Count > 0 && babResults.Count == scoredBabScores.Count;
                                     var averageScore = allBabsHaveScore
                                         ? scoredBabScores.Average()
                                         : 0m;
@@ -260,8 +272,16 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         .Where(a => a.AturanStatus == 1)
                                         .OrderByDescending(a => a.AturanCreatedAt)
                                         .FirstOrDefaultAsync(stoppingToken);
-                                    var minimumScore = (decimal)(activeAturan?.AturanSkorMinimum ?? 80u);
-                                    var isLolos = allBabsHaveScore && scoredBabScores.All(score => score >= minimumScore);
+                                    var defaultMinimumScore = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
+                                    var useFallbackMinimum = babResults.Any(result => !result.BabSkorMinimal.HasValue);
+                                    var isLolos = allBabsHaveScore && babResults.All(result =>
+                                    {
+                                        if (!result.BabSkor.HasValue)
+                                            return false;
+
+                                        var minimum = result.BabSkorMinimal ?? defaultMinimumScore;
+                                        return result.BabSkor.Value >= minimum;
+                                    });
 
                                     var totalKesalahan = await (
                                         from detail in db.KesalahanDetails
@@ -277,13 +297,22 @@ public class ValidationQueueBackgroundService : BackgroundService
                                     buku.BukuJumlahKesalahan = totalKesalahan;
                                     buku.BukuSkor = (int)Math.Round(averageScore);
                                     buku.BukuUpdatedAt = DateTime.Now;
+
+                                    await reportService.GenerateBukuReportAsync(
+                                        (int)queue.BukuId.Value,
+                                        buku.MhsNrp,
+                                        "admin",
+                                        refresh: true,
+                                        cancellationToken: stoppingToken);
+
                                     await wsService.NotifyBukuStatusChanged(buku.MhsNrp, (int)queue.BukuId.Value, finalStatus);
                                     _logger.LogInformation(
-                                        "All babs validated for buku ID: {BukuId}. FinalStatus={FinalStatus}, BookScore={BookScore}, MinimumScore={MinimumScore}, TotalKesalahan={TotalKesalahan}",
+                                        "All babs validated for buku ID: {BukuId}. FinalStatus={FinalStatus}, BookScore={BookScore}, DefaultMinimumScore={DefaultMinimumScore}, FallbackMinimumUsed={FallbackMinimumUsed}, TotalKesalahan={TotalKesalahan}",
                                         queue.BukuId,
                                         finalStatus,
                                         buku.BukuSkor,
-                                        minimumScore,
+                                        defaultMinimumScore,
+                                        useFallbackMinimum,
                                         totalKesalahan);
                                 }
                             }
@@ -458,11 +487,21 @@ public class ValidationQueueBackgroundService : BackgroundService
                     static bool HasEmptySteps(GeminiErrorDetail detail)
                         => detail.Steps == null ||
                            detail.Steps.Count == 0 ||
-                           detail.Steps.All(step => string.IsNullOrWhiteSpace(step));
+                           detail.Steps.Count > 6 ||
+                           detail.Steps.Any(step => string.IsNullOrWhiteSpace(step));
+
+                    static bool HasMissingRequiredFields(GeminiErrorDetail detail)
+                    {
+                        if (string.IsNullOrWhiteSpace(detail.Title))
+                            return true;
+                        if (string.IsNullOrWhiteSpace(detail.Explanation))
+                            return true;
+                        return false;
+                    }
 
                     static bool ShouldRequeue(GeminiErrorDetail detail)
                     {
-                        if (detail.IsError == false && string.IsNullOrWhiteSpace(detail.SkipReason))
+                        if (HasMissingRequiredFields(detail))
                             return true;
                         return HasEmptySteps(detail);
                     }
@@ -486,7 +525,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                     if (emptyStepIndices.Count > 0)
                     {
                         _logger.LogWarning(
-                            "[BATCH] Empty steps or missing skip_reason for {EmptyCount}/{BatchSize} items in batch {BatchNum}; requeueing",
+                            "[BATCH] Empty/invalid required fields for {EmptyCount}/{BatchSize} items in batch {BatchNum}; requeueing",
                             emptyStepIndices.Count,
                             batchItems.Count,
                             currentBatchNumber);
@@ -575,10 +614,9 @@ public class ValidationQueueBackgroundService : BackgroundService
         if (tasks.Count > 0)
             await Task.WhenAll(tasks);
 
-        // Group errors by category + field/expected + elemen_id (fallback to lokasi when elemen_id is missing).
-        // This prevents unrelated page-setting fields with null lokasi from collapsing into one parent row.
+        // Group errors by category + field + elemen_id (fallback to lokasi when elemen_id is missing).
+        // For page-settings errors we keep expected in the key to preserve per-rule separation.
         var errorGroups = new Dictionary<string, (Kesalahan Parent, List<KesalahanDetail> Details)>();
-        var skipLogs = new List<LlmApiLog>();
         var storedDetailCount = 0;
         var errorsToStore = llmErrors;
         for (int i = 0; i < errorsToStore.Count; i++)
@@ -587,24 +625,6 @@ public class ValidationQueueBackgroundService : BackgroundService
             GeminiErrorDetail? detail = null;
             if (detailByIndex.TryGetValue(i, out var found))
                 detail = found;
-
-            if (detail?.IsError == false)
-            {
-                skipLogs.Add(new LlmApiLog
-                {
-                    LogMessage = BuildSkipLogMessage(detail.SkipReason),
-                    LogErrorCode = 0,
-                    AntrianId = antrianId,
-                    ApiKeyId = 0,
-                    LogTokensUsed = 0,
-                    LogBatchNumber = 0,
-                    LogTotalBatches = 0,
-                    LogErrorCount = 0,
-                    LogKeyTokensUsed = 0,
-                    LogCreatedAt = DateTime.Now
-                });
-                continue;
-            }
 
             var title = !string.IsNullOrWhiteSpace(detail?.Title) ? detail!.Title : error.Message;
             title = Truncate(title, 255);
@@ -624,9 +644,14 @@ public class ValidationQueueBackgroundService : BackgroundService
             var fieldKey = string.IsNullOrWhiteSpace(error.Field) ? "-" : error.Field.Trim().ToLowerInvariant();
             var expectedKey = string.IsNullOrWhiteSpace(error.Expected) ? "-" : error.Expected.Trim().ToLowerInvariant();
             
+            var useExpectedInGroupKey = IsPageSettingsError(error);
             var groupKey = error.DokumenElemenId.HasValue
-                ? $"{category}|field:{fieldKey}|expected:{expectedKey}|elemen:{error.DokumenElemenId.Value}"
-                : $"{category}|field:{fieldKey}|expected:{expectedKey}|{lokasi ?? "null"}";
+                ? (useExpectedInGroupKey
+                    ? $"{category}|field:{fieldKey}|expected:{expectedKey}|elemen:{error.DokumenElemenId.Value}"
+                    : $"{category}|field:{fieldKey}|elemen:{error.DokumenElemenId.Value}")
+                : (useExpectedInGroupKey
+                    ? $"{category}|field:{fieldKey}|expected:{expectedKey}|{lokasi ?? "null"}"
+                    : $"{category}|field:{fieldKey}|{lokasi ?? "null"}");
 
             if (!errorGroups.TryGetValue(groupKey, out var group))
             {
@@ -651,9 +676,6 @@ public class ValidationQueueBackgroundService : BackgroundService
             storedDetailCount++;
         }
 
-        if (skipLogs.Count > 0)
-            db.LlmApiLogs.AddRange(skipLogs);
-
         // Save to database
         foreach (var (_, group) in errorGroups)
         {
@@ -667,9 +689,6 @@ public class ValidationQueueBackgroundService : BackgroundService
             }
             db.KesalahanDetails.AddRange(group.Details);
         }
-
-        if (errorGroups.Count == 0 && skipLogs.Count > 0)
-            await db.SaveChangesAsync(cancellationToken);
 
         return storedDetailCount;
     }
@@ -1507,15 +1526,6 @@ public class ValidationQueueBackgroundService : BackgroundService
             return value;
 
         return value[..maxLength];
-    }
-
-    private static string BuildSkipLogMessage(string? skipReason)
-    {
-        var message = string.IsNullOrWhiteSpace(skipReason)
-            ? "skip"
-            : $"skip:{skipReason.Trim().Replace('\r', ' ').Replace('\n', ' ')}";
-
-        return message.Length <= 50 ? message : message[..50];
     }
 
     private static (string RefType, uint RefId) ResolveSectionRef(Antrian queue)

@@ -594,10 +594,11 @@ public partial class ValidationService
             }
         }
 
+        var expectedFirstLineIndent = rule?.Paragraph?.Indentation?.FirstLineIndent?.Value ?? 0m;
         result.IncrementTotalChecks();
         var firstLineTwips = format.DfpIndFirstLineTwips ?? 0;
         var firstLineCm = firstLineTwips / 1440.0m * 2.54m;
-        if (Math.Abs(firstLineCm) <= 0.05m)
+        if (Math.Abs(firstLineCm - expectedFirstLineIndent) <= 0.05m)
         {
             result.IncrementPassedChecks();
         }
@@ -607,17 +608,18 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "item_daftar",
-                Message = "First line indent item daftar harus 0",
-                Expected = "0 cm",
+                Message = "First line indent item daftar tidak sesuai",
+                Expected = expectedFirstLineIndent.ToString(CultureInfo.InvariantCulture) + " cm",
                 Actual = firstLineCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                 Evidence = evidence,
                 Locations = locations
             });
         }
 
+        var expectedRightIndent = rule?.Paragraph?.Indentation?.RightIndent?.Value ?? 0m;
         result.IncrementTotalChecks();
         var rightCm = GetRightIndentCm(format);
-        if (Math.Abs(rightCm) <= 0.05m)
+        if (Math.Abs(rightCm - expectedRightIndent) <= 0.05m)
         {
             result.IncrementPassedChecks();
         }
@@ -627,8 +629,8 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "item_daftar",
-                Message = "Right indent item daftar harus 0",
-                Expected = "0 cm",
+                Message = "Right indent item daftar tidak sesuai",
+                Expected = expectedRightIndent.ToString(CultureInfo.InvariantCulture) + " cm",
                 Actual = rightCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                 Evidence = evidence,
                 Locations = locations

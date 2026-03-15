@@ -474,7 +474,7 @@ public partial class ValidationService
 
             // --- Sentence Count Suggestion (non-required) ---
             if (!skipSentenceCountParagraphIds.Contains(elementId))
-                ValidateParagraphSentenceCount(result, plainText, evidence, locations);
+                ValidateParagraphSentenceCount(result, rule, plainText, evidence, locations);
 
             if (neighborContexts.TryGetValue(elementId, out var context))
                 ApplyContextToErrors(result.Errors, errorStart, context);
@@ -656,7 +656,7 @@ public partial class ValidationService
         }
 
         result.IncrementTotalChecks();
-        var expectedLeftIndent = leftIndentOverrideCm ?? 0m;
+        var expectedLeftIndent = leftIndentOverrideCm ?? rule?.Paragraph?.LeftIndent?.Value ?? 0m;
         var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
             ? format.DfpIndLeftTwips.Value
             : format.DfpIndStartTwips ?? 0;
@@ -670,7 +670,7 @@ public partial class ValidationService
         {
             var message = leftIndentOverrideCm.HasValue
                 ? "Left indent paragraf setelah list tidak sesuai"
-                : "Left indent paragraf harus 0";
+                : "Left indent paragraf tidak sesuai";
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -739,8 +739,9 @@ public partial class ValidationService
         }
 
         result.IncrementTotalChecks();
+        var expectedRightIndent = rule?.Paragraph?.RightIndent?.Value ?? 0m;
         var rightCm = GetRightIndentCm(format);
-        if (Math.Abs(rightCm) <= 0.05m)
+        if (Math.Abs(rightCm - expectedRightIndent) <= 0.05m)
         {
             result.IncrementPassedChecks();
         }
@@ -750,8 +751,8 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "paragraf",
-                Message = "Right indent paragraf harus 0",
-                Expected = "0 cm",
+                Message = "Right indent paragraf tidak sesuai",
+                Expected = expectedRightIndent.ToString(CultureInfo.InvariantCulture) + " cm",
                 Actual = rightCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                 Evidence = evidence,
                 Locations = locations
@@ -840,6 +841,7 @@ public partial class ValidationService
 
     private static void ValidateParagraphSentenceCount(
         ValidationResult result,
+        ParagraphRule? rule,
         string plainText,
         string evidence,
         List<ErrorLocation> locations)
@@ -850,8 +852,8 @@ public partial class ValidationService
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .Count();
 
-        // Ideal: minimum sentences per paragraph
-        const int minSentences = 3;
+        var minSentencesValue = rule?.StrukturKonten?.MinimalKalimat?.Value ?? 3m;
+        var minSentences = Math.Max(0, (int)Math.Round(minSentencesValue, MidpointRounding.AwayFromZero));
 
         result.IncrementTotalChecks();
         if (sentences >= minSentences)

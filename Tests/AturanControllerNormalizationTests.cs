@@ -11,6 +11,59 @@ namespace Tests;
 public class AturanControllerNormalizationTests
 {
     [Fact]
+    public async Task GetAturanById_ShouldIncludeAturanMetadataForAdminConsumers()
+    {
+        var aturanService = new Mock<IAturanService>();
+        aturanService
+            .Setup(service => service.GetByIdWithDetailsAsync(1))
+            .ReturnsAsync(new AturanWithDetails
+            {
+                Aturan = new Aturan
+                {
+                    AturanId = 1,
+                    AturanVersi = "v1",
+                    AturanStatus = 1,
+                    AturanSkorMinimum = 90,
+                    AturanTemplateFilePath = "templates/template.dotx",
+                    AturanCreatedAt = new DateTime(2026, 3, 1, 10, 0, 0),
+                    AturanUpdatedAt = new DateTime(2026, 3, 2, 11, 0, 0)
+                },
+                Details =
+                [
+                    new AturanDetail
+                    {
+                        AturanDetailId = 10,
+                        AturanId = 1,
+                        AturanDetailKategori = "Isi Buku",
+                        AturanDetailKey = "paragraf",
+                        AturanDetailJsonValue = """{"font":{"font_name":"Times New Roman"}}"""
+                    }
+                ]
+            });
+
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        var controller = new AturanController(aturanService.Object, db)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+        controller.HttpContext.Items["Role"] = "admin";
+
+        var result = await controller.GetAturanById(1);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var value = ok.Value!;
+        var valueType = value.GetType();
+
+        Assert.Equal((uint)1, valueType.GetProperty("id")!.GetValue(value));
+        Assert.Equal((uint)90, valueType.GetProperty("skor_minimum")!.GetValue(value));
+        Assert.Equal("templates/template.dotx", valueType.GetProperty("template_file_path")!.GetValue(value));
+        Assert.NotNull(valueType.GetProperty("aturan_detail")!.GetValue(value));
+    }
+
+    [Fact]
     public async Task PatchAturanDetail_ShouldNormalizeJsonValueBeforeSaving()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();

@@ -324,7 +324,9 @@ public partial class ValidationService
         }
 
         // Check for empty line after title (based on struktur_konten rule)
-        var requireEmptyLineAfter = rule?.StrukturKonten?.SatuBarisKosongSetelah?.Value ?? true;
+        var expectedEmptyLineCount = rule?.StrukturKonten?.JumlahBarisKosongSetelah?.Value is { } configuredEmptyLines
+            ? Math.Max(0, (int)Math.Round(configuredEmptyLines, MidpointRounding.AwayFromZero))
+            : (rule?.StrukturKonten?.SatuBarisKosongSetelah?.Value ?? true ? 1 : 0);
         var firstTitleElementIndex = bodyElements.FindIndex(e => titleIds.Contains(e.DelemenId));
         var nextElementIndex = firstTitleElementIndex;
         while (nextElementIndex >= 0 &&
@@ -333,62 +335,31 @@ public partial class ValidationService
         {
             nextElementIndex++;
         }
-        
-        if (requireEmptyLineAfter)
+
+        if (expectedEmptyLineCount > 0)
         {
-            result.IncrementTotalChecks();
-            if (nextElementIndex >= 0 && nextElementIndex < bodyElements.Count)
+            var emptyLineCount = 0;
+            var emptyIndex = nextElementIndex;
+            while (emptyIndex >= 0 && emptyIndex < bodyElements.Count)
             {
-                var emptyContent = ParseElementContent(bodyElements[nextElementIndex].DelemenJsonTree);
-                if (IsEmptyElement(emptyContent))
-                {
-                    result.IncrementPassedChecks();
+                var emptyContent = ParseElementContent(bodyElements[emptyIndex].DelemenJsonTree);
+                if (!IsEmptyElement(emptyContent))
+                    break;
 
-                    // Check if empty paragraph has same font size as title (non-required check)
-                    await ValidateEmptyParagraphFontSizeAsync(
-                        result,
-                        rule,
-                        bodyElements[nextElementIndex].DelemenId,
-                        cancellationToken);
+                emptyLineCount++;
+                emptyIndex++;
+            }
 
-                    result.IncrementTotalChecks();
-                    var afterEmptyIndex = nextElementIndex + 1;
-                    if (afterEmptyIndex < bodyElements.Count)
-                    {
-                        var afterEmptyContent = ParseElementContent(bodyElements[afterEmptyIndex].DelemenJsonTree);
-                        if (!IsEmptyElement(afterEmptyContent))
-                        {
-                            result.IncrementPassedChecks();
-                        }
-                        else
-                        {
-                            result.Errors.Add(new ValidationError
-                            {
-                                Category = "Isi Buku",
-                                Field = "judul_bab",
-                                Message = "Hanya boleh ada 1 paragraf kosong setelah judul bab"
-                            });
-                        }
-                    }
-                    else
-                    {
-                        result.Errors.Add(new ValidationError
-                        {
-                            Category = "Isi Buku",
-                            Field = "judul_bab",
-                            Message = "Paragraf setelah paragraf kosong judul bab tidak ditemukan"
-                        });
-                    }
-                }
-                else
-                {
-                    result.Errors.Add(new ValidationError
-                    {
-                        Category = "Isi Buku",
-                        Field = "judul_bab",
-                        Message = "Setelah judul bab harus ada 1 paragraf kosong"
-                    });
-                }
+            result.IncrementTotalChecks();
+            if (emptyLineCount == expectedEmptyLineCount)
+            {
+                result.IncrementPassedChecks();
+
+                await ValidateEmptyParagraphFontSizeAsync(
+                    result,
+                    rule,
+                    bodyElements[nextElementIndex].DelemenId,
+                    cancellationToken);
             }
             else
             {
@@ -396,7 +367,9 @@ public partial class ValidationService
                 {
                     Category = "Isi Buku",
                     Field = "judul_bab",
-                    Message = "Paragraf kosong setelah judul bab tidak ditemukan"
+                    Message = "Jumlah paragraf kosong setelah judul bab tidak sesuai",
+                    Expected = $"Tepat {expectedEmptyLineCount} paragraf kosong",
+                    Actual = $"{emptyLineCount} paragraf kosong"
                 });
             }
         }
@@ -890,10 +863,12 @@ public partial class ValidationService
         }
 
         // Validate: min satu paragraf sebelum subbab (struktur_konten rule)
-        var requireParagraphBeforeSubchapter = rule?.StrukturKonten?.MinSatuParagrafSebelumSubbab?.Value ?? true;
-        if (requireParagraphBeforeSubchapter)
+        var expectedParagraphBeforeSubchapter = rule?.StrukturKonten?.MinimalParagrafSebelumSubbab?.Value is { } configuredParagraphCount
+            ? Math.Max(0, (int)Math.Round(configuredParagraphCount, MidpointRounding.AwayFromZero))
+            : (rule?.StrukturKonten?.MinSatuParagrafSebelumSubbab?.Value ?? true ? 1 : 0);
+        if (expectedParagraphBeforeSubchapter > 0)
         {
-            await ValidateParagraphBeforeSubchapterAsync(result, bodyElements, labelMap, titleIds, cancellationToken);
+            await ValidateParagraphBeforeSubchapterAsync(result, bodyElements, labelMap, titleIds, expectedParagraphBeforeSubchapter, cancellationToken);
         }
 
         ElementNeighborContext? titleContext = null;
@@ -1288,6 +1263,7 @@ public partial class ValidationService
         List<BodyElementInfo> bodyElements,
         Dictionary<ulong, string> labelMap,
         HashSet<ulong> titleIds,
+        int expectedParagraphCount,
         CancellationToken cancellationToken)
     {
         // Find the end of chapter title block (after title elements and empty line)
@@ -1337,9 +1313,9 @@ public partial class ValidationService
             return;
         }
 
-        // Check if there's at least one paragraph (paragraf) between title and first subchapter
+        // Check if there's at least the configured number of paragraphs between title and first subchapter.
         result.IncrementTotalChecks();
-        bool hasParagraphBefore = false;
+        var paragraphCount = 0;
         
         for (int i = titleEndIndex; i < firstSubchapterIndex.Value; i++)
         {
@@ -1352,14 +1328,13 @@ public partial class ValidationService
                     var content = ParseElementContent(bodyElements[i].DelemenJsonTree);
                     if (!IsEmptyElement(content))
                     {
-                        hasParagraphBefore = true;
-                        break;
+                        paragraphCount++;
                     }
                 }
             }
         }
 
-        if (hasParagraphBefore)
+        if (paragraphCount >= expectedParagraphCount)
         {
             result.IncrementPassedChecks();
         }
@@ -1375,9 +1350,9 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "judul_bab",
-                Message = "Harus ada minimal 1 paragraf setelah judul bab sebelum judul subbab",
-                Expected = "Minimal 1 paragraf",
-                Actual = "Langsung ke judul subbab",
+                Message = "Jumlah paragraf sebelum judul subbab tidak sesuai",
+                Expected = $"Minimal {expectedParagraphCount} paragraf",
+                Actual = $"{paragraphCount} paragraf",
                 Locations = locations,
                 DokumenElemenId = firstSubchapterId
             });

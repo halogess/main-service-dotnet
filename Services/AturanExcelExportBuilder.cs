@@ -309,15 +309,26 @@ public static class AturanExcelExportBuilder
     private static AturanExcelExportRow CreateRow(string elementKey, IReadOnlyList<string> path, JsonNode? valueNode, bool hardConstraint)
     {
         var descriptor = BuildDescriptor(path);
+        var effectiveKey = GetEffectiveKey(path);
         return new AturanExcelExportRow(
             elementKey,
             descriptor.Category,
             descriptor.SubCategory,
             descriptor.Criteria,
-            FormatScalarValue(valueNode),
+            FormatScalarValue(valueNode, effectiveKey),
             GetNumericCellValue(valueNode),
             hardConstraint,
             BuildNote(path, valueNode));
+    }
+
+    private static string GetEffectiveKey(IReadOnlyList<string> path)
+    {
+        if (path.Count == 0)
+            return string.Empty;
+
+        return IsIndexToken(path[^1]) && path.Count > 1
+            ? path[^2]
+            : path[^1];
     }
 
     private static double? GetNumericCellValue(JsonNode? valueNode)
@@ -465,10 +476,10 @@ public static class AturanExcelExportBuilder
         };
     }
 
-    private static string FormatScalarValue(JsonNode? valueNode)
+    private static string FormatScalarValue(JsonNode? valueNode, string effectiveKey)
     {
         if (valueNode == null)
-            return string.Empty;
+            return effectiveKey == "prefix" ? "(tanpa prefix)" : "(kosong)";
 
         if (valueNode is JsonValue jsonValue)
         {
@@ -488,7 +499,25 @@ public static class AturanExcelExportBuilder
                 return longValue.ToString(CultureInfo.InvariantCulture);
 
             if (jsonValue.TryGetValue<string>(out var stringValue))
-                return stringValue ?? string.Empty;
+            {
+                var trimmed = stringValue?.Trim() ?? string.Empty;
+                if (string.IsNullOrEmpty(trimmed))
+                    return effectiveKey == "prefix" ? "(tanpa prefix)" : "(kosong)";
+
+                if (effectiveKey == "prefix" &&
+                    trimmed.Equals("none", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "(tanpa prefix)";
+                }
+
+                if (effectiveKey == "indentation" &&
+                    trimmed.Equals("none", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "none (tanpa indentasi)";
+                }
+
+                return trimmed;
+            }
         }
 
         return valueNode.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
@@ -496,11 +525,7 @@ public static class AturanExcelExportBuilder
 
     private static string BuildNote(IReadOnlyList<string> path, JsonNode? valueNode)
     {
-        var effectiveKey = path.Count == 0
-            ? string.Empty
-            : IsIndexToken(path[^1]) && path.Count > 1
-                ? path[^2]
-                : path[^1];
+        var effectiveKey = GetEffectiveKey(path);
 
         if (valueNode is JsonValue jsonValue && jsonValue.TryGetValue<bool>(out var _boolValue))
             return "Pilihan: true, false";
@@ -523,11 +548,12 @@ public static class AturanExcelExportBuilder
             "position" => "Pilihan umum: before, after",
             "orientation" => "Pilihan: PORTRAIT, LANDSCAPE",
             "size" => "Pilihan umum: A4, A3",
+            "indentation" => "Isi `none` atau angka 0 berarti tanpa indentasi",
             "case" => "Pilihan umum: UPPERCASE, Title Case, lowercase",
             "type" => "Pilihan umum: arab, arabic, decimal, lowerRoman, upperRoman, lowerLetter, upperLetter",
             "font_name" => "Teks bebas. Contoh: Times New Roman",
             "number_format" => "Teks/pola format. Contoh: BAB I atau Gambar [nomor_bab].[nomor_gambar]",
-            "prefix" => "Teks bebas atau kosong",
+            "prefix" => "Kosong = tanpa prefix",
             "line_spacing" => "Angka desimal. Contoh: 1, 1.5, 2",
             "font_size" => "Angka dalam pt",
             "left_indent" or "right_indent" or "first_line_indent" or "first_line_indent_cm" or "hanging" or

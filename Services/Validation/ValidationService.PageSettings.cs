@@ -113,11 +113,15 @@ public partial class ValidationService
         }
 
         // Default rules when not provided in DB
-        gutterRule ??= new GutterRule { Gutter = 0m };
+        gutterRule ??= new GutterRule
+        {
+            Gutter = new DecimalRuleValue { Value = 0m },
+            Position = new RuleValue<string> { Value = "left" }
+        };
 
-        var effectiveColumnRule = new ColumnRule { Count = 1 };
-        if (columnRule?.Count == 1)
-            effectiveColumnRule = columnRule;
+        var effectiveColumnRule = columnRule?.Count?.Value is > 0
+            ? columnRule
+            : new ColumnRule { Count = new RuleValue<int> { Value = 1 } };
 
         var dokumenTipe = target.DokumenTipe;
         var (sectionRefType, sectionRefId) = ResolveSectionRefForValidation(dokumenId);
@@ -180,7 +184,7 @@ public partial class ValidationService
             }
 
             // Validate odd/even headers (must be off)
-            ValidateDifferentOddEven(result, section, i + 1, sectionType, sectionPageMap);
+            ValidateDifferentOddEven(result, section, headerFooterRule, i + 1, sectionType, sectionPageMap);
 
             // Validate gutter
             if (gutterRule != null)
@@ -490,13 +494,15 @@ public partial class ValidationService
     private void ValidateDifferentOddEven(
         ValidationResult result,
         DokumenSection section,
+        HeaderFooterRule? rule,
         int sectionNumber,
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
+        var expectedDifferentOddEven = rule?.DifferentOddEven?.Value ?? false;
         result.IncrementTotalChecks();
 
-        if (!section.DsecDifferentOddEven)
+        if (section.DsecDifferentOddEven == expectedDifferentOddEven)
         {
             result.IncrementPassedChecks();
             return;
@@ -506,9 +512,9 @@ public partial class ValidationService
         {
             Category = "Pengaturan Halaman",
             Field = "different_odd_even",
-            Message = $"Pengaturan header/footer ganjil-genap section {sectionNumber} (bagian {sectionType}) tidak diperbolehkan",
-            Expected = "0",
-            Actual = "1",
+            Message = $"Pengaturan header/footer ganjil-genap section {sectionNumber} (bagian {sectionType}) tidak sesuai",
+            Expected = expectedDifferentOddEven ? "1" : "0",
+            Actual = section.DsecDifferentOddEven ? "1" : "0",
             SectionIndex = sectionNumber,
             Locations = BuildPageSettingsLocations("different_odd_even", section, sectionPageMap)
         });
@@ -524,7 +530,8 @@ public partial class ValidationService
     {
         // Validate gutter size
         result.IncrementTotalChecks();
-        var expectedGutterTwips = rule.Gutter * TwipsPerCm;
+        var expectedGutterCm = rule.Gutter?.Value ?? 0m;
+        var expectedGutterTwips = expectedGutterCm * TwipsPerCm;
         var actualGutterCm = section.DsecGutterTwips.HasValue 
             ? section.DsecGutterTwips.Value / TwipsPerCm 
             : 0;
@@ -540,7 +547,7 @@ public partial class ValidationService
                 Category = "Pengaturan Halaman",
                 Field = "gutter",
                 Message = $"Gutter section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-                Expected = $"{rule.Gutter} cm",
+                Expected = $"{expectedGutterCm} cm",
                 Actual = $"{actualGutterCm:F2} cm",
                 SectionIndex = sectionNumber,
                 Locations = BuildPageSettingsLocations("gutter", section, sectionPageMap)
@@ -548,11 +555,12 @@ public partial class ValidationService
         }
 
         // Validate gutter position if specified
-        if (!string.IsNullOrEmpty(rule.Position))
+        var expectedPositionValue = rule.Position?.Value;
+        if (!string.IsNullOrEmpty(expectedPositionValue))
         {
             result.IncrementTotalChecks();
             var actualPosition = section.DsecGutterPosition?.ToLower() ?? "left";
-            var expectedPosition = rule.Position.ToLower();
+            var expectedPosition = expectedPositionValue.ToLowerInvariant();
 
             if (actualPosition == expectedPosition)
             {
@@ -584,8 +592,9 @@ public partial class ValidationService
     {
         result.IncrementTotalChecks();
         var actualColumns = (int)(section.DsecColumnCount ?? 1);
+        var expectedColumns = rule.Count?.Value ?? 1;
 
-        if (actualColumns == rule.Count)
+        if (actualColumns == expectedColumns)
         {
             result.IncrementPassedChecks();
         }
@@ -596,7 +605,7 @@ public partial class ValidationService
                 Category = "Pengaturan Halaman",
                 Field = "column_count",
                 Message = $"Jumlah kolom section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-                Expected = $"{rule.Count} kolom",
+                Expected = $"{expectedColumns} kolom",
                 Actual = $"{actualColumns} kolom",
                 SectionIndex = sectionNumber,
                 Locations = BuildPageSettingsLocations("column_count", section, sectionPageMap)

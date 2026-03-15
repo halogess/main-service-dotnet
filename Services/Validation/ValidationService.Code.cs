@@ -1255,9 +1255,10 @@ public partial class ValidationService
             }
         }
 
+        var expectedRightIndent = rule.Indentation?.RightIndent?.Value ?? 0m;
         result.IncrementTotalChecks();
         var rightCm = GetRightIndentCm(format);
-        if (Math.Abs(rightCm) <= indentToleranceCm)
+        if (Math.Abs(rightCm - expectedRightIndent) <= indentToleranceCm)
         {
             result.IncrementPassedChecks();
         }
@@ -1267,8 +1268,8 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "kode",
-                Message = "Right indent kode harus 0",
-                Expected = "0 cm",
+                Message = "Right indent kode tidak sesuai",
+                Expected = expectedRightIndent.ToString(CultureInfo.InvariantCulture) + " cm",
                 Actual = rightCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                 Evidence = evidence,
                 Locations = locations

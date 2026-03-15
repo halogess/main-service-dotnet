@@ -55,6 +55,13 @@ public class AturanController : ControllerBase
 
         return Ok(new
         {
+            id = result.Aturan.AturanId,
+            versi = result.Aturan.AturanVersi,
+            status = result.Aturan.AturanStatus,
+            skor_minimum = result.Aturan.AturanSkorMinimum,
+            template_file_path = result.Aturan.AturanTemplateFilePath,
+            created_at = result.Aturan.AturanCreatedAt,
+            updated_at = result.Aturan.AturanUpdatedAt,
             aturan_detail = result.Details.Select(d => new
             {
                 id = d.AturanDetailId,

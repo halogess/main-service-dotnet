@@ -197,23 +197,26 @@ public class HeaderFooterRule
 
     [JsonPropertyName("footer_from_bottom")]
     public DecimalRuleValue? FooterFromBottom { get; set; }
+
+    [JsonPropertyName("different_odd_even")]
+    public RuleValue<bool>? DifferentOddEven { get; set; }
 }
 
 // Gutter Rule (for binding margin)
 public class GutterRule
 {
     [JsonPropertyName("gutter")]
-    public decimal Gutter { get; set; } // in cm
+    public DecimalRuleValue? Gutter { get; set; }
 
     [JsonPropertyName("position")]
-    public string? Position { get; set; } // "left" or "top"
+    public RuleValue<string>? Position { get; set; }
 }
 
 // Column Rule
 public class ColumnRule
 {
     [JsonPropertyName("count")]
-    public int Count { get; set; } = 1;
+    public RuleValue<int>? Count { get; set; }
 }
 
 // Page Numbering Rule
@@ -354,6 +357,12 @@ public class ChapterContentStructureRule
 
     [JsonPropertyName("min_satu_paragraf_sebelum_subbab")]
     public RuleValue<bool>? MinSatuParagrafSebelumSubbab { get; set; }
+
+    [JsonPropertyName("jumlah_baris_kosong_setelah")]
+    public DecimalRuleValue? JumlahBarisKosongSetelah { get; set; }
+
+    [JsonPropertyName("minimal_paragraf_sebelum_subbab")]
+    public DecimalRuleValue? MinimalParagrafSebelumSubbab { get; set; }
 }
 
 // Subchapter Title Rule (judul_subbab)
@@ -397,6 +406,12 @@ public class SubchapterContentStructureRule
 
     [JsonPropertyName("cegah_subbab_tunggal")]
     public RuleValue<bool>? CegahSubbabTunggal { get; set; }
+
+    [JsonPropertyName("minimal_paragraf_setelah")]
+    public DecimalRuleValue? MinimalParagrafSetelah { get; set; }
+
+    [JsonPropertyName("minimal_subbab_level_sama")]
+    public DecimalRuleValue? MinimalSubbabLevelSama { get; set; }
 }
 
 // Paragraph Rule (paragraf)
@@ -407,6 +422,9 @@ public class ParagraphRule
 
     [JsonPropertyName("paragraph")]
     public ParagraphFormatRule? Paragraph { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public ParagraphContentStructureRule? StrukturKonten { get; set; }
 }
 
 public class ParagraphFontRule
@@ -423,11 +441,23 @@ public class ParagraphFormatRule
     [JsonPropertyName("alignment")]
     public RuleValue<string>? Alignment { get; set; }
 
+    [JsonPropertyName("left_indent")]
+    public DecimalRuleValue? LeftIndent { get; set; }
+
+    [JsonPropertyName("right_indent")]
+    public DecimalRuleValue? RightIndent { get; set; }
+
     [JsonPropertyName("first_line_indent")]
     public DecimalRuleValue? FirstLineIndent { get; set; }
 
     [JsonPropertyName("spacing")]
     public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class ParagraphContentStructureRule
+{
+    [JsonPropertyName("minimal_kalimat")]
+    public DecimalRuleValue? MinimalKalimat { get; set; }
 }
 
 // List Item Rule (item_daftar)
@@ -456,6 +486,12 @@ public class ListItemIndentationRule
 {
     [JsonPropertyName("left_indent")]
     public DecimalRuleValue? LeftIndent { get; set; }
+
+    [JsonPropertyName("first_line_indent")]
+    public DecimalRuleValue? FirstLineIndent { get; set; }
+
+    [JsonPropertyName("right_indent")]
+    public DecimalRuleValue? RightIndent { get; set; }
 
     [JsonPropertyName("hanging")]
     public DecimalRuleValue? Hanging { get; set; }
@@ -699,6 +735,9 @@ public class FormulaIndentationRule
 
     [JsonPropertyName("left_cm")]
     public DecimalRuleValue? LeftCm { get; set; }
+
+    [JsonPropertyName("right_indent")]
+    public DecimalRuleValue? RightIndent { get; set; }
 }
 
 public class FormulaTabsRule

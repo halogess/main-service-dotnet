@@ -152,7 +152,9 @@ public partial class ValidationService
         }
 
         // --- Validate sequence completeness (based on struktur_konten rule) ---
-        var preventSingleSubchapter = rule?.StrukturKonten?.CegahSubbabTunggal?.Value ?? true;
+        var minimumSameLevelSubchapters = rule?.StrukturKonten?.MinimalSubbabLevelSama?.Value is { } configuredMinimumSubbab
+            ? Math.Max(1, (int)Math.Round(configuredMinimumSubbab, MidpointRounding.AwayFromZero))
+            : (rule?.StrukturKonten?.CegahSubbabTunggal?.Value ?? true ? 2 : 1);
         var expectedChapterNumber = TryExtractExpectedChapterNumber(bodyElements, labelMap);
         var sequenceLocationsByElementId = await BuildElementLocationsMapAsync(
             subchapterElements.Select(e => e.Id),
@@ -160,17 +162,19 @@ public partial class ValidationService
         ValidateSubchapterSequence(
             result,
             subchapterElements,
-            preventSingleSubchapter,
+            minimumSameLevelSubchapters,
             neighborContexts,
             expectedChapterNumber,
             sequenceLocationsByElementId);
 
         // --- Validate paragraph after subchapter (based on struktur_konten rule) ---
-        var requireParagraphAfter = rule?.StrukturKonten?.MinimalSatuParagrafSetelah?.Value ?? true;
+        var expectedParagraphAfterCount = rule?.StrukturKonten?.MinimalParagrafSetelah?.Value is { } configuredParagraphCount
+            ? Math.Max(0, (int)Math.Round(configuredParagraphCount, MidpointRounding.AwayFromZero))
+            : (rule?.StrukturKonten?.MinimalSatuParagrafSetelah?.Value ?? true ? 1 : 0);
         var preventBottomPosition = rule?.StrukturKonten?.CegahPosisiPalingBawah?.Value ?? true;
         
         var bodyElementIds = bodyElements.Select(e => e.DelemenId).ToList();
-        if (requireParagraphAfter || preventBottomPosition)
+        if (expectedParagraphAfterCount > 0 || preventBottomPosition)
         {
             await ValidateParagraphAfterSubchapterAsync(
                 result,
@@ -178,7 +182,7 @@ public partial class ValidationService
                 subchapterElements,
                 labelMap,
                 neighborContexts,
-                requireParagraphAfter,
+                expectedParagraphAfterCount,
                 preventBottomPosition,
                 cancellationToken);
         }
@@ -1016,7 +1020,7 @@ public partial class ValidationService
         List<(ulong Id, ElementContentInfo Content)> subchapterElements,
         Dictionary<ulong, string> labelMap,
         Dictionary<ulong, ElementNeighborContext> contextById,
-        bool validateParagraphAfter,
+        int expectedParagraphCount,
         bool validateBottomPosition,
         CancellationToken cancellationToken)
     {
@@ -1043,70 +1047,43 @@ public partial class ValidationService
             var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
 
             // --- Validate paragraph after subchapter (based on struktur_konten rule) ---
-            if (validateParagraphAfter)
+            if (expectedParagraphCount > 0)
             {
                 result.IncrementTotalChecks();
 
-                // Check if next element exists and is a paragraph (paragraf label)
-                var nextIndex = subchapterIndex + 1;
-                if (nextIndex < bodyElementIds.Count)
+                var paragraphCount = 0;
+                var cursor = subchapterIndex + 1;
+                while (cursor < bodyElementIds.Count)
                 {
-                    var nextElementId = bodyElementIds[nextIndex];
+                    var nextElementId = bodyElementIds[cursor];
 
                     if (labelMap.TryGetValue(nextElementId, out var nextLabel))
                     {
                         var normalizedLabel = NormalizeLabel(nextLabel);
                         if (normalizedLabel == "paragraf")
                         {
-                            result.IncrementPassedChecks();
-                        }
-                        else
-                        {
-                            var error = new ValidationError
-                            {
-                                Category = "Isi Buku",
-                                Field = "judul_subbab",
-                                Message = "Harus ada minimal 1 paragraf setelah judul subbab",
-                                Expected = "Paragraf",
-                                Actual = nextLabel ?? "unknown",
-                                Evidence = plainText,
-                                Locations = locations,
-                                DokumenElemenId = subchapterId
-                            };
-                            if (context != null)
-                                ApplyContext(error, context);
-                            result.Errors.Add(error);
+                            paragraphCount++;
+                            cursor++;
+                            continue;
                         }
                     }
-                    else
-                    {
-                        // Next element is not a paragraph
-                        var error = new ValidationError
-                        {
-                            Category = "Isi Buku",
-                            Field = "judul_subbab",
-                            Message = "Harus ada minimal 1 paragraf setelah judul subbab",
-                            Expected = "Paragraf",
-                            Actual = "unknown",
-                            Evidence = plainText,
-                            Locations = locations,
-                            DokumenElemenId = subchapterId
-                        };
-                        if (context != null)
-                            ApplyContext(error, context);
-                        result.Errors.Add(error);
-                    }
+
+                    break;
+                }
+
+                if (paragraphCount >= expectedParagraphCount)
+                {
+                    result.IncrementPassedChecks();
                 }
                 else
                 {
-                    // No next element after subchapter
                     var error = new ValidationError
                     {
                         Category = "Isi Buku",
                         Field = "judul_subbab",
-                        Message = "Harus ada minimal 1 paragraf setelah judul subbab",
-                        Expected = "Paragraf",
-                        Actual = "Tidak ada elemen setelah subbab",
+                        Message = "Jumlah paragraf setelah judul subbab tidak sesuai",
+                        Expected = $"Minimal {expectedParagraphCount} paragraf",
+                        Actual = $"{paragraphCount} paragraf",
                         Evidence = plainText,
                         Locations = locations,
                         DokumenElemenId = subchapterId
@@ -1258,7 +1235,7 @@ public partial class ValidationService
     private void ValidateSubchapterSequence(
         ValidationResult result,
         List<(ulong Id, ElementContentInfo Content)> subchapterElements,
-        bool preventSingleSubchapter,
+        int minimumSameLevelSubchapters,
         Dictionary<ulong, ElementNeighborContext> contextById,
         int? expectedChapterNumber,
         IReadOnlyDictionary<ulong, List<ErrorLocation>> locationsByElementId)
@@ -1451,8 +1428,7 @@ public partial class ValidationService
                     hasSequenceError = true;
             }
 
-            // Check 2: No single subchapter (if 1.1 exists, 1.2 must also exist)
-            if (preventSingleSubchapter)
+            if (minimumSameLevelSubchapters > 1)
             {
                 var subchaptersByParent = subchapters
                     .Where(s => !duplicateIds.Contains(s.Id))
@@ -1461,19 +1437,19 @@ public partial class ValidationService
 
                 foreach (var parentGroup in subchaptersByParent)
                 {
-                    if (parentGroup.Count() != 1)
+                    if (parentGroup.Count() >= minimumSameLevelSubchapters)
                         continue;
 
-                    var singleSubchapter = parentGroup.First();
+                    var firstSubchapter = parentGroup.OrderBy(s => s.Number).First();
 
                     // Avoid cascading noise when this exact element already has a sequence error.
-                    if (sequenceErrorIds.Contains(singleSubchapter.Id))
+                    if (sequenceErrorIds.Contains(firstSubchapter.Id))
                         continue;
 
                     hasSequenceError = true;
-                    var context = contextById.TryGetValue(singleSubchapter.Id, out var found) ? found : null;
+                    var context = contextById.TryGetValue(firstSubchapter.Id, out var found) ? found : null;
 
-                    var nextNumber = singleSubchapter.Parts.ToArray();
+                    var nextNumber = firstSubchapter.Parts.ToArray();
                     nextNumber[^1] = nextNumber[^1] + 1;
                     var nextNumberStr = string.Join(".", nextNumber);
 
@@ -1481,12 +1457,12 @@ public partial class ValidationService
                     {
                         Category = "Isi Buku",
                         Field = "judul_subbab",
-                        Message = $"Subbab {singleSubchapter.Number} tidak boleh berdiri sendiri, harus ada minimal {nextNumberStr}",
-                        Expected = "Minimal 2 subbab pada level yang sama",
-                        Actual = $"Hanya {singleSubchapter.Number} yang ditemukan",
-                        Evidence = singleSubchapter.Evidence,
-                        Locations = GetLocationsForElement(singleSubchapter.Id, locationsByElementId),
-                        DokumenElemenId = singleSubchapter.Id
+                        Message = $"Jumlah subbab pada level yang sama tidak sesuai, minimal harus ada {minimumSameLevelSubchapters}",
+                        Expected = $"Minimal {minimumSameLevelSubchapters} subbab pada level yang sama",
+                        Actual = $"{parentGroup.Count()} subbab ditemukan, contoh berikutnya {nextNumberStr}",
+                        Evidence = firstSubchapter.Evidence,
+                        Locations = GetLocationsForElement(firstSubchapter.Id, locationsByElementId),
+                        DokumenElemenId = firstSubchapter.Id
                     };
                     if (TryAddError(error, context))
                         hasSequenceError = true;

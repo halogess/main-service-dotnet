@@ -88,11 +88,97 @@ public class AturanControllerExportTests
         using var workbook = new XLWorkbook(stream);
         var worksheet = workbook.Worksheet("Aturan");
         var usedValues = worksheet.CellsUsed().Select(cell => cell.GetString()).ToList();
-        var lastRow = worksheet.LastRowUsed();
 
         Assert.DoesNotContain("Versi", usedValues);
         Assert.DoesNotContain("Diekspor", usedValues);
-        Assert.NotNull(lastRow);
-        Assert.Equal(2, lastRow.RowNumber());
+        Assert.Contains("Judul Bab", usedValues);
+    }
+
+    [Fact]
+    public void BuildWorkbook_ShouldWriteNumericJsonValuesAsNumberCells()
+    {
+        IReadOnlyList<AturanDetail> details =
+        [
+            new AturanDetail
+            {
+                AturanDetailId = 11,
+                AturanId = 1,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "judul_bab",
+                AturanDetailJsonValue = """
+                                        {
+                                          "line_spacing": { "value": 1.5, "is_editable": true, "is_hard_constraint": false },
+                                          "font_name": { "value": "Times New Roman", "is_editable": true, "is_hard_constraint": false }
+                                        }
+                                        """
+            }
+        ];
+
+        var bytes = AturanExcelExportBuilder.BuildWorkbook("v1-export", details);
+
+        using var stream = new MemoryStream(bytes);
+        using var workbook = new XLWorkbook(stream);
+        var worksheet = workbook.Worksheet("Aturan");
+        var dataRows = worksheet.RowsUsed().Skip(1).ToList();
+
+        var numericCell = dataRows
+            .Single(row => row.Cell(1).GetString() == "Judul Bab" && row.Cell(4).GetString() == "Line Spacing")
+            .Cell(5);
+        var textCell = dataRows
+            .Single(row => row.Cell(1).GetString() == "Judul Bab" && row.Cell(4).GetString() == "Font Name")
+            .Cell(5);
+
+        Assert.Equal(XLDataType.Number, numericCell.DataType);
+        Assert.Equal(1.5, numericCell.GetDouble(), 6);
+        Assert.Equal(XLDataType.Text, textCell.DataType);
+        Assert.Equal("Times New Roman", textCell.GetString());
+    }
+
+    [Fact]
+    public void BuildWorkbook_ShouldIncludeMissingValidationRulesAndValidationCatalog()
+    {
+        IReadOnlyList<AturanDetail> details =
+        [
+            new AturanDetail
+            {
+                AturanDetailId = 12,
+                AturanId = 1,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "judul_bab",
+                AturanDetailJsonValue = """
+                                        {
+                                          "font": {
+                                            "font_name": { "value": "Times New Roman", "is_editable": true, "is_hard_constraint": false }
+                                          }
+                                        }
+                                        """
+            }
+        ];
+
+        var bytes = AturanExcelExportBuilder.BuildWorkbook("v1-export", details);
+
+        using var stream = new MemoryStream(bytes);
+        using var workbook = new XLWorkbook(stream);
+        var aturanWorksheet = workbook.Worksheet("Aturan");
+        var aturanRows = aturanWorksheet.RowsUsed().Skip(1).ToList();
+        var validationWorksheet = workbook.Worksheet("Cek Validasi");
+        var validationRows = validationWorksheet.RowsUsed().Skip(1).ToList();
+
+        Assert.Contains(aturanRows, row => row.Cell(1).GetString() == "Footnote");
+        Assert.Contains(aturanRows, row => row.Cell(1).GetString() == "Daftar Pustaka");
+
+        Assert.Contains(validationRows, row =>
+            row.Cell(1).GetString() == "Kode" &&
+            row.Cell(4).GetString() == "kode.cegah_tabel_kode" &&
+            !row.Cell(5).GetBoolean());
+
+        Assert.Contains(validationRows, row =>
+            row.Cell(1).GetString() == "Different Odd Even" &&
+            row.Cell(5).GetBoolean() &&
+            row.Cell(6).GetBoolean());
+
+        Assert.Contains(validationRows, row =>
+            row.Cell(1).GetString() == "Judul Kode" &&
+            row.Cell(4).GetString() == "judul_kode.position");
     }
 }

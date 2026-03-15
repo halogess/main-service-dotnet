@@ -28,7 +28,8 @@ public static class AturanExcelExportBuilder
 
     public static byte[] BuildWorkbook(string? aturanVersi, IReadOnlyList<AturanDetail> details)
     {
-        var rows = BuildRows(details);
+        var rows = BuildExportRows(details);
+        var validationChecks = ValidationCheckCatalog.BuildRows(details);
 
         using var workbook = new XLWorkbook();
         var worksheet = workbook.Worksheets.Add("Aturan");
@@ -56,11 +57,15 @@ public static class AturanExcelExportBuilder
         {
             var row = rows[index];
             var excelRow = index + 2;
-            worksheet.Cell(excelRow, 1).Value = row.Elemen;
+            worksheet.Cell(excelRow, 1).Value = FormatElementLabel(row.Elemen);
             worksheet.Cell(excelRow, 2).Value = row.Kategori;
             worksheet.Cell(excelRow, 3).Value = row.SubKategori;
             worksheet.Cell(excelRow, 4).Value = row.Kriteria;
-            worksheet.Cell(excelRow, 5).Value = row.Value;
+            var valueCell = worksheet.Cell(excelRow, 5);
+            if (row.NumericValue.HasValue)
+                valueCell.Value = row.NumericValue.Value;
+            else
+                valueCell.Value = row.ValueText;
             worksheet.Cell(excelRow, 6).Value = row.HardConstraint;
             worksheet.Cell(excelRow, 7).Value = row.Note;
         }
@@ -74,6 +79,48 @@ public static class AturanExcelExportBuilder
         worksheet.Column(5).Width = Math.Max(worksheet.Column(5).Width, 18);
         worksheet.Column(6).Width = Math.Max(worksheet.Column(6).Width, 16);
         worksheet.Column(7).Width = Math.Max(worksheet.Column(7).Width, 28);
+
+        var validationWorksheet = workbook.Worksheets.Add("Cek Validasi");
+        var validationHeaders = new[]
+        {
+            "Elemen",
+            "Field Error",
+            "Sumber",
+            "Path Aturan",
+            "Aktif Saat Ini",
+            "Bisa Error Tanpa DB",
+            "Yang Dicek"
+        };
+
+        for (var column = 0; column < validationHeaders.Length; column++)
+        {
+            var cell = validationWorksheet.Cell(1, column + 1);
+            cell.Value = validationHeaders[column];
+            cell.Style.Font.Bold = true;
+            cell.Style.Fill.BackgroundColor = XLColor.LightGray;
+        }
+
+        for (var index = 0; index < validationChecks.Count; index++)
+        {
+            var row = validationChecks[index];
+            var excelRow = index + 2;
+            validationWorksheet.Cell(excelRow, 1).Value = FormatElementLabel(row.Elemen);
+            validationWorksheet.Cell(excelRow, 2).Value = row.FieldError;
+            validationWorksheet.Cell(excelRow, 3).Value = row.Sumber;
+            validationWorksheet.Cell(excelRow, 4).Value = row.AturanPath;
+            validationWorksheet.Cell(excelRow, 5).Value = row.AktifSaatIni;
+            validationWorksheet.Cell(excelRow, 6).Value = row.BisaErrorTanpaDb;
+            validationWorksheet.Cell(excelRow, 7).Value = row.YangDicek;
+        }
+
+        var validationRange = validationWorksheet.Range(1, 1, Math.Max(validationChecks.Count + 1, 2), validationHeaders.Length);
+        validationRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Top;
+        validationRange.Style.Alignment.WrapText = true;
+        validationWorksheet.SheetView.FreezeRows(1);
+        validationWorksheet.Range(1, 1, 1, validationHeaders.Length).SetAutoFilter();
+        validationWorksheet.Columns().AdjustToContents();
+        validationWorksheet.Column(4).Width = Math.Max(validationWorksheet.Column(4).Width, 28);
+        validationWorksheet.Column(7).Width = Math.Max(validationWorksheet.Column(7).Width, 52);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
@@ -89,15 +136,23 @@ public static class AturanExcelExportBuilder
             .Select(k => k!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var detail in details
-                     .OrderBy(d => d.AturanDetailKategori ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(d => d.AturanDetailKey ?? string.Empty, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(d => d.AturanDetailId))
+        foreach (var detail in details)
         {
             AppendDetailRows(rows, detail, detailKeys);
         }
 
         return rows;
+    }
+
+    private static List<AturanExcelExportRow> BuildExportRows(IReadOnlyList<AturanDetail> details)
+    {
+        var mergedDetails = AturanExportCatalog.MergeValidationTemplates(details);
+        var syntheticElements = AturanExportCatalog.GetSyntheticElementKeys(details);
+        return BuildRows(mergedDetails)
+            .Select(row => syntheticElements.Contains(row.Elemen)
+                ? row with { Note = AturanExportCatalog.AppendTemplateNote(row.Note) }
+                : row)
+            .ToList();
     }
 
     private static void AppendDetailRows(
@@ -111,7 +166,7 @@ public static class AturanExcelExportBuilder
 
         if (string.IsNullOrWhiteSpace(detail.AturanDetailJsonValue))
         {
-            rows.Add(new AturanExcelExportRow(detailKey, "Umum", string.Empty, "Value", string.Empty, false, "Value kosong"));
+            rows.Add(new AturanExcelExportRow(detailKey, "Umum", string.Empty, "Value", string.Empty, null, false, "Value kosong"));
             return;
         }
 
@@ -122,13 +177,13 @@ public static class AturanExcelExportBuilder
         }
         catch (JsonException)
         {
-            rows.Add(new AturanExcelExportRow(detailKey, "Umum", string.Empty, "Raw JSON", detail.AturanDetailJsonValue, false, "JSON tidak valid"));
+            rows.Add(new AturanExcelExportRow(detailKey, "Umum", string.Empty, "Raw JSON", detail.AturanDetailJsonValue, null, false, "JSON tidak valid"));
             return;
         }
 
         if (rootNode is not JsonObject rootObject)
         {
-            rows.Add(new AturanExcelExportRow(detailKey, "Umum", string.Empty, "Value", FormatScalarValue(rootNode), false, BuildNote([], rootNode)));
+            rows.Add(CreateRow(detailKey, [], rootNode, false));
             return;
         }
 
@@ -260,8 +315,29 @@ public static class AturanExcelExportBuilder
             descriptor.SubCategory,
             descriptor.Criteria,
             FormatScalarValue(valueNode),
+            GetNumericCellValue(valueNode),
             hardConstraint,
             BuildNote(path, valueNode));
+    }
+
+    private static double? GetNumericCellValue(JsonNode? valueNode)
+    {
+        if (valueNode is not JsonValue jsonValue)
+            return null;
+
+        if (jsonValue.TryGetValue<decimal>(out var decimalValue))
+            return decimal.ToDouble(decimalValue);
+
+        if (jsonValue.TryGetValue<double>(out var doubleValue))
+            return doubleValue;
+
+        if (jsonValue.TryGetValue<int>(out var intValue))
+            return intValue;
+
+        if (jsonValue.TryGetValue<long>(out var longValue))
+            return longValue;
+
+        return null;
     }
 
     private static bool? ReadBooleanProperty(JsonObject jsonObject, string propertyName)
@@ -466,6 +542,18 @@ public static class AturanExcelExportBuilder
         };
     }
 
+    private static string FormatElementLabel(string rawElement)
+    {
+        if (string.IsNullOrWhiteSpace(rawElement))
+            return string.Empty;
+
+        return string.Join(
+            ' ',
+            rawElement
+                .Split('_', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(segment => HumanizeSegment(segment, false)));
+    }
+
     private static bool IsIndexToken(string value)
     {
         return value.Length >= 3 && value[0] == '[' && value[^1] == ']';
@@ -477,6 +565,7 @@ public sealed record AturanExcelExportRow(
     string Kategori,
     string SubKategori,
     string Kriteria,
-    string Value,
+    string ValueText,
+    double? NumericValue,
     bool HardConstraint,
     string Note);

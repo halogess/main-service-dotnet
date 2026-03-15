@@ -13,7 +13,7 @@ public class DocxExtractionServiceTests
     public DocxExtractionServiceTests()
     {
         // Ensure the test data path is correct
-        _testDocxPath = Path.Combine(AppContext.BaseDirectory, "TestData", "bab2.docx");
+        _testDocxPath = Path.Combine(AppContext.BaseDirectory, "TestData", "Docx", "bab2.docx");
     }
 
     [Fact]
@@ -22,7 +22,7 @@ public class DocxExtractionServiceTests
         // Arrange
         if (!File.Exists(_testDocxPath))
         {
-            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/");
+            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/Docx/");
         }
 
         // Setup InMemory Database
@@ -113,7 +113,7 @@ public class DocxExtractionServiceTests
         // Arrange
         if (!File.Exists(_testDocxPath))
         {
-            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/");
+            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/Docx/");
         }
 
         var options = new DbContextOptionsBuilder<KorektorBukuDbContext>()

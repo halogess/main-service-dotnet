@@ -10,7 +10,7 @@
 | Path | Label | Evidence | Risk if removed | Recommendation |
 | --- | --- | --- | --- | --- |
 | `Tests/Tests.csproj` | aktif | `dotnet test` discovered and ran 32 tests; project references `main-service.csproj`; project is not in solution | High | Keep; consider adding to solution or CI separately |
-| `Tests/TestData/bab2.docx` | aktif | Referenced by `Tests/DocxExtractionServiceTests.cs` and `Tests/SectionExtractionTests.cs`; copied by `Tests/Tests.csproj` content rule | High | Keep |
+| `Tests/TestData/Docx/bab2.docx` | aktif | Referenced by `Tests/DocxExtractionServiceTests.cs` and `Tests/SectionExtractionTests.cs`; copied by `Tests/Tests.csproj` content rule | High | Keep |
 
 ## Artifacts removed in stage 1
 | Path | Label | Evidence | Risk if removed | Recommendation |

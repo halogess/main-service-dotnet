@@ -51,6 +51,7 @@ public class AturanService : IAturanService
 
         var details = await _db.AturanDetails
             .Where(d => d.AturanId == id)
+            .OrderBy(d => d.AturanDetailId)
             .ToListAsync();
 
         return new AturanWithDetails
@@ -80,6 +81,7 @@ public class AturanService : IAturanService
 
         var details = await _db.AturanDetails
             .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .OrderBy(d => d.AturanDetailId)
             .ToListAsync();
 
         return new AturanWithDetails

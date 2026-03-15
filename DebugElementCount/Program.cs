@@ -1,7 +1,7 @@
 ﻿using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 
-var docxPath = @"E:\main-service-dotnet\Tests\TestData\bab2.docx";
+var docxPath = GetRepoDocxPath("bab2.docx");
 if (!File.Exists(docxPath)) { Console.WriteLine("File not found"); return; }
 
 using var doc = WordprocessingDocument.Open(docxPath, false);
@@ -38,3 +38,15 @@ else
 {
     Console.WriteLine("PASS: objects preserve identity.");
 }
+
+static string GetRepoDocxPath(string fileName)
+    => Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory,
+        "..",
+        "..",
+        "..",
+        "..",
+        "Tests",
+        "TestData",
+        "Docx",
+        fileName));

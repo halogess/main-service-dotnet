@@ -2,7 +2,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using ValidasiTugasAkhir.MainService.Services.DocxExtraction;
 
-var docPath = args.Length > 0 ? args[0] : "Bab 1 - Pendahuluan.docx";
+var docPath = args.Length > 0 ? args[0] : GetRepoDocxPath("Bab 1 - Pendahuluan.docx");
 if (!File.Exists(docPath))
 {
     Console.WriteLine($"File not found: {docPath}");
@@ -84,3 +84,15 @@ static string? GetThemeAttributeValue(RunFonts fonts, string localName)
     var attr = fonts.GetAttributes().FirstOrDefault(a => a.LocalName == localName);
     return string.IsNullOrWhiteSpace(attr.Value) ? null : attr.Value;
 }
+
+static string GetRepoDocxPath(string fileName)
+    => Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory,
+        "..",
+        "..",
+        "..",
+        "..",
+        "Tests",
+        "TestData",
+        "Docx",
+        fileName));

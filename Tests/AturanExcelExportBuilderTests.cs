@@ -45,7 +45,8 @@ public class AturanExcelExportBuilderTests
             row.Kategori == "Paragraph" &&
             row.SubKategori == "Indentation" &&
             row.Kriteria == "Right Indent (cm)" &&
-            row.Value == "0" &&
+            row.ValueText == "0" &&
+            row.NumericValue == 0 &&
             row.HardConstraint &&
             row.Note == "Angka desimal dalam cm");
 
@@ -54,7 +55,7 @@ public class AturanExcelExportBuilderTests
             row.Kategori == "Paragraph" &&
             row.SubKategori == string.Empty &&
             row.Kriteria == "Alignment" &&
-            row.Value == "center" &&
+            row.ValueText == "center" &&
             !row.HardConstraint &&
             row.Note.Contains("left", StringComparison.OrdinalIgnoreCase));
 
@@ -62,7 +63,7 @@ public class AturanExcelExportBuilderTests
             row.Elemen == "caption_gambar" &&
             row.Kategori == "Umum" &&
             row.Kriteria == "Position" &&
-            row.Value == "after" &&
+            row.ValueText == "after" &&
             !row.HardConstraint);
     }
 
@@ -105,7 +106,7 @@ public class AturanExcelExportBuilderTests
         var rows = AturanExcelExportBuilder.BuildRows(details);
 
         var captionPositionRow = Assert.Single(rows, row => row.Elemen == "caption_gambar" && row.Kriteria == "Position");
-        Assert.Equal("after", captionPositionRow.Value);
+        Assert.Equal("after", captionPositionRow.ValueText);
         Assert.False(captionPositionRow.HardConstraint);
     }
 
@@ -142,7 +143,7 @@ public class AturanExcelExportBuilderTests
             row.Kategori == "Section" &&
             row.SubKategori == "Isi [1]" &&
             row.Kriteria == "Size" &&
-            row.Value == "A4" &&
+            row.ValueText == "A4" &&
             row.HardConstraint);
 
         Assert.Contains(rows, row =>
@@ -150,7 +151,42 @@ public class AturanExcelExportBuilderTests
             row.Kategori == "Section" &&
             row.SubKategori == "Isi [1]" &&
             row.Kriteria == "Orientation" &&
-            row.Value == "PORTRAIT" &&
+            row.ValueText == "PORTRAIT" &&
             row.HardConstraint);
+    }
+
+    [Fact]
+    public void BuildRows_ShouldPreserveInputDetailOrder()
+    {
+        var details = new List<AturanDetail>
+        {
+            new()
+            {
+                AturanDetailId = 20,
+                AturanDetailKategori = "Zeta",
+                AturanDetailKey = "zeta_elemen",
+                AturanDetailJsonValue = """
+                                        {
+                                          "font_size": { "value": 12, "is_editable": true, "is_hard_constraint": false }
+                                        }
+                                        """
+            },
+            new()
+            {
+                AturanDetailId = 10,
+                AturanDetailKategori = "Alpha",
+                AturanDetailKey = "alpha_elemen",
+                AturanDetailJsonValue = """
+                                        {
+                                          "font_size": { "value": 10, "is_editable": true, "is_hard_constraint": false }
+                                        }
+                                        """
+            }
+        };
+
+        var rows = AturanExcelExportBuilder.BuildRows(details);
+        var orderedElements = rows.Select(row => row.Elemen).Distinct().ToList();
+
+        Assert.Equal(["zeta_elemen", "alpha_elemen"], orderedElements);
     }
 }

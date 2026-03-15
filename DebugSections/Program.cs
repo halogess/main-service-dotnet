@@ -5,7 +5,7 @@ class Program
 {
     static void Main(string[] args)
     {
-        var docxPath = args.Length > 0 ? args[0] : @"..\bab2.docx";
+        var docxPath = args.Length > 0 ? args[0] : GetRepoDocxPath("bab2.docx");
         
         Console.WriteLine("=".PadRight(60, '='));
         Console.WriteLine("SECTION EXTRACTION TEST RESULTS");
@@ -132,4 +132,16 @@ class Program
         }
         return sectionBoundaries.Count - 1;
     }
+
+    static string GetRepoDocxPath(string fileName)
+        => Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "Tests",
+            "TestData",
+            "Docx",
+            fileName));
 }

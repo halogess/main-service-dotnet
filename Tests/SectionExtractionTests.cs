@@ -14,7 +14,7 @@ public class SectionExtractionTests
     public SectionExtractionTests()
     {
         // Path to test document - relative to test output directory
-        _testDocxPath = Path.Combine(AppContext.BaseDirectory, "TestData", "bab2.docx");
+        _testDocxPath = Path.Combine(AppContext.BaseDirectory, "TestData", "Docx", "bab2.docx");
     }
 
     [Fact]
@@ -24,7 +24,7 @@ public class SectionExtractionTests
         if (!File.Exists(_testDocxPath))
         {
             // Skip if test file not available
-            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/");
+            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/Docx/");
         }
 
         using var doc = WordprocessingDocument.Open(_testDocxPath, false);
@@ -62,7 +62,7 @@ public class SectionExtractionTests
         // Arrange
         if (!File.Exists(_testDocxPath))
         {
-            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/");
+            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/Docx/");
         }
 
         using var doc = WordprocessingDocument.Open(_testDocxPath, false);
@@ -108,7 +108,7 @@ public class SectionExtractionTests
         // Arrange
         if (!File.Exists(_testDocxPath))
         {
-            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/");
+            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/Docx/");
         }
 
         using var doc = WordprocessingDocument.Open(_testDocxPath, false);
@@ -179,7 +179,7 @@ public class SectionExtractionTests
         // Arrange
         if (!File.Exists(_testDocxPath))
         {
-            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/");
+            Assert.Fail($"Test file not found: {_testDocxPath}. Please copy bab2.docx to Tests/TestData/Docx/");
         }
 
         using var doc = WordprocessingDocument.Open(_testDocxPath, false);

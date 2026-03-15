@@ -12,7 +12,7 @@ class Program
 {
     static void Main(string[] args)
     {
-        var docxPath = args.Length > 0 ? args[0] : @"e:\main-service-dotnet\BAB II.docx";
+        var docxPath = args.Length > 0 ? args[0] : GetRepoDocxPath("BAB II.docx");
         
         if (!File.Exists(docxPath))
         {
@@ -205,4 +205,16 @@ class Program
             Console.WriteLine($"  Contains: Image data");
         }
     }
+
+    static string GetRepoDocxPath(string fileName)
+        => Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..",
+            "..",
+            "..",
+            "..",
+            "Tests",
+            "TestData",
+            "Docx",
+            fileName));
 }

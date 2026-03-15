@@ -25,6 +25,14 @@ DebugElementCount/output.txt
 DebugElementCount/consistency_check.txt
 DebugElementCount/identity_check.txt
 DebugSections/test_output.txt
+build-output.txt
+docker_logs.txt
+elemen.txt
+logs.txt
+num*.txt
+shapes_output.txt
+style_content.txt
+temp_*.zip
 
 # Storage (user data)
 storage/
@@ -33,3 +41,6 @@ storage/
 .env
 appsettings.Development.json
 appsettings.json
+
+# Local DOCX test fixtures
+Tests/TestData/Docx/*.docx

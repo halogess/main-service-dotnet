@@ -200,19 +200,29 @@ public class AturanExcelExportBuilderTests
             {
                 AturanDetailId = 30,
                 AturanDetailKategori = "Nomor Halaman",
-                AturanDetailKey = "nomor_halaman_isi",
+                AturanDetailKey = "nomor_halaman",
                 AturanDetailJsonValue = """
                                         {
-                                          "different_first_page": { "value": true, "is_editable": false, "is_hard_constraint": false },
-                                          "first_page": {
-                                            "position": {
-                                              "indentation": { "value": 0, "is_editable": false, "is_hard_constraint": false }
+                                          "numbering": {
+                                            "number_format": { "value": "decimal", "is_editable": false, "is_hard_constraint": false }
+                                          },
+                                          "paragraph": {
+                                            "indentation": {
+                                              "left_indent": { "value": 0, "is_editable": true, "is_hard_constraint": false }
                                             },
-                                            "number_format": {
-                                              "prefix": { "value": "", "is_editable": false, "is_hard_constraint": false }
-                                            },
-                                            "text_style": {
-                                              "spacing_after": { "value": 0, "is_editable": false, "is_hard_constraint": false }
+                                            "spacing": {
+                                              "after": { "value": 0, "is_editable": true, "is_hard_constraint": false }
+                                            }
+                                          },
+                                          "variation": {
+                                            "different_first_page": {
+                                              "enabled": { "value": true, "is_editable": true, "is_hard_constraint": false },
+                                              "first": {
+                                                "position": {
+                                                  "location": { "value": "header", "is_editable": true, "is_hard_constraint": false },
+                                                  "alignment": { "value": "right", "is_editable": true, "is_hard_constraint": false }
+                                                }
+                                              }
                                             }
                                           }
                                         }
@@ -223,29 +233,35 @@ public class AturanExcelExportBuilderTests
         var rows = AturanExcelExportBuilder.BuildRows(details);
 
         Assert.Contains(rows, row =>
-            row.Elemen == "nomor_halaman_isi" &&
-            row.Kategori == "First Page" &&
-            row.SubKategori == "Position" &&
-            row.Kriteria == "Indentation" &&
-            row.ValueText == "0" &&
-            row.NumericValue == 0 &&
-            row.Note == "Isi `none` atau angka 0 berarti tanpa indentasi");
+            row.Elemen == "nomor_halaman" &&
+            row.Kategori == "Numbering" &&
+            row.SubKategori == string.Empty &&
+            row.Kriteria == "Number Format" &&
+            row.ValueText == "decimal" &&
+            row.Note == "Nilai yang tersedia: decimal, lowerRoman, upperRoman, lowerLetter, upperLetter");
 
         Assert.Contains(rows, row =>
-            row.Elemen == "nomor_halaman_isi" &&
-            row.Kategori == "First Page" &&
-            row.SubKategori == "Number Format" &&
-            row.Kriteria == "Prefix" &&
-            row.ValueText == "(tanpa prefix)" &&
-            row.Note == "Kosong = tanpa prefix");
-
-        Assert.Contains(rows, row =>
-            row.Elemen == "nomor_halaman_isi" &&
-            row.Kategori == "First Page" &&
-            row.SubKategori == "Text Style" &&
-            row.Kriteria == "Spacing After" &&
+            row.Elemen == "nomor_halaman" &&
+            row.Kategori == "Paragraph" &&
+            row.SubKategori == "Indentation" &&
+            row.Kriteria == "Left Indent (cm)" &&
             row.ValueText == "0" &&
             row.NumericValue == 0);
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "nomor_halaman" &&
+            row.Kategori == "Paragraph" &&
+            row.SubKategori == "Spacing" &&
+            row.Kriteria == "After" &&
+            row.ValueText == "0" &&
+            row.NumericValue == 0);
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "nomor_halaman" &&
+            row.Kategori == "Variation" &&
+            row.SubKategori == "Different First Page / First / Position" &&
+            row.Kriteria == "Location" &&
+            row.ValueText == "header");
     }
 
     [Fact]
@@ -292,13 +308,14 @@ public class AturanExcelExportBuilderTests
 
         Assert.DoesNotContain(rows, row => row.Elemen.Equals("Page Numbering", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(rows, row => row.Value is "True" or "False" or "None");
+        Assert.DoesNotContain(rows, row => row.Elemen.StartsWith("Nomor Halaman ", StringComparison.OrdinalIgnoreCase));
 
         Assert.Contains(rows, row =>
-            row.Elemen == "Nomor Halaman Awal" &&
-            row.Kategori == "Default Page" &&
-            row.SubKategori == "Number Format" &&
-            row.Kriteria == "Prefix" &&
-            row.Value == "(tanpa prefix)");
+            row.Elemen == "Nomor Halaman" &&
+            row.Kategori == "Numbering" &&
+            row.SubKategori == string.Empty &&
+            row.Kriteria == "Number Format" &&
+            row.Value == "decimal");
 
         Assert.Contains(rows, row =>
             row.Elemen == "Gambar" &&
@@ -306,5 +323,185 @@ public class AturanExcelExportBuilderTests
             row.SubKategori == "Indentation" &&
             row.Kriteria == "Left Indent (cm)" &&
             row.Value == "0");
+
+    }
+
+    [Fact]
+    public void BuildRows_ShouldNotEmitFirstLineIndentForCanonicalListItemRule()
+    {
+        var details = new List<AturanDetail>
+        {
+            new()
+            {
+                AturanDetailId = 41,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "item_daftar",
+                AturanDetailJsonValue = """
+                                        {
+                                          "font": {
+                                            "font_name": { "value": "Times New Roman", "is_editable": true, "is_hard_constraint": false },
+                                            "font_size": { "value": 12, "is_editable": true, "is_hard_constraint": false }
+                                          },
+                                          "paragraph": {
+                                            "alignment": { "value": "justify", "is_editable": true, "is_hard_constraint": false },
+                                            "indentation": {
+                                              "left_indent": { "value": 0, "is_editable": true, "is_hard_constraint": false },
+                                              "right_indent": { "value": 0, "is_editable": true, "is_hard_constraint": false },
+                                              "hanging": { "value": 0.75, "is_editable": true, "is_hard_constraint": false }
+                                            }
+                                          }
+                                        }
+                                        """
+            }
+        };
+
+        var rows = AturanExcelExportBuilder.BuildRows(details);
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "item_daftar" &&
+            row.Kategori == "Paragraph" &&
+            row.SubKategori == "Indentation" &&
+            row.Kriteria == "Hanging (cm)" &&
+            row.ValueText == "0.75");
+
+        Assert.DoesNotContain(rows, row =>
+            row.Elemen == "item_daftar" &&
+            row.Kategori == "Paragraph" &&
+            row.SubKategori == "Indentation" &&
+            row.Kriteria == "First Line Indent (cm)");
+    }
+
+    [Fact]
+    public void BuildRows_ShouldDescribeAllowedValuesForEnumeratedFields()
+    {
+        var details = new List<AturanDetail>
+        {
+            new()
+            {
+                AturanDetailId = 50,
+                AturanDetailKategori = "Referensi",
+                AturanDetailKey = "footnote",
+                AturanDetailJsonValue = """
+                                        {
+                                          "numbering": {
+                                            "number_format": { "value": "roman_lower", "is_editable": true, "is_hard_constraint": false },
+                                            "type": { "value": "restart_each_page", "is_editable": true, "is_hard_constraint": false }
+                                          }
+                                        }
+                                        """
+            },
+            new()
+            {
+                AturanDetailId = 51,
+                AturanDetailKategori = "Nomor Halaman",
+                AturanDetailKey = "nomor_halaman",
+                AturanDetailJsonValue = """
+                                        {
+                                          "numbering": {
+                                            "number_format": { "value": "upperRoman", "is_editable": false, "is_hard_constraint": false }
+                                          }
+                                        }
+                                        """
+            },
+            new()
+            {
+                AturanDetailId = 52,
+                AturanDetailKategori = "Pengaturan Halaman",
+                AturanDetailKey = "page_settings",
+                AturanDetailJsonValue = """
+                                        {
+                                          "gutter": {
+                                            "position": { "value": "left", "is_editable": true, "is_hard_constraint": false }
+                                          }
+                                        }
+                                        """
+            },
+            new()
+            {
+                AturanDetailId = 53,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "kode",
+                AturanDetailJsonValue = """
+                                        {
+                                          "numbering": {
+                                            "number_format": { "value": "%01", "is_editable": true, "is_hard_constraint": false }
+                                          }
+                                        }
+                                        """
+            },
+            new()
+            {
+                AturanDetailId = 54,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "caption_gambar",
+                AturanDetailJsonValue = """
+                                        {
+                                          "position": { "value": "after", "is_editable": true, "is_hard_constraint": false },
+                                          "numbering": {
+                                            "case": { "value": "Sentence case", "is_editable": true, "is_hard_constraint": false }
+                                          }
+                                        }
+                                        """
+            },
+            new()
+            {
+                AturanDetailId = 55,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "rumus",
+                AturanDetailJsonValue = """
+                                        {
+                                          "tabs": {
+                                            "left_tab": {
+                                              "leader_style": { "value": "none", "is_editable": true, "is_hard_constraint": false }
+                                            }
+                                          }
+                                        }
+                                        """
+            }
+        };
+
+        var rows = AturanExcelExportBuilder.BuildRows(details);
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "footnote" &&
+            row.Kriteria == "Number Format" &&
+            row.Note == "Nilai yang tersedia: arabic, roman_lower, roman_upper, letter_lower, letter_upper, symbol");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "footnote" &&
+            row.Kriteria == "Type" &&
+            row.Note == "Nilai yang tersedia: continuous, restart_each_page, restart_each_section");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "nomor_halaman" &&
+            row.Kategori == "Numbering" &&
+            row.Kriteria == "Number Format" &&
+            row.Note == "Nilai yang tersedia: decimal, lowerRoman, upperRoman, lowerLetter, upperLetter");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "page_settings" &&
+            row.Kategori == "Gutter" &&
+            row.Kriteria == "Position" &&
+            row.Note == "Nilai yang tersedia: left, top");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "kode" &&
+            row.Kriteria == "Number Format" &&
+            row.Note == "Nilai yang tersedia: none, %1, %01");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "caption_gambar" &&
+            row.Kriteria == "Case" &&
+            row.Note == "Nilai yang tersedia: UPPERCASE, Title Case, Sentence case, lowercase");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "caption_gambar" &&
+            row.Kriteria == "Position" &&
+            row.Note == "Nilai yang tersedia: before, after");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "rumus" &&
+            row.Kriteria == "Leader Style" &&
+            row.Note == "Nilai yang tersedia: none, dots, dash, underline");
     }
 }

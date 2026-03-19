@@ -12,57 +12,15 @@ internal static class AturanExportCatalog
     [
         new(
             "Pengaturan Halaman",
-            "paper",
+            "page_settings",
             """
-            {"section":{"awal":{"value":[{"size":"A4","orientation":"PORTRAIT"}],"is_editable":false},"isi":{"value":[{"size":"A4","orientation":"PORTRAIT"}],"is_editable":true},"akhir":{"value":[{"size":"A4","orientation":"PORTRAIT"}],"is_editable":true},"lampiran":{"value":[{"size":"A4","orientation":"PORTRAIT"},{"size":"A4","orientation":"LANDSCAPE"},{"size":"A3","orientation":"LANDSCAPE"}],"is_editable":true}}}
-            """),
-        new(
-            "Pengaturan Halaman",
-            "margin",
-            """
-            {"paper":{"a4_portrait":{"value":{"top":4,"left":4,"bottom":3,"right":3},"is_editable":true},"a4_landscape":{"value":{"top":4,"left":3,"bottom":3,"right":4},"is_editable":true},"a3_landscape":{"value":{"top":4,"left":4,"bottom":3,"right":3},"is_editable":true}}}
-            """),
-        new(
-            "Pengaturan Halaman",
-            "header_footer",
-            """
-            {"header_from_top":{"value":2.5,"is_editable":true},"footer_from_bottom":{"value":1.5,"is_editable":true},"different_odd_even":{"value":false,"is_editable":true}}
-            """),
-        new(
-            "Pengaturan Halaman",
-            "gutter",
-            """
-            {"gutter":{"value":0,"is_editable":true},"position":{"value":"left","is_editable":true}}
-            """),
-        new(
-            "Pengaturan Halaman",
-            "column",
-            """
-            {"count":{"value":1,"is_editable":true}}
+            {"paper":{"size":{"value":"A4","is_editable":true},"orientation":{"value":"PORTRAIT","is_editable":true}},"margin":{"top":{"value":4,"is_editable":true},"bottom":{"value":3,"is_editable":true},"left":{"value":4,"is_editable":true},"right":{"value":3,"is_editable":true}},"header_footer":{"header_from_top":{"value":2.5,"is_editable":true},"footer_from_bottom":{"value":1.5,"is_editable":true}},"gutter":{"size":{"value":0,"is_editable":true},"position":{"value":"left","is_editable":true}},"column":{"value":1,"is_editable":true}}
             """),
         new(
             "Nomor Halaman",
-            "nomor_halaman_awal",
+            "nomor_halaman",
             """
-            {"different_first_page":{"value":true,"is_editable":false},"first_page":{"is_empty":{"value":true,"is_editable":false},"allow_other_content":{"value":false,"is_editable":false},"position":{"location":{"value":"header","is_editable":false},"alignment":{"value":"right","is_editable":false},"indentation":{"value":0,"is_editable":false}},"number_format":{"type":{"value":"arabic","is_editable":false},"prefix":{"value":"","is_editable":false}},"text_style":{"font_name":{"value":"Times New Roman","is_editable":false},"font_size":{"value":12,"is_editable":false},"line_spacing":{"value":1,"is_editable":false},"spacing_before":{"value":0,"is_editable":false},"spacing_after":{"value":0,"is_editable":false}}},"default_page":{"position":{"location":{"value":"footer","is_editable":false},"alignment":{"value":"center","is_editable":false},"indentation":{"value":0,"is_editable":false}},"number_format":{"type":{"value":"arabic","is_editable":false},"prefix":{"value":"","is_editable":false}},"text_style":{"font_name":{"value":"Times New Roman","is_editable":false},"font_size":{"value":12,"is_editable":false},"line_spacing":{"value":1,"is_editable":false},"spacing_before":{"value":0,"is_editable":false},"spacing_after":{"value":0,"is_editable":false}},"allow_other_content":{"value":false,"is_editable":false}}}
-            """),
-        new(
-            "Nomor Halaman",
-            "nomor_halaman_isi",
-            """
-            {"continue":{"value":false,"is_editable":false},"different_first_page":{"value":true,"is_editable":false},"first_page":{"is_empty":{"value":false,"is_editable":false},"position":{"location":{"value":"header","is_editable":false},"alignment":{"value":"right","is_editable":false},"indentation":{"value":0,"is_editable":false}},"number_format":{"type":{"value":"arabic","is_editable":false},"prefix":{"value":"","is_editable":false}},"text_style":{"font_name":{"value":"Times New Roman","is_editable":false},"font_size":{"value":12,"is_editable":false},"line_spacing":{"value":1,"is_editable":false},"spacing_before":{"value":0,"is_editable":false},"spacing_after":{"value":0,"is_editable":false}},"allow_other_content":{"value":false,"is_editable":false}},"default_page":{"position":{"location":{"value":"footer","is_editable":false},"alignment":{"value":"center","is_editable":false},"indentation":{"value":0,"is_editable":false}},"number_format":{"type":{"value":"arabic","is_editable":false},"prefix":{"value":"","is_editable":false}},"text_style":{"font_name":{"value":"Times New Roman","is_editable":false},"font_size":{"value":12,"is_editable":false},"line_spacing":{"value":1,"is_editable":false},"spacing_before":{"value":0,"is_editable":false},"spacing_after":{"value":0,"is_editable":false}},"allow_other_content":{"value":false,"is_editable":false}}}
-            """),
-        new(
-            "Nomor Halaman",
-            "nomor_halaman_akhir",
-            """
-            {"continue":true}
-            """),
-        new(
-            "Nomor Halaman",
-            "nomor_halaman_lampiran",
-            """
-            {"continue":{"value":false,"is_editable":false},"different_first_page":{"value":true,"is_editable":false},"first_page":{"is_empty":{"value":false,"is_editable":false},"position":{"location":{"value":"header","is_editable":false},"alignment":{"value":"right","is_editable":false},"indentation":{"value":0,"is_editable":false}},"number_format":{"type":{"value":"arabic","is_editable":false},"prefix":{"value":"","is_editable":false}},"text_style":{"font_name":{"value":"Times New Roman","is_editable":false},"font_size":{"value":12,"is_editable":false},"line_spacing":{"value":1,"is_editable":false},"spacing_before":{"value":0,"is_editable":false},"spacing_after":{"value":0,"is_editable":false}},"allow_other_content":{"value":false,"is_editable":false}},"default_page":{"position":{"location":{"value":"footer","is_editable":false},"alignment":{"value":"center","is_editable":false},"indentation":{"value":0,"is_editable":false}},"number_format":{"type":{"value":"arabic","is_editable":false},"prefix":{"value":"","is_editable":false}},"text_style":{"font_name":{"value":"Times New Roman","is_editable":false},"font_size":{"value":12,"is_editable":false},"line_spacing":{"value":1,"is_editable":false},"spacing_before":{"value":0,"is_editable":false},"spacing_after":{"value":0,"is_editable":false}},"allow_other_content":{"value":false,"is_editable":false}}}
+            {"numbering":{"number_format":{"value":"decimal","is_editable":false}},"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true},"font_style":{"bold":{"value":false,"is_editable":true},"italic":{"value":false,"is_editable":true},"underline":{"value":false,"is_editable":true}}},"paragraph":{"indentation":{"left_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true},"first_line_indent":{"value":0,"is_editable":true}},"spacing":{"line_spacing":{"value":1,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"struktur_konten":{"cegah_baris_tambahan":{"value":true,"is_editable":true}},"variation":{"default":{"position":{"location":{"value":"footer","is_editable":true},"alignment":{"value":"center","is_editable":true}}},"different_first_page":{"enabled":{"value":true,"is_editable":true},"first":{"position":{"location":{"value":"header","is_editable":true},"alignment":{"value":"right","is_editable":true}}}},"different_odd_even":{"enabled":{"value":false,"is_editable":true},"even":{"position":{"location":{"value":"footer","is_editable":true},"alignment":{"value":"left","is_editable":true}}}}}}
             """),
         new(
             "Isi Buku",
@@ -86,7 +44,7 @@ internal static class AturanExportCatalog
             "Isi Buku",
             "item_daftar",
             """
-            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"indentation":{"left_indent":{"value":0,"is_editable":true},"first_line_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true},"hanging":{"value":0.75,"is_editable":true}},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}}}
+            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"indentation":{"left_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true},"hanging":{"value":0.75,"is_editable":true}},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}}}
             """),
         new(
             "Isi Buku",

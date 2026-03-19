@@ -71,7 +71,7 @@ public sealed class ValidationReportService : IValidationReportService
             ? dokumen.DokumenStatus
             : (dokumen.DokumenJumlahKesalahan!.Value == 0 ? "lolos" : "tidak_lolos");
 
-        var (reportFullPath, reportRelativePath, reportFileName) = ResolveReportPath(dokumen, dokumenId);
+        var (reportFullPath, reportRelativePath) = ResolveReportPath(dokumen, dokumenId);
 
         if (!refresh && File.Exists(reportFullPath))
         {
@@ -84,7 +84,8 @@ public sealed class ValidationReportService : IValidationReportService
             }
 
             var existing = await File.ReadAllBytesAsync(reportFullPath, cancellationToken);
-            return new ValidationReportResult(existing, reportFileName);
+            var downloadFileName = BuildReportDownloadFileName(dokumen.MhsNrp, "dokumen", File.GetLastWriteTime(reportFullPath));
+            return new ValidationReportResult(existing, downloadFileName);
         }
 
         var kesalahanList = await _db.Kesalahans
@@ -96,13 +97,13 @@ public sealed class ValidationReportService : IValidationReportService
         var rows = BuildRows(kesalahanList);
         var summary = BuildSummary(rows);
 
+        var generatedAt = DateTime.Now;
         var data = new ValidationReportData
         {
-            GeneratedAt = DateTime.Now,
+            GeneratedAt = generatedAt,
             DokumenId = dokumen.DokumenId,
             Nrp = dokumen.MhsNrp,
             Filename = dokumen.DokumenFilename,
-            Tipe = dokumen.DokumenTipe,
             Status = reportStatus,
             Skor = dokumen.DokumenSkor,
             TotalKesalahan = dokumen.DokumenJumlahKesalahan,
@@ -120,7 +121,7 @@ public sealed class ValidationReportService : IValidationReportService
         dokumen.DokumenUpdatedAt = DateTime.Now;
         await _db.SaveChangesAsync(cancellationToken);
 
-        return new ValidationReportResult(pdfBytes, reportFileName);
+        return new ValidationReportResult(pdfBytes, BuildReportDownloadFileName(dokumen.MhsNrp, "dokumen", generatedAt));
     }
 
     public async Task<ValidationReportResult> GenerateBukuReportAsync(
@@ -151,7 +152,7 @@ public sealed class ValidationReportService : IValidationReportService
             : (buku.BukuJumlahKesalahan!.Value == 0 ? "lolos" : "tidak_lolos");
         var includeCertificate = string.Equals(reportStatus, "lolos", StringComparison.OrdinalIgnoreCase);
 
-        var (reportFullPath, reportRelativePath, reportFileName) = ResolveBukuReportPath(buku, bukuId);
+        var (reportFullPath, reportRelativePath) = ResolveBukuReportPath(buku, bukuId);
 
         if (!refresh && File.Exists(reportFullPath))
         {
@@ -164,7 +165,8 @@ public sealed class ValidationReportService : IValidationReportService
             }
 
             var existing = await File.ReadAllBytesAsync(reportFullPath, cancellationToken);
-            return new ValidationReportResult(existing, reportFileName);
+            var downloadFileName = BuildReportDownloadFileName(buku.MhsNrp, "buku", File.GetLastWriteTime(reportFullPath));
+            return new ValidationReportResult(existing, downloadFileName);
         }
 
         var babs = await _db.Babs
@@ -231,10 +233,10 @@ public sealed class ValidationReportService : IValidationReportService
         buku.BukuUpdatedAt = DateTime.Now;
         await _db.SaveChangesAsync(cancellationToken);
 
-        return new ValidationReportResult(pdfBytes, reportFileName);
+        return new ValidationReportResult(pdfBytes, BuildReportDownloadFileName(buku.MhsNrp, "buku", generatedAt));
     }
 
-    private static (string FullPath, string RelativePath, string FileName) ResolveReportPath(Dokumen dokumen, int dokumenId)
+    private static (string FullPath, string RelativePath) ResolveReportPath(Dokumen dokumen, int dokumenId)
     {
         var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
         var fullStoragePath = Path.GetFullPath(storagePath);
@@ -247,10 +249,10 @@ public sealed class ValidationReportService : IValidationReportService
         var fileName = $"report_validasi_{dokumenId}.pdf";
         var fullPath = Path.Combine(reportDir, fileName);
         var relativePath = Path.Combine(relativeDir, fileName);
-        return (fullPath, relativePath, fileName);
+        return (fullPath, relativePath);
     }
 
-    private static (string FullPath, string RelativePath, string FileName) ResolveBukuReportPath(Buku buku, int bukuId)
+    private static (string FullPath, string RelativePath) ResolveBukuReportPath(Buku buku, int bukuId)
     {
         var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
         var fullStoragePath = Path.GetFullPath(storagePath);
@@ -263,7 +265,19 @@ public sealed class ValidationReportService : IValidationReportService
         var fileName = $"report_validasi_buku_{bukuId}.pdf";
         var fullPath = Path.Combine(reportDir, fileName);
         var relativePath = Path.Combine(relativeDir, fileName);
-        return (fullPath, relativePath, fileName);
+        return (fullPath, relativePath);
+    }
+
+    private static string BuildReportDownloadFileName(string? nrp, string reportKind, DateTime timestamp)
+        => $"{SanitizeFileNameSegment(nrp)}_report_{SanitizeFileNameSegment(reportKind)}_{timestamp.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)}.pdf";
+
+    private static string SanitizeFileNameSegment(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "unknown";
+
+        return string.Concat(
+            value.Trim().Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
     }
 
     private static string GenerateVerificationCode(int bukuId, DateTime generatedAt)
@@ -722,7 +736,6 @@ public sealed record ValidationReportData
     public int DokumenId { get; init; }
     public string? Nrp { get; init; }
     public string? Filename { get; init; }
-    public string? Tipe { get; init; }
     public string? Status { get; init; }
     public int? Skor { get; init; }
     public int? TotalKesalahan { get; init; }
@@ -821,9 +834,9 @@ internal sealed class ValidationReportDocument : IDocument
                     });
 
                     AddInfoRow(table, "Dokumen ID", _data.DokumenId.ToString(CultureInfo.InvariantCulture), "NRP", _data.Nrp);
-                    AddInfoRow(table, "Nama file", _data.Filename, "Tipe", _data.Tipe);
-                    AddInfoRow(table, "Status", _data.Status, "Skor", _data.Skor?.ToString(CultureInfo.InvariantCulture));
-                    AddInfoRow(table, "Jumlah kesalahan", _data.TotalKesalahan?.ToString(CultureInfo.InvariantCulture), "Halaman terdampak", _data.Summary.PagesText);
+                    AddInfoRow(table, "Nama file", _data.Filename, "Status", _data.Status);
+                    AddInfoRow(table, "Skor", _data.Skor?.ToString(CultureInfo.InvariantCulture), "Jumlah kesalahan", _data.TotalKesalahan?.ToString(CultureInfo.InvariantCulture));
+                    AddInfoRow(table, "Halaman terdampak", _data.Summary.PagesText, "Dicetak", FormatPrintedDateTime(_data.GeneratedAt));
                 });
 
                 column.Item().PaddingVertical(8).LineHorizontal(1);

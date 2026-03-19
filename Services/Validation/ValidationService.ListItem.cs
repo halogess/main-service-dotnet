@@ -594,7 +594,9 @@ public partial class ValidationService
             }
         }
 
-        var expectedFirstLineIndent = rule?.Paragraph?.Indentation?.FirstLineIndent?.Value ?? 0m;
+        // For list items, special indentation is represented by hanging indent only.
+        // A non-zero first line indent would conflict with that model and must stay 0.
+        var expectedFirstLineIndent = 0m;
         result.IncrementTotalChecks();
         var firstLineTwips = format.DfpIndFirstLineTwips ?? 0;
         var firstLineCm = firstLineTwips / 1440.0m * 2.54m;
@@ -608,7 +610,7 @@ public partial class ValidationService
             {
                 Category = "Isi Buku",
                 Field = "item_daftar",
-                Message = "First line indent item daftar tidak sesuai",
+                Message = "First line indent item daftar harus 0",
                 Expected = expectedFirstLineIndent.ToString(CultureInfo.InvariantCulture) + " cm",
                 Actual = firstLineCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                 Evidence = evidence,

@@ -11,6 +11,7 @@ public partial class ValidationService
     {
         public bool? Continue { get; init; }
         public bool? DifferentFirstPage { get; init; }
+        public bool? DifferentOddEven { get; init; }
         public bool? FirstPageIsEmpty { get; init; }
         public string? NumberFormat { get; init; }
     }
@@ -47,13 +48,8 @@ public partial class ValidationService
             .ToListAsync(cancellationToken);
 
         // Parse rules
-        PaperSectionRule? paperRule = null;
-        MarginRule? marginRule = null;
-        HeaderFooterRule? headerFooterRule = null;
-        GutterRule? gutterRule = null;
-        ColumnRule? columnRule = null;
-        PageNumberingRule? pageNumberingRule = null;
-        var nomorHalamanRules = new Dictionary<string, NomorHalamanSectionRule>(StringComparer.OrdinalIgnoreCase);
+        PageSettingsRule? pageSettingsRule = null;
+        NomorHalamanRule? nomorHalamanRule = null;
 
         foreach (var detail in aturanDetails)
         {
@@ -64,46 +60,19 @@ public partial class ValidationService
 
                 if (kategori.Equals("Nomor Halaman", StringComparison.OrdinalIgnoreCase))
                 {
-                    var parsedRule = ParseNomorHalamanSectionRule(detail.AturanDetailJsonValue);
-                    switch (key)
+                    if (key == "nomor_halaman")
                     {
-                        case "nomor_halaman_awal":
-                            nomorHalamanRules["awal"] = parsedRule;
-                            break;
-                        case "nomor_halaman_isi":
-                            nomorHalamanRules["isi"] = parsedRule;
-                            break;
-                        case "nomor_halaman_akhir":
-                            nomorHalamanRules["akhir"] = parsedRule;
-                            break;
-                        case "nomor_halaman_lampiran":
-                            nomorHalamanRules["lampiran"] = parsedRule;
-                            break;
+                        nomorHalamanRule = JsonSerializer.Deserialize<NomorHalamanRule>(
+                            detail.AturanDetailJsonValue ?? "{}",
+                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     }
 
                     continue;
                 }
 
-                switch (key)
+                if (key == "page_settings")
                 {
-                    case "paper":
-                        paperRule = JsonSerializer.Deserialize<PaperSectionRule>(detail.AturanDetailJsonValue ?? "{}");
-                        break;
-                    case "margin":
-                        marginRule = JsonSerializer.Deserialize<MarginRule>(detail.AturanDetailJsonValue ?? "{}");
-                        break;
-                    case "header_footer":
-                        headerFooterRule = JsonSerializer.Deserialize<HeaderFooterRule>(detail.AturanDetailJsonValue ?? "{}");
-                        break;
-                    case "gutter":
-                        gutterRule = JsonSerializer.Deserialize<GutterRule>(detail.AturanDetailJsonValue ?? "{}");
-                        break;
-                    case "column":
-                        columnRule = JsonSerializer.Deserialize<ColumnRule>(detail.AturanDetailJsonValue ?? "{}");
-                        break;
-                    case "page_numbering":
-                        pageNumberingRule = JsonSerializer.Deserialize<PageNumberingRule>(detail.AturanDetailJsonValue ?? "{}");
-                        break;
+                    pageSettingsRule = JsonSerializer.Deserialize<PageSettingsRule>(detail.AturanDetailJsonValue ?? "{}");
                 }
             }
             catch (JsonException ex)
@@ -112,18 +81,12 @@ public partial class ValidationService
             }
         }
 
-        // Default rules when not provided in DB
-        gutterRule ??= new GutterRule
-        {
-            Gutter = new DecimalRuleValue { Value = 0m },
-            Position = new RuleValue<string> { Value = "left" }
-        };
+        var effectivePageSettings = BuildEffectivePageSettings(pageSettingsRule);
+        var effectiveColumnRule = effectivePageSettings.Column?.Value is > 0
+            ? effectivePageSettings.Column
+            : new RuleValue<int> { Value = 1 };
+        var effectiveNomorHalamanRule = BuildEffectiveNomorHalamanRule(nomorHalamanRule);
 
-        var effectiveColumnRule = columnRule?.Count?.Value is > 0
-            ? columnRule
-            : new ColumnRule { Count = new RuleValue<int> { Value = 1 } };
-
-        var dokumenTipe = target.DokumenTipe;
         var (sectionRefType, sectionRefId) = ResolveSectionRefForValidation(dokumenId);
 
         // Get all sections for current validation target
@@ -144,15 +107,18 @@ public partial class ValidationService
         }
 
         var sectionPageMap = await LoadSectionPageMapAsync(sections, cancellationToken);
+        var pageNumberParagraphsBySection = await LoadPageNumberParagraphsBySectionAsync(
+            sections.Select(section => section.DsecId),
+            cancellationToken);
 
-        _logger.LogInformation("Validating {Count} sections for ref {RefType}:{RefId}, logical ID: {DokumenId}, tipe: {DokumenTipe}",
-            sections.Count, sectionRefType, sectionRefId, dokumenId, dokumenTipe);
+        _logger.LogInformation("Validating {Count} sections for ref {RefType}:{RefId}, logical ID: {DokumenId}, treated as bagian isi",
+            sections.Count, sectionRefType, sectionRefId, dokumenId);
 
         // Validate each section
         for (int i = 0; i < sections.Count; i++)
         {
             var section = sections[i];
-            var sectionType = DetermineSectionType(section, i, sections.Count, dokumenTipe);
+            var sectionType = DetermineSectionType();
 
             _logger.LogInformation("Section {Index}: Type={SectionType}, PageFormat={PageFormat}, " +
                 "Size={Width}x{Height} twips, Orientation={Orientation}, " +
@@ -164,129 +130,75 @@ public partial class ValidationService
                 section.DsecMarginLeftTwips, section.DsecMarginRightTwips,
                 section.DsecHeaderMarginTwips, section.DsecFooterMarginTwips);
 
-            // Validate paper size
-            if (paperRule?.Section != null)
-            {
-                var allowedPapers = GetAllowedPapersForSection(paperRule.Section, sectionType);
-                ValidatePaperSize(result, section, allowedPapers, i + 1, sectionType, sectionPageMap);
-            }
-
-            // Validate margins
-            if (marginRule?.Paper != null)
-            {
-                ValidateMargins(result, section, marginRule.Paper, i + 1, sectionType, sectionPageMap);
-            }
-
-            // Validate header/footer distances
-            if (headerFooterRule != null)
-            {
-                ValidateHeaderFooter(result, section, headerFooterRule, i + 1, sectionType, sectionPageMap);
-            }
-
-            // Validate odd/even headers (must be off)
-            ValidateDifferentOddEven(result, section, headerFooterRule, i + 1, sectionType, sectionPageMap);
-
-            // Validate gutter
-            if (gutterRule != null)
-            {
-                ValidateGutter(result, section, gutterRule, i + 1, sectionType, sectionPageMap);
-            }
-
-            // Validate column count (must be 1)
+            ValidatePaperSize(result, section, effectivePageSettings.Paper, i + 1, sectionType, sectionPageMap);
+            ValidateMargins(result, section, effectivePageSettings.Margin, i + 1, sectionType, sectionPageMap);
+            ValidateHeaderFooter(result, section, effectivePageSettings.HeaderFooter!, i + 1, sectionType, sectionPageMap);
+            ValidateGutter(result, section, effectivePageSettings.Gutter!, i + 1, sectionType, sectionPageMap);
             ValidateColumnCount(result, section, effectiveColumnRule, i + 1, sectionType, sectionPageMap);
 
-            // Validate page numbering
-            if (nomorHalamanRules.TryGetValue(sectionType, out var nomorHalamanRule))
-            {
-                ValidateNomorHalamanRule(result, section, nomorHalamanRule, i + 1, sectionType, sectionPageMap);
-            }
-            else if (pageNumberingRule?.Section != null)
-            {
-                var expectedNumbering = GetExpectedPageNumbering(pageNumberingRule.Section, sectionType);
-                ValidatePageNumbering(result, section, expectedNumbering, i + 1, sectionType, sectionPageMap);
-            }
+            await ValidateNomorHalamanRuleAsync(
+                result,
+                section,
+                effectiveNomorHalamanRule,
+                pageNumberParagraphsBySection.TryGetValue(section.DsecId, out var sectionParagraphs)
+                    ? sectionParagraphs
+                    : Array.Empty<PageNumberParagraphInfo>(),
+                i + 1,
+                sectionPageMap,
+                cancellationToken);
         }
 
         return result;
     }
 
-    private string DetermineSectionType(DokumenSection section, int sectionIndex, int totalSections, string? dokumenTipe)
+    private static string DetermineSectionType()
     {
-        // Strong signal: dokumen_tipe is already semantic (awal/isi/akhir/lampiran).
-        var normalizedDokumenTipe = (dokumenTipe ?? string.Empty).Trim().ToLowerInvariant();
-        if (normalizedDokumenTipe is "awal" or "isi" or "akhir" or "lampiran")
-            return normalizedDokumenTipe;
-
-        // Determine section type based on page numbering format and position
-        // This is more accurate than just using position
-
-        var pageNumFormat = section.DsecPageNumFormat?.ToLower();
-
-        // Roman numerals typically indicate front matter (awal)
-        if (pageNumFormat == "lowerroman" || pageNumFormat == "upperroman")
-        {
-            return "awal";
-        }
-
-        // Check if this section restarts page numbering from 1 with decimal
-        // This typically indicates the start of main content (isi)
-        if (pageNumFormat == "decimal" && section.DsecPageNumStart == 1 && sectionIndex > 0)
-        {
-            // This is likely the start of "isi" section
-            return "isi";
-        }
-
-        // If only one section, check dokumen_tipe to determine
-        if (totalSections == 1)
-        {
-            // Single section documents are typically "isi"
-            return "isi";
-        }
-
-        // First section without roman numerals could still be "awal" or "isi"
-        if (sectionIndex == 0)
-        {
-            // If first section has roman numerals or no page numbers, it's "awal"
-            if (string.IsNullOrEmpty(pageNumFormat) || pageNumFormat == "lowerroman" || pageNumFormat == "upperroman")
-                return "awal";
-            return "isi";
-        }
-
-        // Last section could be "akhir" or "lampiran"
-        // Without more content analysis, we default to "isi"
-        // Lampiran detection would require content analysis (looking for "LAMPIRAN" text)
-
-        // Middle sections are "isi" by default
         return "isi";
     }
 
-    private List<PaperSpec> GetAllowedPapersForSection(SectionRules rules, string sectionType)
+    private static PageSettingsRule BuildEffectivePageSettings(PageSettingsRule? rule)
     {
-        return sectionType.ToLower() switch
-        {
-            "awal" => rules.Awal?.Value ?? new List<PaperSpec>(),
-            "isi" => rules.Isi?.Value ?? new List<PaperSpec>(),
-            "akhir" => rules.Akhir?.Value ?? new List<PaperSpec>(),
-            "lampiran" => rules.Lampiran?.Value ?? new List<PaperSpec>(),
-            _ => rules.Isi?.Value ?? new List<PaperSpec>()
-        };
+        var effectiveRule = rule ?? new PageSettingsRule();
+
+        effectiveRule.Paper ??= new PagePaperRule();
+        effectiveRule.Paper.Size ??= new RuleValue<string> { Value = "A4" };
+        effectiveRule.Paper.Orientation ??= new RuleValue<string> { Value = "PORTRAIT" };
+
+        effectiveRule.Margin ??= new MarginRule();
+        effectiveRule.Margin.Top ??= new DecimalRuleValue { Value = 4m };
+        effectiveRule.Margin.Bottom ??= new DecimalRuleValue { Value = 3m };
+        effectiveRule.Margin.Left ??= new DecimalRuleValue { Value = 4m };
+        effectiveRule.Margin.Right ??= new DecimalRuleValue { Value = 3m };
+
+        effectiveRule.HeaderFooter ??= new HeaderFooterRule();
+        effectiveRule.HeaderFooter.HeaderFromTop ??= new DecimalRuleValue { Value = 2.5m };
+        effectiveRule.HeaderFooter.FooterFromBottom ??= new DecimalRuleValue { Value = 1.5m };
+
+        effectiveRule.Gutter ??= new GutterRule();
+        effectiveRule.Gutter.Size ??= new DecimalRuleValue { Value = 0m };
+        effectiveRule.Gutter.Position ??= new RuleValue<string> { Value = "left" };
+
+        effectiveRule.Column ??= new RuleValue<int> { Value = 1 };
+        return effectiveRule;
     }
 
     private void ValidatePaperSize(
         ValidationResult result,
         DokumenSection section,
-        List<PaperSpec> allowedPapers,
+        PagePaperRule? expectedPaper,
         int sectionNumber,
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
-        result.IncrementTotalChecks();
-
-        if (allowedPapers.Count == 0)
-        {
-            result.IncrementPassedChecks(); // No restriction for this section type
+        if (expectedPaper?.Size?.Value == null && expectedPaper?.Orientation?.Value == null)
             return;
-        }
+
+        var expected = new PaperSpec
+        {
+            Size = expectedPaper?.Size?.Value,
+            Orientation = expectedPaper?.Orientation?.Value
+        };
+        result.IncrementTotalChecks();
 
         var actualSize = DetectPaperSize(section.DsecPageWidthTwips, section.DsecPageHeightTwips);
         var actualOrientation = section.DsecOrientation?.ToUpper() ?? "PORTRAIT";
@@ -295,9 +207,9 @@ public partial class ValidationService
             ? $"{actualSize} {actualOrientation}"
             : $"{actualSize} {actualOrientation} ({actualDimensions})";
 
-        var isValid = allowedPapers.Any(p =>
-            p.Size?.ToUpper() == actualSize &&
-            p.Orientation?.ToUpper() == actualOrientation);
+        var expectedSize = expected.Size?.Trim().ToUpperInvariant();
+        var expectedOrientation = (expected.Orientation ?? "PORTRAIT").Trim().ToUpperInvariant();
+        var isValid = expectedSize == actualSize && expectedOrientation == actualOrientation;
 
         if (isValid)
         {
@@ -305,13 +217,12 @@ public partial class ValidationService
         }
         else
         {
-            var allowedStr = string.Join(", ", allowedPapers.Select(FormatPaperSpec).Where(s => !string.IsNullOrWhiteSpace(s)));
             result.Errors.Add(new ValidationError
             {
                 Category = "Pengaturan Halaman",
                 Field = "paper",
                 Message = $"Ukuran kertas section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-                Expected = allowedStr,
+                Expected = FormatPaperSpec(expected),
                 Actual = actualDescriptor,
                 SectionIndex = sectionNumber,
                 Locations = BuildPageSettingsLocations("paper", section, sectionPageMap)
@@ -359,30 +270,19 @@ public partial class ValidationService
     private void ValidateMargins(
         ValidationResult result,
         DokumenSection section,
-        PaperMargins margins,
+        MarginRule? margins,
         int sectionNumber,
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
-        var paperSize = DetectPaperSize(section.DsecPageWidthTwips, section.DsecPageHeightTwips);
-        var orientation = section.DsecOrientation?.ToUpper() ?? "PORTRAIT";
-
-        MarginSpec? expectedMargins = (paperSize, orientation) switch
-        {
-            ("A4", "PORTRAIT") => margins.A4Portrait?.Value,
-            ("A4", "LANDSCAPE") => margins.A4Landscape?.Value,
-            ("A3", "LANDSCAPE") => margins.A3Landscape?.Value,
-            _ => margins.A4Portrait?.Value // Default
-        };
-
-        if (expectedMargins == null)
+        if (margins == null)
             return;
 
         // Validate each margin
-        ValidateSingleMargin(result, "top", section, section.DsecMarginTopTwips, expectedMargins.Top, sectionNumber, sectionType, sectionPageMap);
-        ValidateSingleMargin(result, "bottom", section, section.DsecMarginBottomTwips, expectedMargins.Bottom, sectionNumber, sectionType, sectionPageMap);
-        ValidateSingleMargin(result, "left", section, section.DsecMarginLeftTwips, expectedMargins.Left, sectionNumber, sectionType, sectionPageMap);
-        ValidateSingleMargin(result, "right", section, section.DsecMarginRightTwips, expectedMargins.Right, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "top", section, section.DsecMarginTopTwips, margins.Top?.Value, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "bottom", section, section.DsecMarginBottomTwips, margins.Bottom?.Value, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "left", section, section.DsecMarginLeftTwips, margins.Left?.Value, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "right", section, section.DsecMarginRightTwips, margins.Right?.Value, sectionNumber, sectionType, sectionPageMap);
     }
 
     private void ValidateSingleMargin(
@@ -494,12 +394,12 @@ public partial class ValidationService
     private void ValidateDifferentOddEven(
         ValidationResult result,
         DokumenSection section,
-        HeaderFooterRule? rule,
+        bool? expectedDifferentOddEvenValue,
         int sectionNumber,
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
-        var expectedDifferentOddEven = rule?.DifferentOddEven?.Value ?? false;
+        var expectedDifferentOddEven = expectedDifferentOddEvenValue ?? false;
         result.IncrementTotalChecks();
 
         if (section.DsecDifferentOddEven == expectedDifferentOddEven)
@@ -510,12 +410,12 @@ public partial class ValidationService
 
         result.Errors.Add(new ValidationError
         {
-            Category = "Pengaturan Halaman",
-            Field = "different_odd_even",
-            Message = $"Pengaturan header/footer ganjil-genap section {sectionNumber} (bagian {sectionType}) tidak sesuai",
-            Expected = expectedDifferentOddEven ? "1" : "0",
-            Actual = section.DsecDifferentOddEven ? "1" : "0",
-            SectionIndex = sectionNumber,
+                Category = "Pengaturan Halaman",
+                Field = "different_odd_even",
+                Message = $"Pengaturan nomor halaman ganjil-genap section {sectionNumber} (bagian {sectionType}) tidak sesuai",
+                Expected = expectedDifferentOddEven ? "1" : "0",
+                Actual = section.DsecDifferentOddEven ? "1" : "0",
+                SectionIndex = sectionNumber,
             Locations = BuildPageSettingsLocations("different_odd_even", section, sectionPageMap)
         });
     }
@@ -530,7 +430,7 @@ public partial class ValidationService
     {
         // Validate gutter size
         result.IncrementTotalChecks();
-        var expectedGutterCm = rule.Gutter?.Value ?? 0m;
+        var expectedGutterCm = rule.Size?.Value ?? 0m;
         var expectedGutterTwips = expectedGutterCm * TwipsPerCm;
         var actualGutterCm = section.DsecGutterTwips.HasValue 
             ? section.DsecGutterTwips.Value / TwipsPerCm 
@@ -552,6 +452,11 @@ public partial class ValidationService
                 SectionIndex = sectionNumber,
                 Locations = BuildPageSettingsLocations("gutter", section, sectionPageMap)
             });
+        }
+
+        if (expectedGutterCm <= 0)
+        {
+            return;
         }
 
         // Validate gutter position if specified
@@ -585,14 +490,14 @@ public partial class ValidationService
     private void ValidateColumnCount(
         ValidationResult result,
         DokumenSection section,
-        ColumnRule rule,
+        RuleValue<int> rule,
         int sectionNumber,
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
         result.IncrementTotalChecks();
         var actualColumns = (int)(section.DsecColumnCount ?? 1);
-        var expectedColumns = rule.Count?.Value ?? 1;
+        var expectedColumns = rule.Value <= 0 ? 1 : rule.Value;
 
         if (actualColumns == expectedColumns)
         {
@@ -824,6 +729,7 @@ public partial class ValidationService
             {
                 Continue = ReadFlexibleBoolProperty(root, "continue"),
                 DifferentFirstPage = ReadFlexibleBoolProperty(root, "different_first_page"),
+                DifferentOddEven = ReadFlexibleBoolProperty(root, "different_odd_even"),
                 FirstPageIsEmpty = ReadNestedFlexibleBool(root, "first_page", "is_empty"),
                 NumberFormat = NormalizeNomorHalamanFormat(ExtractNomorHalamanFormat(root))
             };

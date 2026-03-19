@@ -252,7 +252,6 @@ WORKFLOW USER - ADMIN
    Endpoint:
    - GET /api/mahasiswa/nonaktif/buku
    - GET /api/mahasiswa/nonaktif/angkatan
-   - GET /api/mahasiswa/nonaktif/status
    - GET /api/mahasiswa/nonaktif/jurusan
    - DELETE /api/mahasiswa/nonaktif/buku
 

@@ -51,7 +51,6 @@ Halaman ini digunakan untuk mengunggah dan memvalidasi dokumen tugas akhir atau 
 
 Proses upload dokumen baru melibatkan langkah-langkah:
 - **Pemilihan File**: Mahasiswa memilih file DOCX yang akan divalidasi
-- **Pemilihan Tipe**: Memilih tipe dokumen (Proposal, Bab 1-5, Lampiran, dll.)
 - **Validasi Awal**: Sistem melakukan pengecekan format file sebelum upload
 - **Feedback Upload**: Menampilkan progress dan status upload
 

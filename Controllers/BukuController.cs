@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.AspNetCore.Mvc;
 using ValidasiTugasAkhir.MainService.Services;
 using Microsoft.EntityFrameworkCore;
@@ -319,7 +320,6 @@ public class BukuController : ControllerBase
         if (role != "admin" && !string.Equals(buku.MhsNrp, currentNrp, StringComparison.OrdinalIgnoreCase))
             return Forbid();
 
-        var cachedArchiveFileName = archiveKind == "docx" ? "buku-docx.zip" : "buku-pdf.zip";
         var archiveRelativePath = NormalizeRelativePath(
             archiveKind == "docx"
                 ? buku.BukuDocxZipPath
@@ -348,16 +348,30 @@ public class BukuController : ControllerBase
                 return BadRequest(new { message = "Path file ZIP tidak valid" });
         }
 
-        if (!System.IO.File.Exists(archiveFullPath) || new FileInfo(archiveFullPath).Length == 0)
+        var archiveInfo = new FileInfo(archiveFullPath);
+        if (!archiveInfo.Exists || archiveInfo.Length == 0)
             return NotFound(new { message = emptyArchiveMessage });
 
-        return PhysicalFile(archiveFullPath, "application/zip", cachedArchiveFileName);
+        var downloadFileName = BuildArchiveDownloadFileName(buku.MhsNrp, archiveKind, archiveInfo.LastWriteTime);
+        return PhysicalFile(archiveFullPath, "application/zip", downloadFileName);
     }
 
     private static string NormalizeRelativePath(string? filePath)
         => string.IsNullOrWhiteSpace(filePath)
             ? string.Empty
             : filePath.Trim().Replace('\\', '/');
+
+    private static string BuildArchiveDownloadFileName(string? nrp, string archiveKind, DateTime timestamp)
+        => $"{SanitizeFileNameSegment(nrp)}_{SanitizeFileNameSegment(archiveKind)}_{timestamp.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)}.zip";
+
+    private static string SanitizeFileNameSegment(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "unknown";
+
+        return string.Concat(
+            value.Trim().Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+    }
 
     private IActionResult GetBukuForAdmin(string? status, string sort, int limit, int offset, string? nrp, string? jurusan, string? search, DateTime? startDate, DateTime? endDate)
     {

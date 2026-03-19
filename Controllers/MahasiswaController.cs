@@ -42,43 +42,6 @@ namespace ValidasiTugasAkhir.MainService.Controllers
             return Ok(angkatanList);
         }
 
-        [HttpGet("nonaktif/status")]
-        public IActionResult GetNonaktifStatus()
-        {
-            if (HttpContext.Items["Role"]?.ToString() != "admin")
-                return Forbid();
-
-            var nrpsWithBuku = _db.Bukus.Select(b => b.MhsNrp).Distinct().ToList();
-            var allStatus = _sttsDb.Mahasiswas
-                .Where(m => nrpsWithBuku.Contains(m.MhsNrp))
-                .Select(m => new { m.MhsStatus, m.MhsLulusTahun })
-                .ToList();
-            
-            var distinctStatus = allStatus
-                .Where(m => m.MhsStatus != 1)
-                .Select(m => !m.MhsStatus.HasValue && !string.IsNullOrEmpty(m.MhsLulusTahun) ? (int)9 : (int)(m.MhsStatus ?? 0))
-                .Distinct()
-                .OrderBy(s => s)
-                .Select(status => new {
-                    value = status,
-                    label = GetStatusLabel(status)
-                }).ToList();
-
-            return Ok(distinctStatus);
-        }
-
-        private static string GetStatusLabel(int status) => status switch
-        {
-            0 => "tidak-aktif",
-            2 => "mengundurkan-diri",
-            3 => "DO",
-            4 => "cuti",
-            6 => "transfer",
-            7 => "tidak-perwalian",
-            9 => "alumni",
-            _ => "unknown"
-        };
-
         [HttpGet("nonaktif/jurusan")]
         public IActionResult GetNonaktifJurusan()
         {
@@ -145,7 +108,7 @@ namespace ValidasiTugasAkhir.MainService.Controllers
         }
 
         [HttpGet("nonaktif/buku")]
-        public IActionResult GetNonaktifBuku([FromQuery] int? status = null, [FromQuery] string? angkatan = null, [FromQuery] string? jurusan = null, [FromQuery] string? search = null, [FromQuery] int limit = 10, [FromQuery] int offset = 0)
+        public IActionResult GetNonaktifBuku([FromQuery] string? angkatan = null, [FromQuery] string? jurusan = null, [FromQuery] string? search = null, [FromQuery] int limit = 10, [FromQuery] int offset = 0)
         {
             if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
@@ -155,9 +118,6 @@ namespace ValidasiTugasAkhir.MainService.Controllers
 
             var mahasiswaQuery = _sttsDb.Mahasiswas
                 .Where(m => allNrps.Contains(m.MhsNrp) && (!m.MhsStatus.HasValue || m.MhsStatus.Value != 1));
-
-            if (status.HasValue)
-                mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsStatus == status.Value);
             
             if (!string.IsNullOrEmpty(angkatan))
                 mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsAngkatan.ToString() == angkatan);

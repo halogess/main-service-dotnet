@@ -893,12 +893,26 @@ public class ValidationQueueBackgroundService : BackgroundService
             "margin_right" => "Margin kanan",
             "header_from_top" => "Jarak header dari atas",
             "footer_from_bottom" => "Jarak footer dari bawah",
-            "different_odd_even" => "Pengaturan header/footer ganjil-genap",
+            "different_first_page" => "Pengaturan first page berbeda",
+            "different_odd_even" => "Pengaturan nomor halaman ganjil-genap",
             "gutter" => "Gutter",
             "gutter_position" => "Posisi gutter",
             "column_count" => "Jumlah kolom",
             "page_number_format" => "Format nomor halaman",
-            "page_number_start" => "Nomor halaman awal",
+            "page_number_location" => "Letak nomor halaman",
+            "page_number_alignment" => "Alignment nomor halaman",
+            "page_number_font_name" => "Font nomor halaman",
+            "page_number_font_size" => "Ukuran font nomor halaman",
+            "page_number_bold" => "Bold nomor halaman",
+            "page_number_italic" => "Italic nomor halaman",
+            "page_number_underline" => "Underline nomor halaman",
+            "page_number_left_indent" => "Left indent nomor halaman",
+            "page_number_right_indent" => "Right indent nomor halaman",
+            "page_number_first_line_indent" => "First line indent nomor halaman",
+            "page_number_line_spacing" => "Line spacing nomor halaman",
+            "page_number_spacing_before" => "Spacing before nomor halaman",
+            "page_number_spacing_after" => "Spacing after nomor halaman",
+            "page_number_structure" => "Struktur konten nomor halaman",
             "page_numbering" => "Penomoran halaman",
             _ => null
         };
@@ -1500,12 +1514,12 @@ public class ValidationQueueBackgroundService : BackgroundService
         return field.Equals("paper", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("header_from_top", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("footer_from_bottom", StringComparison.OrdinalIgnoreCase) ||
+               field.Equals("different_first_page", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("different_odd_even", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("gutter", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("gutter_position", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("column_count", StringComparison.OrdinalIgnoreCase) ||
-               field.Equals("page_number_format", StringComparison.OrdinalIgnoreCase) ||
-               field.Equals("page_number_start", StringComparison.OrdinalIgnoreCase) ||
+               field.StartsWith("page_number", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("page_numbering", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("section", StringComparison.OrdinalIgnoreCase);
     }

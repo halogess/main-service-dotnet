@@ -156,13 +156,12 @@ Menyimpan informasi BAB dalam satu buku tugas akhir.
 
 #### 2.1.3 Tabel `dokumen`
 
-Menyimpan data dokumen individual (per BAB) yang diupload.
+Menyimpan data dokumen individual yang diupload untuk proses validasi.
 
 | Kolom | Tipe | Deskripsi | Penggunaan |
 |-------|------|-----------|------------|
 | `dokumen_id` | int | **PK** - ID dokumen | Identifikasi dokumen |
 | `mhs_nrp` | varchar | NRP pemilik | Relasi ke mahasiswa |
-| `dokumen_tipe` | varchar | Tipe: `bab_1`, `bab_2`, ..., `bab_5` | Kategorisasi dokumen |
 | `dokumen_filename` | varchar | Nama file original | Display dan referensi |
 | `dokumen_filesize_bytes` | bigint | Ukuran file dalam bytes | Informasi file |
 | `dokumen_status` | varchar | Status validasi dokumen | Tracking progress |

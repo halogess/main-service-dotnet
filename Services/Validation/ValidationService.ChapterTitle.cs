@@ -978,6 +978,7 @@ public partial class ValidationService
         public List<uint> TextFormatIds { get; } = new();
         public List<TextRunInfo> TextRuns { get; } = new();
         public bool HasNonTextContent { get; set; }
+        public bool HasPageField { get; set; }
     }
 
     private sealed class TextRunInfo
@@ -1028,6 +1029,14 @@ public partial class ValidationService
 
                     if (type == "text" || type == "field")
                     {
+                        if (type == "field" &&
+                            item.TryGetProperty("field_type", out var fieldTypeEl) &&
+                            fieldTypeEl.ValueKind == JsonValueKind.String &&
+                            string.Equals(fieldTypeEl.GetString(), "PAGE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            info.HasPageField = true;
+                        }
+
                         var value = item.TryGetProperty("value", out var valueEl) && valueEl.ValueKind == JsonValueKind.String
                             ? valueEl.GetString()
                             : null;

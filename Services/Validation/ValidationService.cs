@@ -120,76 +120,49 @@ public class StringOrStringListConverter : JsonConverter<List<string>?>
     }
 }
 
-// Paper Size Rule
-public class PaperSectionRule
-{
-    [JsonPropertyName("section")]
-    public SectionRules? Section { get; set; }
-}
-
-public class SectionRules
-{
-    [JsonPropertyName("awal")]
-    public RuleValue<List<PaperSpec>>? Awal { get; set; }
-
-    [JsonPropertyName("isi")]
-    public RuleValue<List<PaperSpec>>? Isi { get; set; }
-
-    [JsonPropertyName("akhir")]
-    public RuleValue<List<PaperSpec>>? Akhir { get; set; }
-
-    [JsonPropertyName("lampiran")]
-    public RuleValue<List<PaperSpec>>? Lampiran { get; set; }
-}
-
-public class PaperSpec
-{
-    [JsonPropertyName("size")]
-    public string? Size { get; set; } // "A4", "A3"
-
-    [JsonPropertyName("orientation")]
-    public string? Orientation { get; set; } // "PORTRAIT", "LANDSCAPE"
-}
-
-// Margin Rule
-public class MarginRule
+// Page Settings Rule
+public class PageSettingsRule
 {
     [JsonPropertyName("paper")]
-    public PaperMargins? Paper { get; set; }
+    public PagePaperRule? Paper { get; set; }
+
+    [JsonPropertyName("margin")]
+    public MarginRule? Margin { get; set; }
+
+    [JsonPropertyName("header_footer")]
+    public HeaderFooterRule? HeaderFooter { get; set; }
+
+    [JsonPropertyName("gutter")]
+    public GutterRule? Gutter { get; set; }
+
+    [JsonPropertyName("column")]
+    public RuleValue<int>? Column { get; set; }
 }
 
-public class PaperMargins
+public class PagePaperRule
 {
-    [JsonPropertyName("a4_portrait")]
-    public RuleValue<MarginSpec>? A4Portrait { get; set; }
+    [JsonPropertyName("size")]
+    public RuleValue<string>? Size { get; set; }
 
-    [JsonPropertyName("a4_landscape")]
-    public RuleValue<MarginSpec>? A4Landscape { get; set; }
-
-    [JsonPropertyName("a3_landscape")]
-    public RuleValue<MarginSpec>? A3Landscape { get; set; }
+    [JsonPropertyName("orientation")]
+    public RuleValue<string>? Orientation { get; set; }
 }
 
-public class MarginSpec
+public class MarginRule
 {
     [JsonPropertyName("top")]
-    [JsonConverter(typeof(FlexibleDecimalConverter))]
-    public decimal? Top { get; set; }
+    public DecimalRuleValue? Top { get; set; }
 
     [JsonPropertyName("bottom")]
-    [JsonConverter(typeof(FlexibleDecimalConverter))]
-    public decimal? Bottom { get; set; }
+    public DecimalRuleValue? Bottom { get; set; }
 
     [JsonPropertyName("left")]
-    [JsonConverter(typeof(FlexibleDecimalConverter))]
-    public decimal? Left { get; set; }
+    public DecimalRuleValue? Left { get; set; }
 
     [JsonPropertyName("right")]
-    [JsonConverter(typeof(FlexibleDecimalConverter))]
-    public decimal? Right { get; set; }
+    public DecimalRuleValue? Right { get; set; }
 }
 
-// Header Footer Rule
 public class HeaderFooterRule
 {
     [JsonPropertyName("header_from_top")]
@@ -197,26 +170,22 @@ public class HeaderFooterRule
 
     [JsonPropertyName("footer_from_bottom")]
     public DecimalRuleValue? FooterFromBottom { get; set; }
-
-    [JsonPropertyName("different_odd_even")]
-    public RuleValue<bool>? DifferentOddEven { get; set; }
 }
 
-// Gutter Rule (for binding margin)
 public class GutterRule
 {
-    [JsonPropertyName("gutter")]
-    public DecimalRuleValue? Gutter { get; set; }
+    [JsonPropertyName("size")]
+    public DecimalRuleValue? Size { get; set; }
 
     [JsonPropertyName("position")]
     public RuleValue<string>? Position { get; set; }
 }
 
-// Column Rule
-public class ColumnRule
+public class PaperSpec
 {
-    [JsonPropertyName("count")]
-    public RuleValue<int>? Count { get; set; }
+    public string? Size { get; set; }
+
+    public string? Orientation { get; set; }
 }
 
 // Page Numbering Rule
@@ -486,9 +455,6 @@ public class ListItemIndentationRule
 {
     [JsonPropertyName("left_indent")]
     public DecimalRuleValue? LeftIndent { get; set; }
-
-    [JsonPropertyName("first_line_indent")]
-    public DecimalRuleValue? FirstLineIndent { get; set; }
 
     [JsonPropertyName("right_indent")]
     public DecimalRuleValue? RightIndent { get; set; }
@@ -1112,9 +1078,7 @@ public partial class ValidationService : IValidationService
     private static readonly Dictionary<string, (uint Width, uint Height)> PaperSizes = new()
     {
         { "A4", (11906, 16838) },  // 210mm x 297mm
-        { "A3", (16838, 23811) },  // 297mm x 420mm
-        { "LETTER", (12240, 15840) }, // 8.5" x 11"
-        { "LEGAL", (12240, 20160) }  // 8.5" x 14"
+        { "F4", (11906, 18709) }   // 210mm x 330mm
     };
 
     public ValidationService(KorektorBukuDbContext db, ILogger<ValidationService> logger)
@@ -1127,14 +1091,12 @@ public partial class ValidationService : IValidationService
     {
         public string SectionRefType { get; init; } = "dokumen";
         public uint SectionRefId { get; init; }
-        public string? DokumenTipe { get; init; }
         public uint? BabId { get; init; }
     }
 
     private sealed class ValidationTargetResolution
     {
         public bool Exists { get; init; }
-        public string? DokumenTipe { get; init; }
     }
 
     private ValidationTargetContext? _activeValidationTarget;
@@ -1147,21 +1109,17 @@ public partial class ValidationService : IValidationService
         {
             return new ValidationTargetResolution
             {
-                Exists = true,
-                DokumenTipe = _activeValidationTarget.DokumenTipe
+                Exists = true
             };
         }
 
-        var dokumen = await _db.Dokumens
+        var dokumenExists = await _db.Dokumens
             .AsNoTracking()
-            .Where(d => d.DokumenId == dokumenId)
-            .Select(d => new { d.DokumenTipe })
-            .FirstOrDefaultAsync(cancellationToken);
+            .AnyAsync(d => d.DokumenId == dokumenId, cancellationToken);
 
         return new ValidationTargetResolution
         {
-            Exists = dokumen != null,
-            DokumenTipe = dokumen?.DokumenTipe
+            Exists = dokumenExists
         };
     }
 
@@ -1199,7 +1157,6 @@ public partial class ValidationService : IValidationService
         {
             SectionRefType = "bab",
             SectionRefId = babId,
-            DokumenTipe = "isi",
             BabId = babId
         };
 
@@ -1215,13 +1172,11 @@ public partial class ValidationService : IValidationService
 
     public async Task<ValidationResult> ValidateDokumenAsync(int dokumenId, CancellationToken cancellationToken = default)
     {
-        var dokumen = await _db.Dokumens
+        var dokumenExists = await _db.Dokumens
             .AsNoTracking()
-            .Where(d => d.DokumenId == dokumenId)
-            .Select(d => new { d.DokumenTipe })
-            .FirstOrDefaultAsync(cancellationToken);
+            .AnyAsync(d => d.DokumenId == dokumenId, cancellationToken);
 
-        if (dokumen == null)
+        if (!dokumenExists)
         {
             var missingResult = new ValidationResult();
             missingResult.Errors.Add(new ValidationError
@@ -1237,8 +1192,7 @@ public partial class ValidationService : IValidationService
         _activeValidationTarget = new ValidationTargetContext
         {
             SectionRefType = "dokumen",
-            SectionRefId = (uint)dokumenId,
-            DokumenTipe = dokumen.DokumenTipe
+            SectionRefId = (uint)dokumenId
         };
 
         try

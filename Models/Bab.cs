@@ -10,10 +10,6 @@ public class Bab
     [Column("bab_id")]
     public uint BabId { get; set; }
 
-    [Column("bab_tipe")]
-    [MaxLength(100)]
-    public string? BabTipe { get; set; }
-
     [Column("buku_id")]
     public uint BukuId { get; set; }
 

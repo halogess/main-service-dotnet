@@ -135,7 +135,41 @@ public class AturanControllerExportTests
     }
 
     [Fact]
-    public void BuildWorkbook_ShouldIncludeMissingValidationRulesAndValidationCatalog()
+    public void BuildWorkbook_ShouldUseCompactWrappedValueColumn()
+    {
+        IReadOnlyList<AturanDetail> details =
+        [
+            new AturanDetail
+            {
+                AturanDetailId = 13,
+                AturanId = 1,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "judul_bab",
+                AturanDetailJsonValue = """
+                                        {
+                                          "number_format": {
+                                            "value": "Format nomor yang cukup panjang untuk perlu wrap text di kolom value",
+                                            "is_editable": false,
+                                            "is_hard_constraint": false
+                                          }
+                                        }
+                                        """
+            }
+        ];
+
+        var bytes = AturanExcelExportBuilder.BuildWorkbook("v1-export", details);
+
+        using var stream = new MemoryStream(bytes);
+        using var workbook = new XLWorkbook(stream);
+        var worksheet = workbook.Worksheet("Aturan");
+        var valueColumn = worksheet.Column(5);
+
+        Assert.Equal(14d, valueColumn.Width, 3);
+        Assert.True(valueColumn.Style.Alignment.WrapText);
+    }
+
+    [Fact]
+    public void BuildWorkbook_ShouldIncludeSyntheticValidationRulesOnAturanSheetOnly()
     {
         IReadOnlyList<AturanDetail> details =
         [
@@ -161,24 +195,9 @@ public class AturanControllerExportTests
         using var workbook = new XLWorkbook(stream);
         var aturanWorksheet = workbook.Worksheet("Aturan");
         var aturanRows = aturanWorksheet.RowsUsed().Skip(1).ToList();
-        var validationWorksheet = workbook.Worksheet("Cek Validasi");
-        var validationRows = validationWorksheet.RowsUsed().Skip(1).ToList();
 
         Assert.Contains(aturanRows, row => row.Cell(1).GetString() == "Footnote");
         Assert.Contains(aturanRows, row => row.Cell(1).GetString() == "Daftar Pustaka");
-
-        Assert.Contains(validationRows, row =>
-            row.Cell(1).GetString() == "Kode" &&
-            row.Cell(4).GetString() == "kode.cegah_tabel_kode" &&
-            !row.Cell(5).GetBoolean());
-
-        Assert.Contains(validationRows, row =>
-            row.Cell(1).GetString() == "Different Odd Even" &&
-            row.Cell(5).GetBoolean() &&
-            row.Cell(6).GetBoolean());
-
-        Assert.Contains(validationRows, row =>
-            row.Cell(1).GetString() == "Judul Kode" &&
-            row.Cell(4).GetString() == "judul_kode.position");
+        Assert.Equal(["Aturan"], workbook.Worksheets.Select(sheet => sheet.Name).ToList());
     }
 }

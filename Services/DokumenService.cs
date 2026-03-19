@@ -6,7 +6,7 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public interface IDokumenService
 {
-    Task<Dokumen> UploadDokumen(string nrp, IFormFile file, string? tipe = null);
+    Task<Dokumen> UploadDokumen(string nrp, IFormFile file);
     Task<Dokumen> UpdateStatus(int dokumenId, string status);
     Task<Dokumen> BatalDokumen(string nrp, int dokumenId);
     bool CanUpload(string nrp);
@@ -58,21 +58,10 @@ public class DokumenService : IDokumenService
         _wsService = wsService;
     }
 
-    public async Task<Dokumen> UploadDokumen(string nrp, IFormFile file, string? tipe = null)
+    public async Task<Dokumen> UploadDokumen(string nrp, IFormFile file)
     {
-        _logger.LogInformation("Upload dokumen dimulai: NRP={Nrp}, File={FileName}, Tipe={Tipe}", nrp, file.FileName, tipe);
-        
-        // Validasi tipe jika diberikan
-        if (!string.IsNullOrEmpty(tipe))
-        {
-            var validTipes = new[] { "awal", "isi", "akhir", "lampiran" };
-            if (!validTipes.Contains(tipe.ToLower()))
-            {
-                throw new InvalidOperationException($"Tipe tidak valid. Harus salah satu dari: {string.Join(", ", validTipes)}");
-            }
-            tipe = tipe.ToLower(); // Normalize to lowercase
-        }
-        
+        _logger.LogInformation("Upload dokumen dimulai: NRP={Nrp}, File={FileName}", nrp, file.FileName);
+
         _fileService.ValidateExtension(file.FileName);
         await _fileService.ValidateDocumentSource(file);
         
@@ -82,7 +71,6 @@ public class DokumenService : IDokumenService
             DokumenFilename = file.FileName,
             DokumenFilesizeBytes = file.Length,
             DokumenStatus = "dalam_antrian",
-            DokumenTipe = tipe,
             DokumenCreatedAt = DateTime.Now,
             DokumenUpdatedAt = DateTime.Now
         };

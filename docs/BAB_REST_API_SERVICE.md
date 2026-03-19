@@ -76,11 +76,9 @@ API mahasiswa menyediakan akses ke data mahasiswa dari database STTS dan mengelo
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
 | GET | `/api/mahasiswa/nonaktif/angkatan` | Mendapatkan daftar angkatan mahasiswa nonaktif |
-| GET | `/api/mahasiswa/nonaktif/status` | Mendapatkan daftar status mahasiswa nonaktif |
 | GET | `/api/mahasiswa/nonaktif/jurusan` | Mendapatkan daftar jurusan mahasiswa nonaktif |
 | GET | `/api/mahasiswa/nonaktif/buku` | Mendapatkan daftar buku mahasiswa nonaktif |
-| POST | `/api/mahasiswa/nonaktif/hapus` | Menghapus buku mahasiswa nonaktif |
-| GET | `/api/mahasiswa/status-label` | Mendapatkan label status mahasiswa |
+| DELETE | `/api/mahasiswa/nonaktif/buku` | Menghapus buku mahasiswa nonaktif |
 
 ---
 

@@ -23,20 +23,23 @@ public class DokumenController : ControllerBase
 
     private readonly KorektorBukuDbContext _db;
     private readonly IDokumenService _dokumenService;
+    private readonly IDokumenHistoryPurgeService _dokumenHistoryPurgeService;
     private readonly IValidationReportService _reportService;
 
     public DokumenController(
         KorektorBukuDbContext db,
         IDokumenService dokumenService,
+        IDokumenHistoryPurgeService dokumenHistoryPurgeService,
         IValidationReportService reportService)
     {
         _db = db;
         _dokumenService = dokumenService;
+        _dokumenHistoryPurgeService = dokumenHistoryPurgeService;
         _reportService = reportService;
     }
 
     [HttpPost]
-    public async Task<IActionResult> UploadDokumen(IFormFile file, [FromForm] string? tipe = null)
+    public async Task<IActionResult> UploadDokumen(IFormFile file)
     {
         var nrp = HttpContext.Items["Nrp"]?.ToString();
         
@@ -48,7 +51,7 @@ public class DokumenController : ControllerBase
         
         try
         {
-            var dokumen = await _dokumenService.UploadDokumen(nrp!, file, tipe);
+            var dokumen = await _dokumenService.UploadDokumen(nrp!, file);
             return Ok(new { message = "Dokumen berhasil diupload", dokumen_id = dokumen.DokumenId });
         }
         catch (Exception ex)
@@ -99,6 +102,97 @@ public class DokumenController : ControllerBase
             lolos = stats.Lolos,
             tidak_lolos = stats.TidakLolos
         });
+    }
+
+    [HttpGet("purge-summary")]
+    public async Task<IActionResult> GetPurgeSummary()
+    {
+        if (HttpContext.Items["Role"]?.ToString() != "admin")
+            return Forbid();
+
+        var summary = await _dokumenHistoryPurgeService.GetSummaryAsync(HttpContext.RequestAborted);
+        return Ok(new
+        {
+            total_dokumen = summary.TotalDokumen,
+            total_antrian = summary.TotalAntrian,
+            total_active_queue = summary.TotalActiveQueue,
+            total_section = summary.TotalSection,
+            total_part = summary.TotalPart,
+            total_elemen = summary.TotalElemen,
+            total_visual = summary.TotalVisual,
+            total_note = summary.TotalNote,
+            total_media = summary.TotalMedia,
+            total_kesalahan = summary.TotalKesalahan,
+            total_kesalahan_detail = summary.TotalKesalahanDetail,
+            total_adobe_log = summary.TotalAdobeLog,
+            total_llm_log = summary.TotalLlmLog,
+            total_paragraph_format = summary.TotalParagraphFormat,
+            total_text_format = summary.TotalTextFormat,
+            total_table_format = summary.TotalTableFormat,
+            total_table_row_format = summary.TotalTableRowFormat,
+            total_table_cell_format = summary.TotalTableCellFormat,
+            total_drawing_format = summary.TotalDrawingFormat,
+            total_field_format = summary.TotalFieldFormat,
+            total_storage_targets = summary.TotalStorageTargets,
+            existing_storage_directories = summary.ExistingStorageDirectories
+        });
+    }
+
+    [HttpPost("purge-all")]
+    public async Task<IActionResult> PurgeAllDokumenHistory([FromBody] PurgeDokumenHistoryRequest? request)
+    {
+        if (HttpContext.Items["Role"]?.ToString() != "admin")
+            return Forbid();
+
+        if (!string.Equals(request?.ConfirmationText?.Trim(), PurgeDokumenHistoryRequest.RequiredConfirmationText, StringComparison.Ordinal))
+        {
+            return BadRequest(new
+            {
+                message = $"Ketik '{PurgeDokumenHistoryRequest.RequiredConfirmationText}' untuk melanjutkan purge."
+            });
+        }
+
+        try
+        {
+            var result = await _dokumenHistoryPurgeService.PurgeAllAsync(HttpContext.RequestAborted);
+            var message = result.FailedStorageDirectories.Count == 0
+                ? "Purge riwayat dokumen selesai."
+                : "Purge riwayat dokumen selesai, tetapi ada folder storage yang gagal dihapus.";
+
+            return Ok(new
+            {
+                message,
+                deleted_dokumen = result.DeletedDokumen,
+                deleted_antrian = result.DeletedAntrian,
+                deleted_section = result.DeletedSection,
+                deleted_part = result.DeletedPart,
+                deleted_elemen = result.DeletedElemen,
+                deleted_visual = result.DeletedVisual,
+                deleted_note = result.DeletedNote,
+                deleted_media = result.DeletedMedia,
+                deleted_kesalahan = result.DeletedKesalahan,
+                deleted_kesalahan_detail = result.DeletedKesalahanDetail,
+                deleted_adobe_log = result.DeletedAdobeLog,
+                deleted_llm_log = result.DeletedLlmLog,
+                deleted_paragraph_format = result.DeletedParagraphFormat,
+                deleted_text_format = result.DeletedTextFormat,
+                deleted_table_format = result.DeletedTableFormat,
+                deleted_table_row_format = result.DeletedTableRowFormat,
+                deleted_table_cell_format = result.DeletedTableCellFormat,
+                deleted_drawing_format = result.DeletedDrawingFormat,
+                deleted_field_format = result.DeletedFieldFormat,
+                storage_targets = result.StorageTargets,
+                deleted_storage_directories = result.DeletedStorageDirectories,
+                failed_storage_directories = result.FailedStorageDirectories
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(StatusCodes.Status500InternalServerError, new
+            {
+                message = $"Purge riwayat dokumen gagal: {ex.Message}"
+            });
+        }
     }
 
     [HttpGet]
@@ -182,7 +276,6 @@ public class DokumenController : ControllerBase
         return Ok(new
         {
             id = dokumen.DokumenId,
-            tipe = dokumen.DokumenTipe,
             filename = dokumen.DokumenFilename,
             filesize_bytes = dokumen.DokumenFilesizeBytes,
             status = dokumen.DokumenStatus,
@@ -473,4 +566,11 @@ public class DokumenController : ControllerBase
             .ThenBy(x => x.YTerkecil)
             .ToList();
     }
+}
+
+public sealed class PurgeDokumenHistoryRequest
+{
+    public const string RequiredConfirmationText = "HAPUS SEMUA RIWAYAT DOKUMEN";
+
+    public string? ConfirmationText { get; set; }
 }

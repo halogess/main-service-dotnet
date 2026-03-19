@@ -516,13 +516,17 @@ public partial class GeminiService
         var normalized = field.Trim().ToLowerInvariant();
 
         if (normalized.StartsWith("margin_"))
-            return "margin";
-        if (normalized == "header_from_top" || normalized == "footer_from_bottom" || normalized == "different_odd_even")
-            return "header_footer";
+            return "page_settings";
+        if (normalized == "header_from_top" || normalized == "footer_from_bottom")
+            return "page_settings";
         if (normalized.StartsWith("gutter"))
-            return "gutter";
+            return "page_settings";
         if (normalized.StartsWith("column"))
-            return "column";
+            return "page_settings";
+        if (normalized == "different_odd_even")
+            return "page_numbering";
+        if (normalized == "different_first_page")
+            return "page_numbering";
         if (normalized.StartsWith("page_number"))
             return "page_numbering";
         if (normalized.StartsWith("paper"))
@@ -542,6 +546,7 @@ public partial class GeminiService
         return field.ToLowerInvariant() switch
         {
             "judul_bab" => "Aturan format judul bab (font, spacing, alignment, numbering)",
+            "page_settings" => "Aturan pengaturan halaman (kertas, margin, header/footer, gutter, kolom)",
             "paper" => "Aturan ukuran kertas dan orientasi",
             "paper_size" => "Aturan ukuran kertas",
             "margin" => "Aturan margin halaman",
@@ -552,14 +557,28 @@ public partial class GeminiService
             "header_footer" => "Aturan header dan footer",
             "header_from_top" => "Aturan jarak header dari atas",
             "footer_from_bottom" => "Aturan jarak footer dari bawah",
-            "different_odd_even" => "Aturan header/footer ganjil-genap",
+            "different_first_page" => "Aturan first page berbeda",
+            "different_odd_even" => "Aturan nomor halaman ganjil-genap",
             "gutter" => "Aturan gutter halaman",
             "gutter_position" => "Aturan posisi gutter",
             "column" => "Aturan jumlah kolom",
             "column_count" => "Aturan jumlah kolom",
             "page_numbering" => "Aturan penomoran halaman",
             "page_number_format" => "Aturan format nomor halaman",
-            "page_number_start" => "Aturan awal nomor halaman",
+            "page_number_location" => "Aturan letak nomor halaman",
+            "page_number_alignment" => "Aturan alignment nomor halaman",
+            "page_number_font_name" => "Aturan font nomor halaman",
+            "page_number_font_size" => "Aturan ukuran font nomor halaman",
+            "page_number_bold" => "Aturan bold nomor halaman",
+            "page_number_italic" => "Aturan italic nomor halaman",
+            "page_number_underline" => "Aturan underline nomor halaman",
+            "page_number_left_indent" => "Aturan left indent nomor halaman",
+            "page_number_right_indent" => "Aturan right indent nomor halaman",
+            "page_number_first_line_indent" => "Aturan first line indent nomor halaman",
+            "page_number_line_spacing" => "Aturan line spacing nomor halaman",
+            "page_number_spacing_before" => "Aturan spacing before nomor halaman",
+            "page_number_spacing_after" => "Aturan spacing after nomor halaman",
+            "page_number_structure" => "Aturan struktur konten nomor halaman",
             "font_name" => "Aturan jenis font",
             "font_size" => "Aturan ukuran font",
             "line_spacing" => "Aturan spasi antar baris",

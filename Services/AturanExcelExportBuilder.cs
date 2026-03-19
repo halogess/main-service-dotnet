@@ -10,6 +10,7 @@ namespace ValidasiTugasAkhir.MainService.Services;
 public static class AturanExcelExportBuilder
 {
     public const string ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    private const double ValueColumnWidth = 14d;
 
     private static readonly IReadOnlyDictionary<string, string[]> SplitElementKeys =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
@@ -29,7 +30,6 @@ public static class AturanExcelExportBuilder
     public static byte[] BuildWorkbook(string? aturanVersi, IReadOnlyList<AturanDetail> details)
     {
         var rows = BuildExportRows(details);
-        var validationChecks = ValidationCheckCatalog.BuildRows(details);
 
         using var workbook = new XLWorkbook();
         var worksheet = workbook.Worksheets.Add("Aturan");
@@ -76,51 +76,10 @@ public static class AturanExcelExportBuilder
         worksheet.SheetView.FreezeRows(1);
         worksheet.Range(1, 1, 1, headers.Length).SetAutoFilter();
         worksheet.Columns().AdjustToContents();
-        worksheet.Column(5).Width = Math.Max(worksheet.Column(5).Width, 18);
+        worksheet.Column(5).Width = ValueColumnWidth;
+        worksheet.Column(5).Style.Alignment.WrapText = true;
         worksheet.Column(6).Width = Math.Max(worksheet.Column(6).Width, 16);
         worksheet.Column(7).Width = Math.Max(worksheet.Column(7).Width, 28);
-
-        var validationWorksheet = workbook.Worksheets.Add("Cek Validasi");
-        var validationHeaders = new[]
-        {
-            "Elemen",
-            "Field Error",
-            "Sumber",
-            "Path Aturan",
-            "Aktif Saat Ini",
-            "Bisa Error Tanpa DB",
-            "Yang Dicek"
-        };
-
-        for (var column = 0; column < validationHeaders.Length; column++)
-        {
-            var cell = validationWorksheet.Cell(1, column + 1);
-            cell.Value = validationHeaders[column];
-            cell.Style.Font.Bold = true;
-            cell.Style.Fill.BackgroundColor = XLColor.LightGray;
-        }
-
-        for (var index = 0; index < validationChecks.Count; index++)
-        {
-            var row = validationChecks[index];
-            var excelRow = index + 2;
-            validationWorksheet.Cell(excelRow, 1).Value = FormatElementLabel(row.Elemen);
-            validationWorksheet.Cell(excelRow, 2).Value = row.FieldError;
-            validationWorksheet.Cell(excelRow, 3).Value = row.Sumber;
-            validationWorksheet.Cell(excelRow, 4).Value = row.AturanPath;
-            validationWorksheet.Cell(excelRow, 5).Value = row.AktifSaatIni;
-            validationWorksheet.Cell(excelRow, 6).Value = row.BisaErrorTanpaDb;
-            validationWorksheet.Cell(excelRow, 7).Value = row.YangDicek;
-        }
-
-        var validationRange = validationWorksheet.Range(1, 1, Math.Max(validationChecks.Count + 1, 2), validationHeaders.Length);
-        validationRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Top;
-        validationRange.Style.Alignment.WrapText = true;
-        validationWorksheet.SheetView.FreezeRows(1);
-        validationWorksheet.Range(1, 1, 1, validationHeaders.Length).SetAutoFilter();
-        validationWorksheet.Columns().AdjustToContents();
-        validationWorksheet.Column(4).Width = Math.Max(validationWorksheet.Column(4).Width, 28);
-        validationWorksheet.Column(7).Width = Math.Max(validationWorksheet.Column(7).Width, 52);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
@@ -318,7 +277,7 @@ public static class AturanExcelExportBuilder
             FormatScalarValue(valueNode, effectiveKey),
             GetNumericCellValue(valueNode),
             hardConstraint,
-            BuildNote(path, valueNode));
+            BuildNote(elementKey, path, valueNode));
     }
 
     private static string GetEffectiveKey(IReadOnlyList<string> path)
@@ -523,12 +482,23 @@ public static class AturanExcelExportBuilder
         return valueNode.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
     }
 
-    private static string BuildNote(IReadOnlyList<string> path, JsonNode? valueNode)
+    private static string BuildNote(string elementKey, IReadOnlyList<string> path, JsonNode? valueNode)
     {
         var effectiveKey = GetEffectiveKey(path);
+        var choiceNote = BuildChoiceNote(elementKey, path, effectiveKey);
+        if (!string.IsNullOrWhiteSpace(choiceNote))
+            return choiceNote;
 
         if (valueNode is JsonValue jsonValue && jsonValue.TryGetValue<bool>(out var _boolValue))
-            return "Pilihan: true, false";
+            return "Nilai yang tersedia: true, false";
+
+        if (elementKey.Equals("page_settings", StringComparison.OrdinalIgnoreCase) &&
+            path.Count >= 2 &&
+            path[0].Equals("gutter", StringComparison.OrdinalIgnoreCase) &&
+            effectiveKey.Equals("size", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Angka desimal dalam cm";
+        }
 
         if (effectiveKey.StartsWith("cegah_", StringComparison.OrdinalIgnoreCase) ||
             effectiveKey.StartsWith("minimal_", StringComparison.OrdinalIgnoreCase) ||
@@ -537,20 +507,19 @@ public static class AturanExcelExportBuilder
             effectiveKey is "continue" or "different_first_page" or "allow_other_content" or "is_empty" or
                 "use_numbering" or "enter_after_number" or "enter_after_numbering" or "depends_on_equation_length")
         {
-            return "Pilihan: true, false";
+            return "Nilai yang tersedia: true, false";
         }
 
         return effectiveKey switch
         {
-            "alignment" => "Pilihan umum: left, center, right, justify",
-            "location" => "Pilihan: header, footer",
-            "layout_option" => "Pilihan: inline_with_text",
-            "position" => "Pilihan umum: before, after",
-            "orientation" => "Pilihan: PORTRAIT, LANDSCAPE",
-            "size" => "Pilihan umum: A4, A3",
+            "alignment" => "Nilai yang tersedia: left, center, right, justify",
+            "location" => "Nilai yang tersedia: header, footer",
+            "layout_option" => "Nilai yang tersedia: inline_with_text",
+            "position" => "Nilai yang tersedia: before, after",
+            "orientation" => "Nilai yang tersedia: PORTRAIT, LANDSCAPE",
+            "size" => "Nilai yang tersedia: A4, F4",
             "indentation" => "Isi `none` atau angka 0 berarti tanpa indentasi",
-            "case" => "Pilihan umum: UPPERCASE, Title Case, lowercase",
-            "type" => "Pilihan umum: arab, arabic, decimal, lowerRoman, upperRoman, lowerLetter, upperLetter",
+            "case" => "Nilai yang tersedia: UPPERCASE, Title Case, Sentence case, lowercase",
             "font_name" => "Teks bebas. Contoh: Times New Roman",
             "number_format" => "Teks/pola format. Contoh: BAB I atau Gambar [nomor_bab].[nomor_gambar]",
             "prefix" => "Kosong = tanpa prefix",
@@ -566,6 +535,76 @@ public static class AturanExcelExportBuilder
                     ? "Angka atau teks sesuai kebutuhan aturan"
                     : string.Empty
         };
+    }
+
+    private static string? BuildChoiceNote(string elementKey, IReadOnlyList<string> path, string effectiveKey)
+    {
+        if (PathEndsWith(path, "numbering", "number_format") &&
+            elementKey.Equals("nomor_halaman", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Nilai yang tersedia: decimal, lowerRoman, upperRoman, lowerLetter, upperLetter";
+        }
+
+        if (PathEndsWith(path, "numbering", "number_format"))
+        {
+            if (elementKey.Equals("footnote", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Nilai yang tersedia: arabic, roman_lower, roman_upper, letter_lower, letter_upper, symbol";
+            }
+
+            if (elementKey.Equals("kode", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Nilai yang tersedia: none, %1, %01";
+            }
+        }
+
+        if (PathEndsWith(path, "numbering", "type") &&
+            elementKey.Equals("footnote", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Nilai yang tersedia: continuous, restart_each_page, restart_each_section";
+        }
+
+        if (effectiveKey.Equals("leader_style", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Nilai yang tersedia: none, dots, dash, underline";
+        }
+
+        if (effectiveKey.Equals("position", StringComparison.OrdinalIgnoreCase))
+        {
+            if (elementKey.Equals("gutter", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Nilai yang tersedia: left, top";
+            }
+
+            if (elementKey.Equals("page_settings", StringComparison.OrdinalIgnoreCase) &&
+                path.Count >= 2 &&
+                path[0].Equals("gutter", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Nilai yang tersedia: left, top";
+            }
+
+            if (elementKey is "caption_gambar" or "caption_tabel" or "judul_kode")
+            {
+                return "Nilai yang tersedia: before, after";
+            }
+        }
+
+        return null;
+    }
+
+    private static bool PathEndsWith(IReadOnlyList<string> path, params string[] suffix)
+    {
+        if (path.Count < suffix.Length)
+            return false;
+
+        var offset = path.Count - suffix.Length;
+        for (var index = 0; index < suffix.Length; index++)
+        {
+            if (!path[offset + index].Equals(suffix[index], StringComparison.OrdinalIgnoreCase))
+                return false;
+        }
+
+        return true;
     }
 
     private static string FormatElementLabel(string rawElement)

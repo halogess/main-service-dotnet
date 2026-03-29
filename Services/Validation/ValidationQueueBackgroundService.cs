@@ -1,5 +1,6 @@
 using ValidasiTugasAkhir.MainService.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using System.Collections.Concurrent;
 using System.Data;
 using System.Text;
@@ -1168,7 +1169,10 @@ public class ValidationQueueBackgroundService : BackgroundService
 
                     var id = Convert.ToUInt64(reader["delemen_id"]);
                     var page = Convert.ToInt32(reader["dev_page"]);
-                    pageNumbers[id] = page;
+                    if (pageNumbers.TryGetValue(id, out var existingPage))
+                        pageNumbers[id] = Math.Min(existingPage, page);
+                    else
+                        pageNumbers[id] = page;
                 }
             }
         }
@@ -1213,21 +1217,15 @@ public class ValidationQueueBackgroundService : BackgroundService
             if (shouldClose && connection.State == ConnectionState.Open)
                 await connection.CloseAsync();
 
-            if (columns.Count == 0)
-                return null;
-
-            var idColumn = columns.FirstOrDefault(c => c.Equals("delemen_id", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c => c.EndsWith("delemen_id", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c =>
-                    c.IndexOf("elemen", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    c.IndexOf("id", StringComparison.OrdinalIgnoreCase) >= 0);
-
-            return idColumn;
+            var resolved = ResolveVisualIdColumnFromNames(columns);
+            if (!string.IsNullOrWhiteSpace(resolved))
+                return resolved;
+            return ResolveVisualIdColumnFromNames(GetVisualModelColumns(db));
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to resolve dokumen_elemen_visual columns");
-            return null;
+            return ResolveVisualIdColumnFromNames(GetVisualModelColumns(db));
         }
     }
 
@@ -1259,20 +1257,61 @@ public class ValidationQueueBackgroundService : BackgroundService
             if (shouldClose && connection.State == ConnectionState.Open)
                 await connection.CloseAsync();
 
-            if (columns.Count == 0)
-                return (null, null);
-
-            var refTypeColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_tipe", StringComparison.OrdinalIgnoreCase));
-            var refIdColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_id", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c => c.Equals("dokumen_id", StringComparison.OrdinalIgnoreCase));
-
-            return (refTypeColumn, refIdColumn);
+            var resolved = ResolveVisualRefColumnsFromNames(columns);
+            if (resolved.RefTypeColumn is not null || resolved.RefIdColumn is not null)
+                return resolved;
+            return ResolveVisualRefColumnsFromNames(GetVisualModelColumns(db));
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to resolve dokumen_elemen_visual ref columns");
-            return (null, null);
+            return ResolveVisualRefColumnsFromNames(GetVisualModelColumns(db));
         }
+    }
+
+    private static IReadOnlyList<string> GetVisualModelColumns(KorektorBukuDbContext db)
+    {
+        var entityType = db.Model.FindEntityType(typeof(DokumenElemenVisual));
+        var tableName = entityType?.GetTableName();
+        if (entityType is null || string.IsNullOrWhiteSpace(tableName))
+            return Array.Empty<string>();
+
+        var storeObject = StoreObjectIdentifier.Table(tableName, entityType.GetSchema());
+        return entityType
+            .GetProperties()
+            .Select(property => property.GetColumnName(storeObject))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList()!;
+    }
+
+    private static string? ResolveVisualIdColumnFromNames(IEnumerable<string>? columns)
+    {
+        var columnList = columns?
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList() ?? new List<string>();
+        if (columnList.Count == 0)
+            return null;
+
+        return columnList.FirstOrDefault(c => c.Equals("delemen_id", StringComparison.OrdinalIgnoreCase))
+            ?? columnList.FirstOrDefault(c => c.EndsWith("delemen_id", StringComparison.OrdinalIgnoreCase))
+            ?? columnList.FirstOrDefault(c =>
+                c.IndexOf("elemen", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                c.IndexOf("id", StringComparison.OrdinalIgnoreCase) >= 0);
+    }
+
+    private static (string? RefTypeColumn, string? RefIdColumn) ResolveVisualRefColumnsFromNames(IEnumerable<string>? columns)
+    {
+        var columnList = columns?
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList() ?? new List<string>();
+        if (columnList.Count == 0)
+            return (null, null);
+
+        var refTypeColumn = columnList.FirstOrDefault(c => c.Equals("dev_ref_tipe", StringComparison.OrdinalIgnoreCase));
+        var refIdColumn = columnList.FirstOrDefault(c => c.Equals("dev_ref_id", StringComparison.OrdinalIgnoreCase))
+            ?? columnList.FirstOrDefault(c => c.Equals("dokumen_id", StringComparison.OrdinalIgnoreCase));
+        return (refTypeColumn, refIdColumn);
     }
 
     private static string BuildVisualRefFilterClause(

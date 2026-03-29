@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using ValidasiTugasAkhir.MainService.Models;
 
 namespace ValidasiTugasAkhir.MainService.Services;
@@ -1498,7 +1499,10 @@ public partial class ValidationService
 
                     var id = Convert.ToUInt64(reader["delemen_id"]);
                     var page = Convert.ToInt32(reader["dev_page"]);
-                    pageNumbers[id] = page;
+                    if (pageNumbers.TryGetValue(id, out var existingPage))
+                        pageNumbers[id] = Math.Min(existingPage, page);
+                    else
+                        pageNumbers[id] = page;
                 }
             }
         }
@@ -1699,23 +1703,15 @@ public partial class ValidationService
             if (shouldClose && connection.State == ConnectionState.Open)
                 await connection.CloseAsync();
 
-            if (columns.Count == 0)
-                return (null, null);
-
-            var idColumn = columns.FirstOrDefault(c => c.Equals("delemen_id", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c => c.EndsWith("delemen_id", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c =>
-                    c.IndexOf("elemen", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    c.IndexOf("id", StringComparison.OrdinalIgnoreCase) >= 0);
-
-            var labelColumn = columns.FirstOrDefault(c => c.Equals("dev_label_struktural", StringComparison.OrdinalIgnoreCase));
-
-            return (idColumn, labelColumn);
+            var resolved = ResolveVisualColumnsFromNames(columns);
+            if (resolved.IdColumn is not null || resolved.LabelColumn is not null)
+                return resolved;
+            return ResolveVisualColumnsFromNames(GetVisualModelColumns());
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to resolve dokumen_elemen_visual columns");
-            return (null, null);
+            return ResolveVisualColumnsFromNames(GetVisualModelColumns());
         }
     }
 
@@ -1745,20 +1741,64 @@ public partial class ValidationService
             if (shouldClose && connection.State == ConnectionState.Open)
                 await connection.CloseAsync();
 
-            if (columns.Count == 0)
-                return (null, null);
-
-            var refTypeColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_tipe", StringComparison.OrdinalIgnoreCase));
-            var refIdColumn = columns.FirstOrDefault(c => c.Equals("dev_ref_id", StringComparison.OrdinalIgnoreCase))
-                ?? columns.FirstOrDefault(c => c.Equals("dokumen_id", StringComparison.OrdinalIgnoreCase));
-
-            return (refTypeColumn, refIdColumn);
+            var resolved = ResolveVisualRefColumnsFromNames(columns);
+            if (resolved.RefTypeColumn is not null || resolved.RefIdColumn is not null)
+                return resolved;
+            return ResolveVisualRefColumnsFromNames(GetVisualModelColumns());
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to resolve dokumen_elemen_visual ref columns");
-            return (null, null);
+            return ResolveVisualRefColumnsFromNames(GetVisualModelColumns());
         }
+    }
+
+    private IReadOnlyList<string> GetVisualModelColumns()
+    {
+        var entityType = _db.Model.FindEntityType(typeof(DokumenElemenVisual));
+        var tableName = entityType?.GetTableName();
+        if (entityType is null || string.IsNullOrWhiteSpace(tableName))
+            return Array.Empty<string>();
+
+        var storeObject = StoreObjectIdentifier.Table(tableName, entityType.GetSchema());
+        return entityType
+            .GetProperties()
+            .Select(property => property.GetColumnName(storeObject))
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList()!;
+    }
+
+    private static (string? IdColumn, string? LabelColumn) ResolveVisualColumnsFromNames(IEnumerable<string>? columns)
+    {
+        var columnList = columns?
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList() ?? new List<string>();
+        if (columnList.Count == 0)
+            return (null, null);
+
+        var idColumn = columnList.FirstOrDefault(c => c.Equals("delemen_id", StringComparison.OrdinalIgnoreCase))
+            ?? columnList.FirstOrDefault(c => c.EndsWith("delemen_id", StringComparison.OrdinalIgnoreCase))
+            ?? columnList.FirstOrDefault(c =>
+                c.IndexOf("elemen", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                c.IndexOf("id", StringComparison.OrdinalIgnoreCase) >= 0);
+
+        var labelColumn = columnList.FirstOrDefault(c => c.Equals("dev_label_struktural", StringComparison.OrdinalIgnoreCase));
+        return (idColumn, labelColumn);
+    }
+
+    private static (string? RefTypeColumn, string? RefIdColumn) ResolveVisualRefColumnsFromNames(IEnumerable<string>? columns)
+    {
+        var columnList = columns?
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList() ?? new List<string>();
+        if (columnList.Count == 0)
+            return (null, null);
+
+        var refTypeColumn = columnList.FirstOrDefault(c => c.Equals("dev_ref_tipe", StringComparison.OrdinalIgnoreCase));
+        var refIdColumn = columnList.FirstOrDefault(c => c.Equals("dev_ref_id", StringComparison.OrdinalIgnoreCase))
+            ?? columnList.FirstOrDefault(c => c.Equals("dokumen_id", StringComparison.OrdinalIgnoreCase));
+        return (refTypeColumn, refIdColumn);
     }
 
     private static string BuildVisualRefFilterClause(

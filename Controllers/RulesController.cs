@@ -122,6 +122,14 @@ public class RulesController : ControllerBase
                     }
                 }
 
+                if (!AturanDetailShapeValidator.TryValidate(detail.aturan_detail_key, normalizedJson, out var shapeErrorMessage))
+                {
+                    var detailLabel = !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
+                        ? detail.aturan_detail_key
+                        : $"index {index}";
+                    return BadRequest(new { message = $"json_value tidak sesuai schema untuk detail {detailLabel}: {shapeErrorMessage}" });
+                }
+
                 normalizedDetails.Add((detail, normalizedJson));
             }
         }
@@ -168,11 +176,23 @@ public class RulesController : ControllerBase
             return NotFound(new { message = "Aturan tidak ditemukan" });
 
         var normalizedDetails = new List<(RulesDetailUpdateRequest Detail, string? NormalizedJson)>();
+        var existingDetailIds = request.details?
+            .Where(detail => detail.aturan_detail_id.HasValue && detail.aturan_detail_id.Value > 0)
+            .Select(detail => detail.aturan_detail_id!.Value)
+            .Distinct()
+            .ToList()
+            ?? new List<uint>();
+        var existingDetailsById = existingDetailIds.Count > 0
+            ? await _db.AturanDetails
+                .Where(detail => detail.AturanId == id && existingDetailIds.Contains(detail.AturanDetailId))
+                .ToDictionaryAsync(detail => detail.AturanDetailId)
+            : new Dictionary<uint, AturanDetail>();
         if (request.details != null)
         {
             for (var index = 0; index < request.details.Count; index++)
             {
                 var detail = request.details[index];
+                existingDetailsById.TryGetValue(detail.aturan_detail_id ?? 0, out var existingDetail);
                 string? normalizedJson = null;
                 if (detail.aturan_detail_json_value != null)
                 {
@@ -185,6 +205,18 @@ public class RulesController : ControllerBase
                                 : $"index {index}";
                         return BadRequest(new { message = $"json_value tidak valid untuk detail {detailLabel}: {errorMessage}" });
                     }
+                }
+
+                var effectiveKey = detail.aturan_detail_key ?? existingDetail?.AturanDetailKey;
+                var effectiveJson = normalizedJson ?? existingDetail?.AturanDetailJsonValue;
+                if (!AturanDetailShapeValidator.TryValidate(effectiveKey, effectiveJson, out var shapeErrorMessage))
+                {
+                    var detailLabel = detail.aturan_detail_id.HasValue
+                        ? $"aturan_detail_id {detail.aturan_detail_id.Value}"
+                        : !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
+                            ? detail.aturan_detail_key
+                            : $"index {index}";
+                    return BadRequest(new { message = $"json_value tidak sesuai schema untuk detail {detailLabel}: {shapeErrorMessage}" });
                 }
 
                 normalizedDetails.Add((detail, normalizedJson));

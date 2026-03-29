@@ -36,8 +36,6 @@ Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu mena
 | Isi Buku | item_daftar | paragraph.spacing.after | 0 | true | db |
 | Isi Buku | item_daftar | paragraph.spacing.before | 0 | true | db |
 | Isi Buku | item_daftar | paragraph.spacing.line_spacing | 1.5 | true | db |
-| Isi Buku | item_daftar | penggunaan_poin.bullets | Digunakan untuk menyajikan daftar yang seluruh itemnya bersifat setara dan tidak memerlukan urutan tertentu. | false | db |
-| Isi Buku | item_daftar | penggunaan_poin.numbering | Digunakan untuk menyajikan daftar yang item-itemnya memiliki urutan atau tahapan yang jelas. | false | db |
 | Isi Buku | item_daftar | struktur_konten.cegah_daftar_tunggal | True | true | db |
 | Isi Buku | item_daftar | struktur_konten.cegah_posisi_paling_bawah | True | true | db |
 | Isi Buku | judul_bab | font.font_name | Times New Roman | true | db |
@@ -63,6 +61,8 @@ Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu mena
 | Isi Buku | judul_subbab | numbering.case | Title Case | true | db |
 | Isi Buku | judul_subbab | numbering.number_format | 1.1, 1.1.1, 1.1.1.1 | false | db |
 | Isi Buku | judul_subbab | paragraph.alignment | justify | true | db |
+| Isi Buku | judul_subbab | paragraph.indentation.left_indent | 0 | true | db |
+| Isi Buku | judul_subbab | paragraph.indentation.right_indent | 0 | true | db |
 | Isi Buku | judul_subbab | paragraph.hanging_max_cm | 2.5 | true | db |
 | Isi Buku | judul_subbab | paragraph.hanging_min_cm | 1.27 | true | db |
 | Isi Buku | judul_subbab | paragraph.spacing.after | 0 | true | db |
@@ -102,7 +102,9 @@ Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu mena
 | Isi Buku | paragraf | font.font_name | Times New Roman | true | db |
 | Isi Buku | paragraf | font.font_size | 12 | true | db |
 | Isi Buku | paragraf | paragraph.alignment | justify | true | db |
-| Isi Buku | paragraf | paragraph.first_line_indent | 1.27 | true | db |
+| Isi Buku | paragraf | paragraph.indentation.left_indent | 0 | true | db |
+| Isi Buku | paragraf | paragraph.indentation.right_indent | 0 | true | db |
+| Isi Buku | paragraf | paragraph.indentation.first_line_indent | 1.27 | true | db |
 | Isi Buku | paragraf | paragraph.spacing.after | 0 | true | db |
 | Isi Buku | paragraf | paragraph.spacing.before | 0 | true | db |
 | Isi Buku | paragraf | paragraph.spacing.line_spacing | 1.5 | true | db |

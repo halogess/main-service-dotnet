@@ -602,6 +602,56 @@ public partial class ValidationService
             }
         }
 
+        var expectedLeftIndent = rule?.Paragraph?.Indentation?.LeftIndent?.Value;
+        if (expectedLeftIndent.HasValue)
+        {
+            result.IncrementTotalChecks();
+            var leftCm = GetLeftIndentCm(format);
+
+            if (Math.Abs(leftCm - expectedLeftIndent.Value) <= 0.05m)
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "judul_subbab",
+                    Message = "Left indent judul subbab tidak sesuai",
+                    Expected = expectedLeftIndent.Value.ToString(CultureInfo.InvariantCulture) + " cm",
+                    Actual = leftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                    Evidence = evidence,
+                    Locations = locations
+                });
+            }
+        }
+
+        var expectedRightIndent = rule?.Paragraph?.Indentation?.RightIndent?.Value;
+        if (expectedRightIndent.HasValue)
+        {
+            result.IncrementTotalChecks();
+            var rightCm = GetRightIndentCm(format);
+
+            if (Math.Abs(rightCm - expectedRightIndent.Value) <= 0.05m)
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "judul_subbab",
+                    Message = "Right indent judul subbab tidak sesuai",
+                    Expected = expectedRightIndent.Value.ToString(CultureInfo.InvariantCulture) + " cm",
+                    Actual = rightCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                    Evidence = evidence,
+                    Locations = locations
+                });
+            }
+        }
+
         // Hanging Indent Range Validation
         var hangingMinCm = rule?.Paragraph?.HangingMinCm?.Value;
         var hangingMaxCm = rule?.Paragraph?.HangingMaxCm?.Value;

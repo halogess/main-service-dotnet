@@ -158,4 +158,49 @@ public class AturanControllerNormalizationTests
             """{"section":{"isi":{"value":"A4","is_editable":true}}}""",
             unchanged!.AturanDetailJsonValue);
     }
+
+    [Fact]
+    public async Task PatchAturanDetail_ShouldRejectLegacyJudulSubbabParagraphShape()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        db.Aturans.Add(new Aturan
+        {
+            AturanId = 1,
+            AturanVersi = "v1"
+        });
+        db.AturanDetails.Add(new AturanDetail
+        {
+            AturanDetailId = 11,
+            AturanId = 1,
+            AturanDetailKey = "judul_subbab",
+            AturanDetailJsonValue = """{"paragraph":{"alignment":{"value":"justify","is_editable":true,"is_hard_constraint":false},"indentation":{"left_indent":{"value":0,"is_editable":true,"is_hard_constraint":false},"right_indent":{"value":0,"is_editable":true,"is_hard_constraint":false}},"hanging_min_cm":{"value":1.27,"is_editable":true,"is_hard_constraint":false},"hanging_max_cm":{"value":2.5,"is_editable":true,"is_hard_constraint":false}}}"""
+        });
+        await db.SaveChangesAsync();
+
+        var controller = new AturanController(Mock.Of<IAturanService>(), db)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+        controller.HttpContext.Items["Role"] = "admin";
+
+        var request = new AturanDetailPatchRequest
+        {
+            details =
+            [
+                new AturanDetailPatchItem
+                {
+                    aturan_detail_id = 11,
+                    json_value = """{"paragraph":{"alignment":"justify","left_indent":0,"right_indent":0,"hanging_min_cm":1.27,"hanging_max_cm":2.5}}"""
+                }
+            ]
+        };
+
+        var result = await controller.PatchAturanDetail(1, request);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Contains("paragraph.indentation.left_indent/right_indent", badRequest.Value!.ToString());
+    }
 }

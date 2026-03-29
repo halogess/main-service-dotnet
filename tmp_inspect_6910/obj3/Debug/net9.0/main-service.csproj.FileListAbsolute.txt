@@ -1,0 +1,9 @@
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.csproj.AssemblyReference.cache
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\rpswa.dswa.cache.json
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.GeneratedMSBuildEditorConfig.editorconfig
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.AssemblyInfoInputs.cache
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.AssemblyInfo.cs
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.csproj.CoreCompileInputs.cache
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.MvcApplicationPartsAssemblyInfo.cs
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.MvcApplicationPartsAssemblyInfo.cache
+E:\main-service-dotnet\tmp_inspect_6910\obj3\Debug\net9.0\main-service.sourcelink.json

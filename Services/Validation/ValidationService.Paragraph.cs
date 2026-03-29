@@ -656,7 +656,7 @@ public partial class ValidationService
         }
 
         result.IncrementTotalChecks();
-        var expectedLeftIndent = leftIndentOverrideCm ?? rule?.Paragraph?.LeftIndent?.Value ?? 0m;
+        var expectedLeftIndent = leftIndentOverrideCm ?? rule?.Paragraph?.Indentation?.LeftIndent?.Value ?? 0m;
         var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
             ? format.DfpIndLeftTwips.Value
             : format.DfpIndStartTwips ?? 0;
@@ -683,7 +683,7 @@ public partial class ValidationService
             });
         }
 
-        var expectedFirstLineIndent = firstLineIndentOverrideCm ?? rule?.Paragraph?.FirstLineIndent?.Value;
+        var expectedFirstLineIndent = firstLineIndentOverrideCm ?? rule?.Paragraph?.Indentation?.FirstLineIndent?.Value;
         if (expectedFirstLineIndent.HasValue)
         {
             result.IncrementTotalChecks();
@@ -739,7 +739,7 @@ public partial class ValidationService
         }
 
         result.IncrementTotalChecks();
-        var expectedRightIndent = rule?.Paragraph?.RightIndent?.Value ?? 0m;
+        var expectedRightIndent = rule?.Paragraph?.Indentation?.RightIndent?.Value ?? 0m;
         var rightCm = GetRightIndentCm(format);
         if (Math.Abs(rightCm - expectedRightIndent) <= 0.05m)
         {

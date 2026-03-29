@@ -9,30 +9,6 @@ namespace ValidasiTugasAkhir.MainService.Controllers;
 [Route("api/[controller]")]
 public class BabController : ControllerBase
 {
-    private static readonly string[] PreferredImageExtensions =
-    {
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".webp",
-        ".gif",
-        ".bmp",
-        ".tif",
-        ".tiff"
-    };
-
-    private static readonly HashSet<string> AllowedImageExtensions = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".gif",
-        ".bmp",
-        ".tif",
-        ".tiff",
-        ".webp"
-    };
-
     private readonly KorektorBukuDbContext _db;
 
     public BabController(KorektorBukuDbContext db)
@@ -54,6 +30,7 @@ public class BabController : ControllerBase
                 b.BabId,
                 b.BukuId,
                 b.BabOrder,
+                b.BabImagesPath,
                 b.BabFilename,
                 b.BabSkor,
                 b.BabSkorMinimal,
@@ -115,6 +92,25 @@ public class BabController : ControllerBase
             select detail.KesalahanDetailId
         ).CountAsync();
 
+        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+        var fullStoragePath = Path.GetFullPath(storagePath);
+        var safeImageDirs = BuildBabImageDirectories(
+            storagePath,
+            fullStoragePath,
+            bab.BabImagesPath,
+            bukuOwner.MhsNrp,
+            bab.BukuId,
+            bab.BabOrder);
+        var fallbackPages = orderedKesalahan
+            .Select(x => x.HalamanKe)
+            .Where(page => page > 0)
+            .Distinct()
+            .OrderBy(page => page)
+            .ToList();
+        var availablePages = PreviewImageHelper.EnumerateAvailablePages(safeImageDirs);
+        if (availablePages.Count == 0 && fallbackPages.Count > 0)
+            availablePages = fallbackPages;
+
         return Ok(new
         {
             id = bab.BabId,
@@ -123,7 +119,74 @@ public class BabController : ControllerBase
             skor = bab.BabSkor,
             skor_minimal = bab.BabSkorMinimal,
             jumlah_kesalahan = jumlahKesalahan,
+            total_halaman = availablePages.Count,
+            available_pages = availablePages,
             kesalahan = kesalahanData
+        });
+    }
+
+    [HttpGet("{babId}/pages/{page:int:min(1)}/kesalahan-details")]
+    public async Task<IActionResult> GetKesalahanDetailsByBabPage(uint babId, int page)
+    {
+        var currentNrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
+
+        var bab = await _db.Babs
+            .AsNoTracking()
+            .Where(b => b.BabId == babId)
+            .Select(b => new { b.BabId, b.BukuId })
+            .FirstOrDefaultAsync();
+
+        if (bab == null)
+            return NotFound(new { message = "Bab tidak ditemukan" });
+
+        var bukuOwner = await _db.Bukus
+            .AsNoTracking()
+            .Where(b => (uint)b.BukuId == bab.BukuId)
+            .Select(b => b.MhsNrp)
+            .FirstOrDefaultAsync();
+
+        if (string.IsNullOrWhiteSpace(bukuOwner))
+            return NotFound(new { message = "Buku induk tidak ditemukan" });
+
+        if (role != "admin" && !string.Equals(bukuOwner, currentNrp, StringComparison.OrdinalIgnoreCase))
+            return Forbid();
+
+        var items = (await _db.Kesalahans
+                .AsNoTracking()
+                .Include(k => k.Details)
+                .Where(k => k.KesalahanRefTipe == KesalahanRefTipe.bab && k.KesalahanRefId == babId)
+                .ToListAsync())
+            .Select(k => new
+            {
+                Kesalahan = k,
+                SortY = GetSortYForPage(k.KesalahanLokasi, page)
+            })
+            .Where(x => x.SortY.HasValue)
+            .OrderBy(x => x.SortY!.Value)
+            .ThenBy(x => x.Kesalahan.KesalahanId)
+            .Select(x => new
+            {
+                kesalahan_id = x.Kesalahan.KesalahanId,
+                kategori = x.Kesalahan.KesalahanKategori,
+                details = x.Kesalahan.Details
+                    .OrderBy(d => d.KesalahanDetailId)
+                    .Select(d => new
+                    {
+                        id = d.KesalahanDetailId,
+                        judul = d.KesalahanDetailJudul,
+                        penjelasan = d.KesalahanDetailPenjelasan,
+                        steps = d.KesalahanDetailSteps,
+                        is_required = d.KesalahanIsRequired
+                    })
+                    .ToList()
+            })
+            .ToList();
+
+        return Ok(new
+        {
+            halaman_ke = page,
+            items
         });
     }
 
@@ -142,7 +205,7 @@ public class BabController : ControllerBase
             return BadRequest(new { message = "Nama image tidak valid" });
 
         var extension = Path.GetExtension(safeImageName);
-        if (!string.IsNullOrWhiteSpace(extension) && !AllowedImageExtensions.Contains(extension))
+        if (!PreviewImageHelper.IsAllowedImageExtension(extension))
             return BadRequest(new { message = "Ekstensi image tidak didukung" });
 
         var currentNrp = HttpContext.Items["Nrp"]?.ToString();
@@ -173,135 +236,55 @@ public class BabController : ControllerBase
 
         var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
         var fullStoragePath = Path.GetFullPath(storagePath);
-
-        var candidateDirs = new List<string>();
-        var configuredImagesDir = ResolveConfiguredImagesDirectory(storagePath, fullStoragePath, babInfo.BabImagesPath);
-        if (!string.IsNullOrWhiteSpace(configuredImagesDir))
-            candidateDirs.Add(configuredImagesDir);
-
-        var baseImagesDir = Path.GetFullPath(Path.Combine(
+        var safeCandidateDirs = BuildBabImageDirectories(
             storagePath,
-            "buku",
-            babInfo.MhsNrp!,
-            babInfo.BukuId.ToString(),
-            "images"));
-        if (babInfo.BabOrder.HasValue)
-        {
-            var byBabOrder = Path.GetFullPath(Path.Combine(baseImagesDir, babInfo.BabOrder.Value.ToString()));
-            candidateDirs.Add(byBabOrder);
-        }
-        candidateDirs.Add(baseImagesDir);
-
-        var safeCandidateDirs = new List<string>();
-        foreach (var dir in candidateDirs.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (!dir.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            safeCandidateDirs.Add(dir);
-        }
+            fullStoragePath,
+            babInfo.BabImagesPath,
+            babInfo.MhsNrp,
+            babInfo.BukuId,
+            babInfo.BabOrder);
 
         if (safeCandidateDirs.Count == 0)
             return BadRequest(new { message = "Path image tidak valid" });
 
-        var filePath = ResolveBabImageFile(safeCandidateDirs, safeImageName);
+        var filePath = PreviewImageHelper.ResolveImageFile(safeCandidateDirs, safeImageName);
         if (filePath == null)
             return NotFound(new { message = $"Image '{safeImageName}' tidak ditemukan" });
 
         if (!filePath.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { message = "Path image tidak valid" });
 
-        return PhysicalFile(filePath, GetImageContentType(filePath));
+        return PhysicalFile(filePath, PreviewImageHelper.GetImageContentType(filePath));
     }
 
     private static int NormalizeSortPage(int halamanKe)
         => halamanKe <= 0 ? int.MaxValue : halamanKe;
 
-    private static string? ResolveConfiguredImagesDirectory(string storagePath, string fullStoragePath, string? babImagesPath)
+    private static double? GetSortYForPage(string? lokasiJson, int requestedPage)
+        => ParseSortKeys(lokasiJson)
+            .Where(x => x.HalamanKe == requestedPage)
+            .Select(x => (double?)x.YTerkecil)
+            .FirstOrDefault();
+
+    private static IReadOnlyList<string> BuildBabImageDirectories(
+        string storagePath,
+        string fullStoragePath,
+        string? babImagesPath,
+        string nrp,
+        uint bukuId,
+        byte? babOrder)
     {
-        if (string.IsNullOrWhiteSpace(babImagesPath))
-            return null;
+        var candidateDirs = new List<string?>();
+        var configuredImagesDir = PreviewImageHelper.ResolveConfiguredImagesDirectory(storagePath, fullStoragePath, babImagesPath);
+        if (!string.IsNullOrWhiteSpace(configuredImagesDir))
+            candidateDirs.Add(configuredImagesDir);
 
-        var rawPath = babImagesPath.Trim();
-        var resolved = Path.IsPathRooted(rawPath)
-            ? Path.GetFullPath(rawPath)
-            : Path.GetFullPath(Path.Combine(storagePath, rawPath));
+        var baseImagesDir = Path.Combine(storagePath, "buku", nrp, bukuId.ToString(), "images");
+        if (babOrder.HasValue)
+            candidateDirs.Add(Path.Combine(baseImagesDir, babOrder.Value.ToString()));
 
-        if (!resolved.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase))
-            return null;
-
-        var extension = Path.GetExtension(resolved);
-        if (!string.IsNullOrWhiteSpace(extension) && AllowedImageExtensions.Contains(extension))
-        {
-            var dir = Path.GetDirectoryName(resolved);
-            if (string.IsNullOrWhiteSpace(dir))
-                return null;
-
-            resolved = Path.GetFullPath(dir);
-            if (!resolved.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase))
-                return null;
-        }
-
-        return resolved;
-    }
-
-    private static string? ResolveBabImageFile(IEnumerable<string> candidateDirs, string imageName)
-    {
-        var extension = Path.GetExtension(imageName);
-        var stem = Path.GetFileNameWithoutExtension(imageName);
-        var hasExtension = !string.IsNullOrWhiteSpace(extension);
-
-        foreach (var dir in candidateDirs.Where(Directory.Exists))
-        {
-            if (hasExtension)
-            {
-                var exact = Path.Combine(dir, imageName);
-                if (System.IO.File.Exists(exact))
-                    return exact;
-
-                if (!string.IsNullOrWhiteSpace(stem))
-                {
-                    foreach (var ext in PreferredImageExtensions.Where(ext => !ext.Equals(extension, StringComparison.OrdinalIgnoreCase)))
-                    {
-                        var fallback = Path.Combine(dir, $"{stem}{ext}");
-                        if (System.IO.File.Exists(fallback))
-                            return fallback;
-                    }
-                }
-
-                continue;
-            }
-
-            foreach (var ext in PreferredImageExtensions)
-            {
-                var candidate = Path.Combine(dir, $"{imageName}{ext}");
-                if (System.IO.File.Exists(candidate))
-                    return candidate;
-            }
-
-            var direct = Path.Combine(dir, imageName);
-            if (System.IO.File.Exists(direct))
-                return direct;
-        }
-
-        return null;
-    }
-
-    private static string GetImageContentType(string filePath)
-    {
-        var extension = Path.GetExtension(filePath).ToLowerInvariant();
-        return extension switch
-        {
-            ".png" => "image/png",
-            ".jpg" => "image/jpeg",
-            ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".bmp" => "image/bmp",
-            ".tif" => "image/tiff",
-            ".tiff" => "image/tiff",
-            ".webp" => "image/webp",
-            _ => "application/octet-stream"
-        };
+        candidateDirs.Add(baseImagesDir);
+        return PreviewImageHelper.BuildSafeCandidateDirectories(fullStoragePath, candidateDirs);
     }
 
     private static List<(int HalamanKe, double YTerkecil)> ParseSortKeys(string? lokasiJson)

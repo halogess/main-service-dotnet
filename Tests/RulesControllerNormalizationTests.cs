@@ -90,4 +90,31 @@ public class RulesControllerNormalizationTests
             """{"continue":{"value":false,"is_editable":false,"is_hard_constraint":false},"different_first_page":{"value":"True","is_editable":false,"is_hard_constraint":false}}""",
             details[1].AturanDetailJsonValue);
     }
+
+    [Fact]
+    public async Task Create_ShouldRejectLegacyParagrafParagraphShape()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        var controller = new RulesController(db);
+
+        var request = new RulesCreateRequest
+        {
+            aturan_versi = "v1",
+            details =
+            [
+                new RulesDetailRequest
+                {
+                    aturan_detail_kategori = "Isi Buku",
+                    aturan_detail_key = "paragraf",
+                    aturan_detail_json_value = """{"paragraph":{"alignment":"justify","left_indent":0,"right_indent":0,"first_line_indent":1.27,"spacing":{"line_spacing":1.5,"before":0,"after":0}}}"""
+                }
+            ]
+        };
+
+        var result = await controller.Create(request);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Contains("paragraph.indentation.left_indent/right_indent/first_line_indent", badRequest.Value!.ToString());
+        Assert.Empty(db.AturanDetails);
+    }
 }

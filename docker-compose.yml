@@ -8,6 +8,8 @@ services:
       - ASPNETCORE_ENVIRONMENT=Development
       - ASPNETCORE_HTTP_PORTS=5062
       - STORAGE_PATH=/app/storage
+      - DOKUMEN_IMPORT_HOST_PATH=${DOKUMEN_IMPORT_SOURCE_HOST_PATH}
+      - DOKUMEN_IMPORT_CONTAINER_PATH=/app/import-source
       - ConnectionStrings__SttsDbConnection=${ConnectionStrings__SttsDbConnection}
       - ConnectionStrings__KorektorBukuDbConnection=${ConnectionStrings__KorektorBukuDbConnection}
       - Auth__JwtSecret=${Auth__JwtSecret}
@@ -47,7 +49,8 @@ services:
       - Gemini__EnableLlm=${Gemini__EnableLlm}
       - AllowedHosts=${AllowedHosts}
     volumes:
-      - ${VOLUME_BASE_PATH}:/app/storage
+      - "${VOLUME_BASE_PATH}:/app/storage"
+      - "${DOKUMEN_IMPORT_SOURCE_HOST_PATH}:/app/import-source:ro"
     networks:
       - validasi-ta-network
     extra_hosts:

@@ -36,8 +36,6 @@ Sumber nilai DB diambil dari `rule.txt` (terbaru). Hardcoded diambil dari `docs/
 | Item Daftar | Paragraph | spacing.after | 0 | True | Db |
 | Item Daftar | Paragraph | spacing.before | 0 | True | Db |
 | Item Daftar | Paragraph | spacing.line spacing | 1.5 | True | Db |
-| Item Daftar | Penggunaan Poin | bullets | Digunakan untuk menyajikan daftar yang seluruh itemnya bersifat setara dan tidak memerlukan urutan tertentu. | False | Db |
-| Item Daftar | Penggunaan Poin | numbering | Digunakan untuk menyajikan daftar yang item-itemnya memiliki urutan atau tahapan yang jelas. | False | Db |
 | Item Daftar | Struktur Konten | cegah daftar tunggal | True | True | Db |
 | Item Daftar | Struktur Konten | cegah posisi paling bawah | True | True | Db |
 | Judul Bab | Font | font name | Times New Roman | True | Db |
@@ -63,6 +61,8 @@ Sumber nilai DB diambil dari `rule.txt` (terbaru). Hardcoded diambil dari `docs/
 | Judul Subbab | Numbering | case | Title Case | True | Db |
 | Judul Subbab | Numbering | number format | 1.1, 1.1.1, 1.1.1.1 | False | Db |
 | Judul Subbab | Paragraph | alignment | justify | True | Db |
+| Judul Subbab | Paragraph | indentation.left indent | 0 | True | Db |
+| Judul Subbab | Paragraph | indentation.right indent | 0 | True | Db |
 | Judul Subbab | Paragraph | hanging max cm | 2.5 | True | Db |
 | Judul Subbab | Paragraph | hanging min cm | 1.27 | True | Db |
 | Judul Subbab | Paragraph | spacing.after | 0 | True | Db |
@@ -166,7 +166,9 @@ Sumber nilai DB diambil dari `rule.txt` (terbaru). Hardcoded diambil dari `docs/
 | Paragraf | Font | font name | Times New Roman | True | Db |
 | Paragraf | Font | font size | 12 | True | Db |
 | Paragraf | Paragraph | alignment | justify | True | Db |
-| Paragraf | Paragraph | first line indent | 1.27 | True | Db |
+| Paragraf | Paragraph | indentation.left indent | 0 | True | Db |
+| Paragraf | Paragraph | indentation.right indent | 0 | True | Db |
+| Paragraf | Paragraph | indentation.first line indent | 1.27 | True | Db |
 | Paragraf | Paragraph | spacing.after | 0 | True | Db |
 | Paragraf | Paragraph | spacing.before | 0 | True | Db |
 | Paragraf | Paragraph | spacing.line spacing | 1.5 | True | Db |

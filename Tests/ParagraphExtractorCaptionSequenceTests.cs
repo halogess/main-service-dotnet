@@ -32,6 +32,11 @@ public class ParagraphExtractorCaptionSequenceTests
 
             var content = extractor.ExtractParagraphContentSorted(paragraph, numberingPart, counters);
 
+            Assert.Equal("text", content[0]?["type"]?.ToString());
+            Assert.Equal("Gambar 3. ", content[0]?["value"]?.ToString());
+            Assert.Equal("field", content[1]?["type"]?.ToString());
+            Assert.Equal("1", content[1]?["value"]?.ToString());
+
             Assert.DoesNotContain(content, item =>
                 item?["type"]?.ToString() == "text" &&
                 string.Equals(item?["value"]?.ToString(), expectedLabel, StringComparison.Ordinal));

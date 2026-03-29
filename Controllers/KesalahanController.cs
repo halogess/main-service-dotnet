@@ -106,12 +106,37 @@ public class KesalahanController : ControllerBase
     [HttpGet("{id:int:min(1)}")]
     public async Task<IActionResult> GetKesalahanById(int id)
     {
+        var currentNrp = HttpContext.Items["Nrp"]?.ToString();
+        var role = HttpContext.Items["Role"]?.ToString();
         var kesalahan = await _db.Kesalahans
             .Include(k => k.Details)
             .FirstOrDefaultAsync(k => k.KesalahanId == (uint)id);
 
         if (kesalahan == null)
             return NotFound(new { message = "Kesalahan tidak ditemukan" });
+
+        if (!string.Equals(role, "admin", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(currentNrp))
+                return Unauthorized(new { message = "NRP tidak ditemukan" });
+
+            var isAuthorized = kesalahan.KesalahanRefTipe switch
+            {
+                KesalahanRefTipe.dokumen => await _db.Dokumens
+                    .AsNoTracking()
+                    .AnyAsync(d => d.DokumenId == (int)kesalahan.KesalahanRefId && d.MhsNrp == currentNrp),
+                KesalahanRefTipe.bab => await (
+                    from bab in _db.Babs.AsNoTracking()
+                    join buku in _db.Bukus.AsNoTracking() on bab.BukuId equals (uint)buku.BukuId
+                    where bab.BabId == kesalahan.KesalahanRefId && buku.MhsNrp == currentNrp
+                    select bab.BabId
+                ).AnyAsync(),
+                _ => false
+            };
+
+            if (!isAuthorized)
+                return Forbid();
+        }
 
         return Ok(new
         {

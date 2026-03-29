@@ -212,23 +212,6 @@ public class AturanController : ControllerBase
         if (detailIds.Count != rawDetailIds.Count)
             return BadRequest(new { message = "aturan_detail_id harus unik untuk setiap detail" });
 
-        var normalizedJsonByDetailId = new Dictionary<uint, string>();
-        foreach (var detail in request.details)
-        {
-            if (detail.aturan_detail_id is not { } detailId || detail.json_value == null)
-                continue;
-
-            if (!AturanDetailJsonNormalizer.TryNormalize(detail.json_value, out var normalizedJson, out var errorMessage))
-            {
-                return BadRequest(new
-                {
-                    message = $"json_value tidak valid untuk aturan_detail_id {detailId}: {errorMessage}"
-                });
-            }
-
-            normalizedJsonByDetailId[detailId] = normalizedJson!;
-        }
-
         var existingDetails = await _db.AturanDetails
             .Where(d => d.AturanId == id && detailIds.Contains(d.AturanDetailId))
             .ToListAsync();
@@ -240,6 +223,37 @@ public class AturanController : ControllerBase
         }
 
         var existingById = existingDetails.ToDictionary(d => d.AturanDetailId);
+        var normalizedJsonByDetailId = new Dictionary<uint, string>();
+        foreach (var detail in request.details)
+        {
+            if (detail.aturan_detail_id is not { } detailId)
+                continue;
+
+            var existingDetail = existingById[detailId];
+            var effectiveKey = detail.key ?? existingDetail.AturanDetailKey;
+            var effectiveJson = existingDetail.AturanDetailJsonValue;
+            if (detail.json_value != null)
+            {
+                if (!AturanDetailJsonNormalizer.TryNormalize(detail.json_value, out var normalizedJson, out var errorMessage))
+                {
+                    return BadRequest(new
+                    {
+                        message = $"json_value tidak valid untuk aturan_detail_id {detailId}: {errorMessage}"
+                    });
+                }
+
+                effectiveJson = normalizedJson;
+                normalizedJsonByDetailId[detailId] = normalizedJson!;
+            }
+
+            if (!AturanDetailShapeValidator.TryValidate(effectiveKey, effectiveJson, out var shapeErrorMessage))
+            {
+                return BadRequest(new
+                {
+                    message = $"json_value tidak sesuai schema untuk aturan_detail_id {detailId}: {shapeErrorMessage}"
+                });
+            }
+        }
         foreach (var d in request.details)
         {
             var existing = existingById[d.aturan_detail_id!.Value];

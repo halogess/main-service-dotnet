@@ -40,6 +40,7 @@ builder.Services.AddScoped<IMahasiswaService, MahasiswaService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IFileService, FileService>();
 builder.Services.AddScoped<IDokumenService, DokumenService>();
+builder.Services.AddScoped<IDokumenImportService, DokumenImportService>();
 builder.Services.AddScoped<IDokumenHistoryPurgeService, DokumenHistoryPurgeService>();
 builder.Services.AddScoped<IBukuService, BukuService>();
 builder.Services.AddScoped<IBukuArchiveService, BukuArchiveService>();

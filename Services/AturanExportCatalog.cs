@@ -32,19 +32,19 @@ internal static class AturanExportCatalog
             "Isi Buku",
             "judul_subbab",
             """
-            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":14,"is_editable":true},"font_style":{"bold":{"value":true,"is_editable":true},"italic":{"value":false,"is_editable":true},"underline":{"value":false,"is_editable":true}}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"hanging_min_cm":{"value":1.27,"is_editable":true},"hanging_max_cm":{"value":2.5,"is_editable":true},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"numbering":{"number_format":{"value":"1.1, 1.1.1, 1.1.1.1","is_editable":false},"case":{"value":"Title Case","is_editable":true}},"struktur_konten":{"minimal_paragraf_setelah":{"value":1,"is_editable":true},"cegah_posisi_paling_bawah":{"value":true,"is_editable":true},"minimal_subbab_level_sama":{"value":2,"is_editable":true}}}
+            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":14,"is_editable":true},"font_style":{"bold":{"value":true,"is_editable":true},"italic":{"value":false,"is_editable":true},"underline":{"value":false,"is_editable":true}}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"indentation":{"left_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true}},"hanging_min_cm":{"value":1.27,"is_editable":true},"hanging_max_cm":{"value":2.5,"is_editable":true},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"numbering":{"number_format":{"value":"1.1, 1.1.1, 1.1.1.1","is_editable":false},"case":{"value":"Title Case","is_editable":true}},"struktur_konten":{"minimal_paragraf_setelah":{"value":1,"is_editable":true},"cegah_posisi_paling_bawah":{"value":true,"is_editable":true},"minimal_subbab_level_sama":{"value":2,"is_editable":true}}}
             """),
         new(
             "Isi Buku",
             "paragraf",
             """
-            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"left_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true},"first_line_indent":{"value":1.27,"is_editable":true},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"struktur_konten":{"minimal_kalimat":{"value":3,"is_editable":true}}}
+            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"indentation":{"left_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true},"first_line_indent":{"value":1.27,"is_editable":true}},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"struktur_konten":{"minimal_kalimat":{"value":3,"is_editable":true}}}
             """),
         new(
             "Isi Buku",
             "item_daftar",
             """
-            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"indentation":{"left_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true},"hanging":{"value":0.75,"is_editable":true}},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}}}
+            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"indentation":{"left_indent":{"value":0,"is_editable":true},"right_indent":{"value":0,"is_editable":true},"hanging":{"value":0.75,"is_editable":true}},"spacing":{"line_spacing":{"value":1.5,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"struktur_konten":{"cegah_posisi_paling_bawah":{"value":true,"is_editable":true},"cegah_daftar_tunggal":{"value":true,"is_editable":true}}}
             """),
         new(
             "Isi Buku",

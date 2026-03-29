@@ -673,6 +673,12 @@ public class ParagraphExtractor
                 current.FirstResultRun = run;
             current.ResultBuilder.Append(text);
         }
+
+        void FlushPendingText()
+        {
+            FlushAccumulatedRun();
+            FlushText();
+        }
         
         void ProcessElement(OpenXmlElement elem, bool skipTextBox = false)
         {
@@ -810,14 +816,14 @@ public class ParagraphExtractor
             // Math extraction delegated to MathExtractor
             else if (elem is DocumentFormat.OpenXml.Math.OfficeMath om)
             {
-                FlushText();
+                FlushPendingText();
                 var result = MathExtractor.ExtractMathContent(om);
                 if (!string.IsNullOrWhiteSpace(result))
                     regularItems.Add((new JObject { ["type"] = "math", ["text"] = result }, itemIndex++));
             }
             else if (elem is DocumentFormat.OpenXml.Math.Paragraph mathPara)
             {
-                FlushText();
+                FlushPendingText();
                 foreach (var oMath in mathPara.Elements<DocumentFormat.OpenXml.Math.OfficeMath>())
                 {
                     var result = MathExtractor.ExtractMathContent(oMath);
@@ -853,7 +859,7 @@ public class ParagraphExtractor
                 if (fieldStack.Count > 0)
                     return;
 
-                FlushText();
+                FlushPendingText();
                 
                 // Extract drawing format and save
                 ulong? drawingFormatId = null;
@@ -901,7 +907,7 @@ public class ParagraphExtractor
                 if (fieldStack.Count > 0)
                     return;
 
-                FlushText();
+                FlushPendingText();
                 
                 // Extract VML picture format and save
                 ulong? pictFormatId = null;
@@ -935,7 +941,7 @@ public class ParagraphExtractor
                 if (fieldStack.Count > 0)
                     return;
 
-                FlushText();
+                FlushPendingText();
                 var shapeData = ExtractTextBoxAsShape(txbx, elem.Parent, numberingPart, numberingCounters);
                 if (shapeData != null)
                     regularItems.Add((shapeData, itemIndex++));
@@ -943,7 +949,7 @@ public class ParagraphExtractor
             // === SIMPLE FIELD (w:fldSimple) ===
             else if (elem is SimpleField simpleField)
             {
-                FlushText();
+                FlushPendingText();
                 
                 var instrText = simpleField.Instruction?.Value ?? "";
                 var resultText = simpleField.InnerText;
@@ -998,7 +1004,7 @@ public class ParagraphExtractor
                 if (fldType == FieldCharValues.Begin)
                 {
                     // Start of complex field
-                    FlushText();
+                    FlushPendingText();
                     StartField(fieldChar);
                 }
                 else if (fldType == FieldCharValues.Separate)

@@ -33,6 +33,7 @@ Catatan: aturan numerik (margin, font size, spacing, dll) diambil dari Aturan/At
 | Judul Bab | paragraf_sebelum_subbab | Jika `struktur_konten.min_satu_paragraf_sebelum_subbab` true, harus ada minimal 1 paragraf antara judul bab dan subbab pertama. | diambil dari aturan.txt |
 | Judul Subbab | font | Font name/size/bold/italic/underline sesuai `font`. | diambil dari aturan.txt |
 | Judul Subbab | alignment | Alignment judul subbab sesuai `paragraph.alignment`. | diambil dari aturan.txt |
+| Judul Subbab | left_right_indent | Left/right indent judul subbab sesuai `paragraph.indentation.left_indent/right_indent`. | diambil dari aturan.txt |
 | Judul Subbab | hanging_indent | Hanging indent harus berada dalam rentang `paragraph.hanging_min_cm` - `paragraph.hanging_max_cm` (toleransi ~0.5 mm). | diambil dari aturan.txt |
 | Judul Subbab | numbering_multilevel | Jika aturan hanging aktif, judul subbab harus menggunakan numbering (multilevel list). | hardcoded/derived |
 | Judul Subbab | line_spacing | Line spacing judul subbab sesuai `paragraph.spacing.line_spacing`. | diambil dari aturan.txt |
@@ -47,7 +48,7 @@ Catatan: aturan numerik (margin, font size, spacing, dll) diambil dari Aturan/At
 | Paragraf | font_size | Ukuran font paragraf sesuai `font.font_size`. | diambil dari aturan.txt |
 | Paragraf | alignment | Alignment paragraf sesuai `paragraph.alignment`. | diambil dari aturan.txt |
 | Paragraf | left_indent_after_list | Paragraf setelah list harus memiliki left indent sesuai aturan list/hanging yang dihitung dari item daftar terakhir. | hardcoded/derived |
-| Paragraf | first_line_indent | First line indent sesuai `paragraph.first_line_indent` (atau override setelah list). | diambil dari aturan.txt |
+| Paragraf | indentation | Left/right/first line indent sesuai `paragraph.indentation.left_indent/right_indent/first_line_indent` (atau override setelah list). | diambil dari aturan.txt |
 | Paragraf | hanging_indent_after_list | Jika override setelah list aktif, hanging indent harus sesuai nilai yang dihitung. | hardcoded/derived |
 | Paragraf | line_spacing | Line spacing paragraf sesuai `paragraph.spacing.line_spacing`. | diambil dari aturan.txt |
 | Paragraf | spacing_before_after | Spacing before/after paragraf sesuai `paragraph.spacing.before/after` dan autospacing harus false. | diambil dari aturan.txt |

@@ -21,6 +21,7 @@ Klasifikasi: "diambil dari aturan.txt" berarti rule dibaca dari Aturan/AturanDet
 | Judul Bab | paragraf_sebelum_subbab | Jika `struktur_konten.min_satu_paragraf_sebelum_subbab` true, harus ada minimal 1 paragraf antara judul bab dan subbab pertama. | diambil dari aturan.txt |
 | Judul Subbab | font | Font name/size/bold/italic/underline sesuai `font`. | diambil dari aturan.txt |
 | Judul Subbab | alignment | Alignment judul subbab sesuai `paragraph.alignment`. | diambil dari aturan.txt |
+| Judul Subbab | left_right_indent | Left/right indent judul subbab sesuai `paragraph.indentation.left_indent/right_indent`. | diambil dari aturan.txt |
 | Judul Subbab | hanging_indent | Hanging indent harus berada dalam rentang `paragraph.hanging_min_cm` - `paragraph.hanging_max_cm` (toleransi ~0.5 mm). | diambil dari aturan.txt |
 | Judul Subbab | line_spacing | Line spacing judul subbab sesuai `paragraph.spacing.line_spacing`. | diambil dari aturan.txt |
 | Judul Subbab | spacing_before_after | Spacing before/after judul subbab sesuai `paragraph.spacing.before/after`. | diambil dari aturan.txt |
@@ -31,7 +32,7 @@ Klasifikasi: "diambil dari aturan.txt" berarti rule dibaca dari Aturan/AturanDet
 | Paragraf | font_name | Font paragraf sesuai `font.font_name`. | diambil dari aturan.txt |
 | Paragraf | font_size | Ukuran font paragraf sesuai `font.font_size`. | diambil dari aturan.txt |
 | Paragraf | alignment | Alignment paragraf sesuai `paragraph.alignment`. | diambil dari aturan.txt |
-| Paragraf | first_line_indent | First line indent sesuai `paragraph.first_line_indent` (atau override setelah list). | diambil dari aturan.txt |
+| Paragraf | indentation | Left/right/first line indent sesuai `paragraph.indentation.left_indent/right_indent/first_line_indent` (atau override setelah list). | diambil dari aturan.txt |
 | Paragraf | line_spacing | Line spacing paragraf sesuai `paragraph.spacing.line_spacing`. | diambil dari aturan.txt |
 | Paragraf | spacing_before_after | Spacing before/after paragraf sesuai `paragraph.spacing.before/after` dan autospacing harus false. | diambil dari aturan.txt |
 | Item Daftar | font_name | Font item daftar sesuai `font.font_name`. | diambil dari aturan.txt |

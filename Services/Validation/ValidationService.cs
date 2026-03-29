@@ -355,6 +355,9 @@ public class SubchapterParagraphRule
     [JsonPropertyName("alignment")]
     public RuleValue<string>? Alignment { get; set; }
 
+    [JsonPropertyName("indentation")]
+    public ParagraphIndentationRule? Indentation { get; set; }
+
     [JsonPropertyName("hanging_min_cm")]
     public DecimalRuleValue? HangingMinCm { get; set; }
 
@@ -410,6 +413,15 @@ public class ParagraphFormatRule
     [JsonPropertyName("alignment")]
     public RuleValue<string>? Alignment { get; set; }
 
+    [JsonPropertyName("indentation")]
+    public ParagraphIndentationRule? Indentation { get; set; }
+
+    [JsonPropertyName("spacing")]
+    public TitleParagraphSpacingRule? Spacing { get; set; }
+}
+
+public class ParagraphIndentationRule
+{
     [JsonPropertyName("left_indent")]
     public DecimalRuleValue? LeftIndent { get; set; }
 
@@ -418,9 +430,6 @@ public class ParagraphFormatRule
 
     [JsonPropertyName("first_line_indent")]
     public DecimalRuleValue? FirstLineIndent { get; set; }
-
-    [JsonPropertyName("spacing")]
-    public TitleParagraphSpacingRule? Spacing { get; set; }
 }
 
 public class ParagraphContentStructureRule

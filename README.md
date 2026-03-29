@@ -63,7 +63,6 @@ Auth__AppName=ta_korektor_buku
 # Adobe PDF Services
 Adobe__ClientId=your-adobe-client-id
 Adobe__ClientSecret=your-adobe-client-secret
-Adobe__TokenUrl=https://pdf-services-ue1.adobe.io/token
 Adobe__ApiBaseUrl=https://pdf-services-ue1.adobe.io
 ```
 

@@ -6,7 +6,6 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public interface IPdfConversionService
 {
-    Task<byte[]> ConvertDocxToPdf(string docxFilePath);
     Task<byte[]> ConvertDocxToPdfWithCredential(string docxFilePath, string clientId, string clientSecret, int? adobe_credentials_id = null, uint? antrian_id = null);
 }
 
@@ -26,19 +25,12 @@ public class PdfConversionService : IPdfConversionService
         _serviceProvider = serviceProvider;
     }
 
-    public async Task<byte[]> ConvertDocxToPdf(string docxFilePath)
-    {
-        var clientId = _configuration["Adobe:ClientId"] ?? throw new InvalidOperationException("Adobe:ClientId not configured");
-        var clientSecret = _configuration["Adobe:ClientSecret"] ?? throw new InvalidOperationException("Adobe:ClientSecret not configured");
-        return await ConvertDocxToPdfWithCredential(docxFilePath, clientId, clientSecret);
-    }
-
     public async Task<byte[]> ConvertDocxToPdfWithCredential(string docxFilePath, string clientId, string clientSecret, int? adobe_credentials_id = null, uint? antrian_id = null)
     {
         _logger.LogInformation("Memulai konversi DOCX ke PDF: {FilePath}, Antrian ID: {AntrianId}", docxFilePath, antrian_id);
-        
-        var tokenUrl = _configuration["Adobe:TokenUrl"];
+
         var apiBaseUrl = _configuration["Adobe:ApiBaseUrl"];
+        var tokenUrl = BuildAdobeTokenUrl(apiBaseUrl);
 
         if (string.IsNullOrEmpty(clientId) || string.IsNullOrEmpty(clientSecret) || string.IsNullOrEmpty(tokenUrl) || string.IsNullOrEmpty(apiBaseUrl))
         {
@@ -59,13 +51,13 @@ public class PdfConversionService : IPdfConversionService
 
         var accessToken = _tokenCache[cacheKey].AccessToken;
         
-        var (assetId, uploadUri) = await CreateUploadUri(accessToken, apiBaseUrl, adobe_credentials_id, antrian_id);
+        var (assetId, uploadUri) = await CreateUploadUri(accessToken, clientId, apiBaseUrl, adobe_credentials_id, antrian_id);
         _logger.LogInformation("Upload dokumen ke Adobe: AssetID={AssetId}", assetId);
         await UploadDocument(uploadUri, docxFilePath, adobe_credentials_id, antrian_id);
         
-        var jobId = await CreateConversionJob(accessToken, assetId, apiBaseUrl, adobe_credentials_id, antrian_id);
+        var jobId = await CreateConversionJob(accessToken, clientId, assetId, apiBaseUrl, adobe_credentials_id, antrian_id);
         _logger.LogInformation("Menunggu job selesai: {JobId}", jobId);
-        var downloadUri = await PollJobStatus(accessToken, jobId, adobe_credentials_id, antrian_id);
+        var downloadUri = await PollJobStatus(accessToken, clientId, jobId, adobe_credentials_id, antrian_id);
         
         var pdfBytes = await DownloadPdf(downloadUri, accessToken, adobe_credentials_id, antrian_id);
         _logger.LogInformation("Konversi selesai: {Size} bytes", pdfBytes.Length);
@@ -104,9 +96,8 @@ public class PdfConversionService : IPdfConversionService
         public int expires_in { get; set; }
     }
 
-    private async Task<(string assetId, string uploadUri)> CreateUploadUri(string accessToken, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null)
+    private async Task<(string assetId, string uploadUri)> CreateUploadUri(string accessToken, string clientId, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null)
     {
-        var clientId = _configuration["Adobe:ClientId"];
         var endpoint = $"{apiBaseUrl}/assets";
         var startTime = DateTime.Now;
         
@@ -149,9 +140,8 @@ public class PdfConversionService : IPdfConversionService
         response.EnsureSuccessStatusCode();
     }
 
-    private async Task<string> CreateConversionJob(string accessToken, string assetId, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null)
+    private async Task<string> CreateConversionJob(string accessToken, string clientId, string assetId, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null)
     {
-        var clientId = _configuration["Adobe:ClientId"];
         var endpoint = $"{apiBaseUrl}/operation/createpdf";
         var startTime = DateTime.Now;
         
@@ -171,11 +161,10 @@ public class PdfConversionService : IPdfConversionService
         return location;
     }
 
-    private async Task<string> PollJobStatus(string accessToken, string jobUri, int? adobe_credentials_id, uint? antrian_id = null)
+    private async Task<string> PollJobStatus(string accessToken, string clientId, string jobUri, int? adobe_credentials_id, uint? antrian_id = null)
     {
         while (true)
         {
-            var clientId = _configuration["Adobe:ClientId"];
             var startTime = DateTime.Now;
             
             var request = new HttpRequestMessage(HttpMethod.Get, jobUri);
@@ -245,6 +234,14 @@ public class PdfConversionService : IPdfConversionService
         {
             _logger.LogError(ex, "Failed to log API call for antrian_id: {AntrianId}", antrian_id);
         }
+    }
+
+    private static string? BuildAdobeTokenUrl(string? apiBaseUrl)
+    {
+        if (string.IsNullOrWhiteSpace(apiBaseUrl))
+            return null;
+
+        return apiBaseUrl.TrimEnd('/') + "/token";
     }
     
     private string GetActivityFromEndpoint(string endpoint, string method)

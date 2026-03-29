@@ -1,12 +1,7 @@
-using Google.Apis.Auth.OAuth2;
-using Google.Apis.Gmail.v1;
-using Google.Apis.Gmail.v1.Data;
-using Google.Apis.Services;
 using MailKit.Net.Smtp;
 using MailKit.Security;
 using MimeKit;
 using MimeKit.Text;
-using System.Text;
 
 namespace ValidasiTugasAkhir.MainService.Services;
 
@@ -37,56 +32,38 @@ public interface IEmailService
 }
 
 /// <summary>
-/// Email Service dengan dukungan:
-/// 1. Gmail API (Service Account) - Recommended untuk background service
-/// 2. Gmail API (OAuth) - Untuk user consent flow
-/// 3. SMTP Fallback - Jika Gmail API tidak dikonfigurasi
+/// Email Service berbasis SMTP.
 /// </summary>
 public class EmailService : IEmailService
 {
     private readonly IConfiguration _configuration;
     private readonly ILogger<EmailService> _logger;
-    
-    // Gmail API Settings
-    private readonly string? _serviceAccountJsonPath;
-    private readonly string? _delegatedUserEmail;
-    private readonly bool _useGmailApi;
-    
-    // SMTP Settings (fallback)
+
     private readonly string _smtpHost;
     private readonly int _smtpPort;
     private readonly bool _useSsl;
     private readonly string? _smtpSenderEmail;
     private readonly string _senderName;
     private readonly string? _smtpSenderPassword;
-
-    private GmailService? _gmailService;
+    private readonly string _dashboardUrl;
 
     public EmailService(IConfiguration configuration, ILogger<EmailService> logger)
     {
         _configuration = configuration;
         _logger = logger;
-        
-        // Gmail API Configuration
-        _serviceAccountJsonPath = _configuration["Email:ServiceAccountJsonPath"];
-        _delegatedUserEmail = _configuration["Email:DelegatedUserEmail"];
-        _useGmailApi = !string.IsNullOrEmpty(_serviceAccountJsonPath) && 
-                       !string.IsNullOrEmpty(_delegatedUserEmail);
-        
-        // SMTP Configuration (fallback)
+
         _smtpHost = _configuration["Email:SmtpHost"] ?? "smtp.gmail.com";
         _smtpPort = int.Parse(_configuration["Email:SmtpPort"] ?? "587");
         _useSsl = bool.Parse(_configuration["Email:UseSsl"] ?? "true");
         _smtpSenderEmail = _configuration["Email:SenderEmail"];
         _senderName = _configuration["Email:SenderName"] ?? "Validasi Tugas Akhir";
         _smtpSenderPassword = _configuration["Email:SenderPassword"];
-        
-        if (_useGmailApi)
-        {
-            _logger.LogInformation("EmailService dikonfigurasi menggunakan Gmail API dengan Service Account");
-            InitializeGmailServiceAsync().GetAwaiter().GetResult();
-        }
-        else if (!string.IsNullOrEmpty(_smtpSenderEmail) && !string.IsNullOrEmpty(_smtpSenderPassword))
+        _dashboardUrl = _configuration["Email:DashboardUrl"] ?? "http://localhost:5173/mahasiswa";
+
+        var hasSmtpConfig = !string.IsNullOrEmpty(_smtpSenderEmail) &&
+                            !string.IsNullOrEmpty(_smtpSenderPassword);
+
+        if (hasSmtpConfig)
         {
             _logger.LogInformation("EmailService dikonfigurasi menggunakan SMTP");
         }
@@ -94,46 +71,6 @@ public class EmailService : IEmailService
         {
             _logger.LogWarning("EmailService tidak dikonfigurasi dengan benar. Email tidak akan terkirim.");
         }
-    }
-
-    /// <summary>
-    /// Initialize Gmail Service dengan Service Account
-    /// </summary>
-    private Task InitializeGmailServiceAsync()
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(_serviceAccountJsonPath) || !File.Exists(_serviceAccountJsonPath))
-            {
-                _logger.LogError("Service Account JSON file tidak ditemukan: {Path}", _serviceAccountJsonPath);
-                return Task.CompletedTask;
-            }
-
-            // Load Service Account credentials
-            var serviceAccountCredential = CredentialFactory
-                .FromFile<ServiceAccountCredential>(_serviceAccountJsonPath);
-
-            var credential = serviceAccountCredential
-                .ToGoogleCredential()
-                .CreateScoped(GmailService.Scope.GmailSend)
-                .CreateWithUser(_delegatedUserEmail); // Domain-wide delegation
-
-            // Create Gmail Service
-            _gmailService = new GmailService(new BaseClientService.Initializer
-            {
-                HttpClientInitializer = credential,
-                ApplicationName = "Validasi Tugas Akhir"
-            });
-
-            _logger.LogInformation("Gmail Service berhasil diinisialisasi untuk user: {User}", _delegatedUserEmail);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Gagal menginisialisasi Gmail Service");
-            _gmailService = null;
-        }
-
-        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -150,15 +87,7 @@ public class EmailService : IEmailService
                 bodyHtml
             );
 
-            // Kirim via Gmail API atau SMTP
-            if (_useGmailApi && _gmailService != null)
-            {
-                await SendViaGmailApiAsync(message);
-            }
-            else
-            {
-                await SendViaSmtpAsync(message);
-            }
+            await SendViaSmtpAsync(message);
             
             _logger.LogInformation("Email berhasil dikirim ke {ToEmail} dengan subject: {Subject}", toEmail, subject);
             return true;
@@ -179,14 +108,7 @@ public class EmailService : IEmailService
         {
             var message = CreateMimeMessage(recipients, subject, bodyHtml);
 
-            if (_useGmailApi && _gmailService != null)
-            {
-                await SendViaGmailApiAsync(message);
-            }
-            else
-            {
-                await SendViaSmtpAsync(message);
-            }
+            await SendViaSmtpAsync(message);
             
             _logger.LogInformation("Email berhasil dikirim ke {Count} penerima dengan subject: {Subject}", 
                 recipients.Count, subject);
@@ -229,14 +151,7 @@ public class EmailService : IEmailService
 
             message.Body = builder.ToMessageBody();
 
-            if (_useGmailApi && _gmailService != null)
-            {
-                await SendViaGmailApiAsync(message);
-            }
-            else
-            {
-                await SendViaSmtpAsync(message);
-            }
+            await SendViaSmtpAsync(message);
             
             _logger.LogInformation("Email dengan attachment berhasil dikirim ke {ToEmail}", toEmail);
             return true;
@@ -301,7 +216,7 @@ public class EmailService : IEmailService
                 : "<p>Silakan login ke sistem untuk melihat detail kesalahan dan cara memperbaikinya.</p>")}
             
             <center>
-                <a href='http://localhost:5173/mahasiswa' class='button'>Lihat Detail di Dashboard</a>
+                <a href='{_dashboardUrl}' class='button'>Lihat Detail di Dashboard</a>
             </center>
         </div>
         <div class='footer'>
@@ -318,11 +233,11 @@ public class EmailService : IEmailService
     #region Private Helper Methods
 
     /// <summary>
-    /// Get sender email (from Gmail API or SMTP config)
+    /// Get sender email from SMTP config
     /// </summary>
     private string GetSenderEmail()
     {
-        return _useGmailApi ? _delegatedUserEmail! : _smtpSenderEmail!;
+        return _smtpSenderEmail!;
     }
 
     /// <summary>
@@ -345,38 +260,7 @@ public class EmailService : IEmailService
     }
 
     /// <summary>
-    /// Kirim via Gmail API (menggunakan raw base64url format)
-    /// </summary>
-    private async Task SendViaGmailApiAsync(MimeMessage mimeMessage)
-    {
-        if (_gmailService == null)
-        {
-            throw new InvalidOperationException("Gmail Service belum diinisialisasi");
-        }
-
-        // Convert MIME message ke raw base64url format
-        using var memoryStream = new MemoryStream();
-        await mimeMessage.WriteToAsync(memoryStream);
-        var rawMessage = Convert.ToBase64String(memoryStream.ToArray())
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .Replace("=", ""); // Base64Url encoding
-
-        // Buat Gmail Message
-        var gmailMessage = new Message
-        {
-            Raw = rawMessage
-        };
-
-        // Kirim via Gmail API
-        var request = _gmailService.Users.Messages.Send(gmailMessage, "me");
-        var response = await request.ExecuteAsync();
-
-        _logger.LogDebug("Email terkirim via Gmail API. Message ID: {MessageId}", response.Id);
-    }
-
-    /// <summary>
-    /// Kirim via SMTP (fallback)
+    /// Kirim via SMTP
     /// </summary>
     private async Task SendViaSmtpAsync(MimeMessage message)
     {

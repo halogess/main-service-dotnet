@@ -17,19 +17,14 @@ namespace ValidasiTugasAkhir.MainService.Services;
 public partial class GeminiService : IGeminiService
 {
     private readonly HttpClient _httpClient;
-    private readonly IConfiguration _configuration;
     private readonly ILogger<GeminiService> _logger;
     private readonly KorektorBukuDbContext _db;
     private readonly string _analysisModel;
-    private readonly string _structuredModel;
-    private readonly string _fallbackModel;
     private readonly string _apiBaseUrl;
     private readonly double _generationTemperature;
     private readonly double _generationTopP;
     private readonly int _generationTopK;
     private readonly int _generationMaxOutputTokens;
-    private readonly int _generationThinkingBudget;
-    private readonly bool _enableThinking;
     private readonly bool _enableLlm;
     private readonly int _maxParseAttempts;
     private readonly TimeSpan _parseRetryDelay;
@@ -68,33 +63,6 @@ public partial class GeminiService : IGeminiService
         PropertyNameCaseInsensitive = true
     };
 
-    private static readonly JsonElement ErrorGuidanceSchema = JsonSerializer.Deserialize<JsonElement>(
-        @"{
-  ""type"": ""object"",
-  ""properties"": {
-    ""errors"": {
-      ""type"": ""array"",
-      ""items"": {
-        ""type"": ""object"",
-        ""properties"": {
-          ""index"": { ""type"": ""integer"", ""minimum"": 0 },
-          ""title"": { ""type"": ""string"", ""maxLength"": 100 },
-          ""explanation"": { ""type"": ""string"", ""maxLength"": 500 },
-          ""steps"": {
-            ""type"": ""array"",
-            ""items"": { ""type"": ""string"", ""maxLength"": 200 },
-            ""minItems"": 1,
-            ""maxItems"": 6
-          }
-        },
-        ""required"": [""index"", ""title"", ""explanation"", ""steps""]
-      }
-    }
-  },
-  ""required"": [""errors""]
-}")!;
-
-
     public GeminiService(
         HttpClient httpClient,
         IConfiguration configuration,
@@ -102,49 +70,31 @@ public partial class GeminiService : IGeminiService
         KorektorBukuDbContext db)
     {
         _httpClient = httpClient;
-        _configuration = configuration;
         _logger = logger;
         _db = db;
-        _analysisModel = _configuration["Gemini:Model"] ?? "gemma-3-27b";
-        _structuredModel = _configuration["Gemini:StructuredModel"] ?? _analysisModel;
-        _fallbackModel = _configuration["Gemini:FallbackModel"] ?? _analysisModel;
-        _apiBaseUrl = _configuration["Gemini:ApiBaseUrl"] ?? "https://generativelanguage.googleapis.com/v1beta";
-        _generationTemperature = _configuration.GetValue("Gemini:Temperature", 0.1);
-        _generationTopP = _configuration.GetValue("Gemini:TopP", 0.8);
-        _generationTopK = _configuration.GetValue("Gemini:TopK", 20);
-        _generationMaxOutputTokens = _configuration.GetValue("Gemini:MaxOutputTokens", 6000);
-        _generationThinkingBudget = Math.Max(0, _configuration.GetValue("Gemini:ThinkingBudget", 1024));
-        _enableThinking = _configuration.GetValue("Gemini:EnableThinking", _generationThinkingBudget > 0);
-        _enableLlm = _configuration.GetValue("Gemini:EnableLlm", true);
-        _maxParseAttempts = Math.Max(1, _configuration.GetValue("Gemini:MaxParseAttempts", 3));
-        var parseDelaySeconds = Math.Max(0, _configuration.GetValue("Gemini:ParseRetryDelaySeconds", 2));
+        _analysisModel = configuration["Gemini:Model"] ?? "gemma-3-27b";
+        _apiBaseUrl = configuration["Gemini:ApiBaseUrl"] ?? "https://generativelanguage.googleapis.com/v1beta";
+        _generationTemperature = configuration.GetValue("Gemini:Temperature", 0.1);
+        _generationTopP = configuration.GetValue("Gemini:TopP", 0.8);
+        _generationTopK = configuration.GetValue("Gemini:TopK", 20);
+        _generationMaxOutputTokens = configuration.GetValue("Gemini:MaxOutputTokens", 6000);
+        _enableLlm = configuration.GetValue("Gemini:EnableLlm", true);
+        _maxParseAttempts = Math.Max(1, configuration.GetValue("Gemini:MaxParseAttempts", 3));
+        var parseDelaySeconds = Math.Max(0, configuration.GetValue("Gemini:ParseRetryDelaySeconds", 2));
         _parseRetryDelay = TimeSpan.FromSeconds(parseDelaySeconds);
-        _maxRetries = Math.Max(1, _configuration.GetValue("Gemini:MaxRetries", 3));
-        _retryDelays = BuildRetryDelays(_configuration, _maxRetries);
-        var defaultRateLimitDelaySeconds = Math.Max(0, _configuration.GetValue("Gemini:DefaultRateLimitDelaySeconds", 10));
+        _maxRetries = Math.Max(1, configuration.GetValue("Gemini:MaxRetries", 3));
+        _retryDelays = BuildRetryDelays(configuration, _maxRetries);
+        var defaultRateLimitDelaySeconds = Math.Max(0, configuration.GetValue("Gemini:DefaultRateLimitDelaySeconds", 10));
         _defaultRateLimitDelay = TimeSpan.FromSeconds(defaultRateLimitDelaySeconds);
-        _tokensPerMinutePerKeyLimit = Math.Max(1, _configuration.GetValue("Gemini:TokensPerMinutePerKeyLimit", 12000));
-        var tokenWindowSeconds = Math.Max(1, _configuration.GetValue("Gemini:TokenWindowSeconds", 60));
+        _tokensPerMinutePerKeyLimit = Math.Max(1, configuration.GetValue("Gemini:TokensPerMinutePerKeyLimit", 12000));
+        var tokenWindowSeconds = Math.Max(1, configuration.GetValue("Gemini:TokenWindowSeconds", 60));
         TokenWindowDuration = TimeSpan.FromSeconds(tokenWindowSeconds);
-        var cacheHours = Math.Max(0, _configuration.GetValue("Gemini:CacheHours", 24));
+        var cacheHours = Math.Max(0, configuration.GetValue("Gemini:CacheHours", 24));
         CacheExpiry = TimeSpan.FromHours(cacheHours);
 
-        _logger.LogInformation("Gemini running in template-only mode (system prompt disabled).");
-
-        if (IsGemmaModel(_analysisModel))
-        {
-            if (!IsGemmaModel(_structuredModel))
-            {
-                _logger.LogInformation("Structured model {StructuredModel} is not Gemma; using {AnalysisModel} instead.", _structuredModel, _analysisModel);
-                _structuredModel = _analysisModel;
-            }
-
-            if (!IsGemmaModel(_fallbackModel))
-            {
-                _logger.LogInformation("Fallback model {FallbackModel} is not Gemma; using {AnalysisModel} instead.", _fallbackModel, _analysisModel);
-                _fallbackModel = _analysisModel;
-            }
-        }
+        _logger.LogInformation(
+            "GeminiService configured for text-only guidance with model: {Model}",
+            _analysisModel);
     }
 
     private static TimeSpan[] BuildRetryDelays(IConfiguration configuration, int maxRetries)
@@ -242,18 +192,11 @@ public partial class GeminiService : IGeminiService
 
         var (enhancedErrors, ruleDefinitions) = BuildEnhancedErrors(errors, activeRules);
         Dictionary<int, OpenXmlContextPayload>? openXmlContexts = null;
-        List<PageImageInfo>? pageImages = null;
-        List<LlmImagePayload>? imagePayloads = null;
 
         if (dokumenId.HasValue)
-        {
             openXmlContexts = await BuildOpenXmlContextsAsync(dokumenId.Value, errors, cancellationToken);
-            var imageResult = await LoadPageImagesAsync(dokumenId.Value, errors, cancellationToken);
-            pageImages = imageResult.Infos;
-            imagePayloads = imageResult.Payloads;
-        }
 
-        var prompt = BuildErrorGuidancePrompt(enhancedErrors, ruleDefinitions, openXmlContexts, pageImages, strictJson: true);
+        var prompt = BuildErrorGuidancePrompt(enhancedErrors, ruleDefinitions, openXmlContexts, strictJson: true);
         _logger.LogDebug("Error guidance prompt length: {Length} chars, error count: {Count}", prompt.Length, errors.Count);
         
         var generationConfig = new Dictionary<string, object>
@@ -264,20 +207,6 @@ public partial class GeminiService : IGeminiService
             ["maxOutputTokens"] = _generationMaxOutputTokens
         };
 
-        if (SupportsResponseSchema(_structuredModel))
-        {
-            generationConfig["responseMimeType"] = "application/json";
-            generationConfig["responseSchema"] = ErrorGuidanceSchema;
-        }
-
-        if (_enableThinking && _generationThinkingBudget > 0 && SupportsThinking(_structuredModel))
-        {
-            generationConfig["thinkingConfig"] = new Dictionary<string, object>
-            {
-                ["thinkingBudget"] = _generationThinkingBudget
-            };
-        }
-
         string response = string.Empty;
         List<GeminiErrorDetail> results = new();
         bool parsed = false;
@@ -286,11 +215,8 @@ public partial class GeminiService : IGeminiService
         {
             response = await GenerateContentWithRetryAsync(
                 prompt,
-                null,
                 generationConfig,
-                imagePayloads,
                 cancellationToken,
-                _structuredModel,
                 antrianId,
                 errors.Count,
                 batchNumber,
@@ -604,17 +530,13 @@ public partial class GeminiService : IGeminiService
 
     private async Task<string> GenerateContentWithRetryAsync(
         string prompt,
-        string? systemInstruction,
         object generationConfig,
-        IReadOnlyList<LlmImagePayload>? imagePayloads,
         CancellationToken cancellationToken = default,
-        string? modelOverride = null,
         uint? antrianId = null,
         int? errorCount = null,
         int? batchNumber = null,
         int? totalBatches = null)
     {
-        var currentModel = modelOverride ?? _analysisModel;
         Exception? lastException = null;
 
         for (int attempt = 0; attempt < _maxRetries; attempt++)
@@ -623,11 +545,8 @@ public partial class GeminiService : IGeminiService
             {
                 return await GenerateContentAsync(
                     prompt,
-                    systemInstruction,
                     generationConfig,
-                    imagePayloads,
                     cancellationToken,
-                    currentModel,
                     antrianId,
                     errorCount,
                     batchNumber,
@@ -656,7 +575,7 @@ public partial class GeminiService : IGeminiService
                         retrySeconds: (int)Math.Ceiling(delay.TotalSeconds),
                         attempt: attempt + 1,
                         maxAttempts: _maxRetries,
-                        model: currentModel,
+                        model: _analysisModel,
                         batchNumber: batchNumber,
                         totalBatches: totalBatches),
                     (int)HttpStatusCode.TooManyRequests,
@@ -666,27 +585,6 @@ public partial class GeminiService : IGeminiService
                     errorCount: errorCount);
 
                 await Task.Delay(delay, cancellationToken);
-
-                // On last retry, try fallback model
-                if (_maxRetries > 1 && attempt == _maxRetries - 2)
-                {
-                    _logger.LogInformation("Switching to fallback model: {Model}", _fallbackModel);
-                    await LogLlmRequestAsync(
-                        antrianId,
-                        null,
-                        BuildLlmLogMessage(
-                            "switch_model",
-                            errorCount: errorCount,
-                            model: _fallbackModel,
-                            batchNumber: batchNumber,
-                            totalBatches: totalBatches),
-                        0,
-                        cancellationToken,
-                        batchNumber: batchNumber,
-                        totalBatches: totalBatches,
-                        errorCount: errorCount);
-                    currentModel = _fallbackModel;
-                }
             }
             catch (HttpRequestException ex) when (ex.Message.Contains("429") || ex.Message.Contains("503") || ex.Message.Contains("ServiceUnavailable") || ex.Message.Contains("TooManyRequests"))
             {
@@ -702,7 +600,7 @@ public partial class GeminiService : IGeminiService
                         retrySeconds: (int)Math.Ceiling(_retryDelays[attempt].TotalSeconds),
                         attempt: attempt + 1,
                         maxAttempts: _maxRetries,
-                        model: currentModel,
+                        model: _analysisModel,
                         batchNumber: batchNumber,
                         totalBatches: totalBatches),
                     ex.StatusCode.HasValue ? (int)ex.StatusCode.Value : 0,
@@ -712,27 +610,6 @@ public partial class GeminiService : IGeminiService
                     errorCount: errorCount);
                 
                 await Task.Delay(_retryDelays[attempt], cancellationToken);
-                
-                // On last retry, try fallback model
-                if (_maxRetries > 1 && attempt == _maxRetries - 2)
-                {
-                    _logger.LogInformation("Switching to fallback model: {Model}", _fallbackModel);
-                    await LogLlmRequestAsync(
-                        antrianId,
-                        null,
-                        BuildLlmLogMessage(
-                            "switch_model",
-                            errorCount: errorCount,
-                            model: _fallbackModel,
-                            batchNumber: batchNumber,
-                            totalBatches: totalBatches),
-                        0,
-                        cancellationToken,
-                        batchNumber: batchNumber,
-                        totalBatches: totalBatches,
-                        errorCount: errorCount);
-                    currentModel = _fallbackModel;
-                }
             }
             catch (Exception ex)
             {
@@ -870,11 +747,8 @@ public partial class GeminiService : IGeminiService
 
     private async Task<string> GenerateContentAsync(
         string prompt,
-        string? systemInstruction,
         object generationConfig,
-        IReadOnlyList<LlmImagePayload>? imagePayloads,
         CancellationToken cancellationToken = default,
-        string? modelOverride = null,
         uint? antrianId = null,
         int? errorCount = null,
         int? batchNumber = null,
@@ -882,7 +756,7 @@ public partial class GeminiService : IGeminiService
         int? attempt = null,
         int? maxAttempts = null)
     {
-        var model = modelOverride ?? _analysisModel;
+        var model = _analysisModel;
         var apiKey = await GetActiveApiKeyAsync(cancellationToken, batchNumber);
         
         _logger.LogInformation(
@@ -913,36 +787,10 @@ public partial class GeminiService : IGeminiService
 
         var endpoint = $"{_apiBaseUrl}/models/{model}:generateContent?key={apiKey.GeminiApiKeyValue}";
 
-        var includeSystemInstruction = !string.IsNullOrWhiteSpace(systemInstruction) && SupportsSystemInstruction(model);
-        var effectivePrompt = prompt;
-        if (!includeSystemInstruction && !string.IsNullOrWhiteSpace(systemInstruction))
-        {
-            effectivePrompt = $"{systemInstruction}\n\n{prompt}";
-            _logger.LogInformation("System instruction inlined into prompt for model: {Model}", model);
-        }
-
         var parts = new List<object>
         {
-            new { text = effectivePrompt }
+            new { text = prompt }
         };
-
-        if (imagePayloads != null && SupportsImages(model))
-        {
-            foreach (var image in imagePayloads)
-            {
-                if (string.IsNullOrWhiteSpace(image.Base64))
-                    continue;
-
-                parts.Add(new
-                {
-                    inlineData = new
-                    {
-                        mimeType = image.MimeType,
-                        data = image.Base64
-                    }
-                });
-            }
-        }
 
         var requestBody = new Dictionary<string, object?>
         {
@@ -956,17 +804,6 @@ public partial class GeminiService : IGeminiService
             },
             ["generationConfig"] = generationConfig
         };
-
-        if (includeSystemInstruction)
-        {
-            requestBody["systemInstruction"] = new
-            {
-                parts = new[]
-                {
-                    new { text = systemInstruction }
-                }
-            };
-        }
 
         var json = JsonSerializer.Serialize(requestBody, JsonWriteOptions);
         var content = new StringContent(json, Encoding.UTF8, "application/json");
@@ -1336,45 +1173,5 @@ public partial class GeminiService : IGeminiService
 
         var finishSummary = finishReasons.Count > 0 ? string.Join(", ", finishReasons) : "(none)";
         _logger.LogInformation("Gemini response metadata: finishReasons={FinishReasons}, promptFeedback={PromptFeedback}", finishSummary, promptFeedback);
-    }
-
-    private static bool SupportsSystemInstruction(string? model)
-        => !IsGemmaModel(model);
-
-    private static bool SupportsResponseSchema(string? model)
-        => !IsGemmaModel(model);
-
-    private static bool SupportsThinking(string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model))
-            return false;
-
-        var name = model.Trim();
-        var lastSlash = name.LastIndexOf('/');
-        if (lastSlash >= 0 && lastSlash < name.Length - 1)
-            name = name[(lastSlash + 1)..];
-
-        return name.StartsWith("gemini-2.5", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool SupportsImages(string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model))
-            return false;
-
-        return !IsGemmaModel(model);
-    }
-
-    private static bool IsGemmaModel(string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model))
-            return false;
-
-        var name = model.Trim();
-        var lastSlash = name.LastIndexOf('/');
-        if (lastSlash >= 0 && lastSlash < name.Length - 1)
-            name = name[(lastSlash + 1)..];
-
-        return name.StartsWith("gemma-", StringComparison.OrdinalIgnoreCase);
     }
 }

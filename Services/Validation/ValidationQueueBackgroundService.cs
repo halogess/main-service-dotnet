@@ -17,6 +17,22 @@ public class ValidationQueueBackgroundService : BackgroundService
     private readonly TimeSpan _batchDelay;
     private readonly int _maxParallelBatches;
 
+    private sealed class PendingValidationEmailNotification
+    {
+        public string MahasiswaNrp { get; }
+        public string DokumenTitle { get; }
+        public bool IsLolos { get; }
+        public int ErrorCount { get; }
+
+        public PendingValidationEmailNotification(string mahasiswaNrp, string dokumenTitle, bool isLolos, int errorCount)
+        {
+            MahasiswaNrp = mahasiswaNrp;
+            DokumenTitle = dokumenTitle;
+            IsLolos = isLolos;
+            ErrorCount = errorCount;
+        }
+    }
+
     private sealed class BatchErrorItem
     {
         public ValidationError Error { get; }
@@ -70,6 +86,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                     queue.AntrianValidationStatus = "processing";
                     queue.AntrianUpdatedAt = DateTime.Now;
                     await db.SaveChangesAsync(stoppingToken);
+                    PendingValidationEmailNotification? pendingValidationEmail = null;
 
                     try
                     {
@@ -235,9 +252,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                             if (dokumen != null)
                             {
                                 await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, dokumen.DokumenStatus);
-                                
-                                // TODO: Email notification (disabled for now)
-                                // await SendValidationEmailNotificationAsync(...);
+                                pendingValidationEmail = BuildPendingValidationEmailNotification(dokumen);
                             }
                         }
                         else if (queue.AntrianTipe == "buku" && queue.BukuId.HasValue)
@@ -318,6 +333,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 }
                             }
                         }
+
                     }
                     catch (Exception ex)
                     {
@@ -340,6 +356,18 @@ public class ValidationQueueBackgroundService : BackgroundService
                     }
 
                     await db.SaveChangesAsync(stoppingToken);
+
+                    if (pendingValidationEmail != null &&
+                        string.Equals(queue.AntrianValidationStatus, "completed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var sttsDb = scope.ServiceProvider.GetRequiredService<SttsDbContext>();
+                        var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
+                        await SendValidationEmailNotificationAsync(
+                            sttsDb,
+                            emailService,
+                            pendingValidationEmail,
+                            stoppingToken);
+                    }
                 }
 
                 await Task.Delay(5000, stoppingToken);
@@ -366,9 +394,97 @@ public class ValidationQueueBackgroundService : BackgroundService
         _logger.LogInformation("Validation Queue Background Service stopped");
     }
 
-    // NOTE: Email notification method removed for now. 
-    // EmailService is available but not integrated.
-    // Re-add SendValidationEmailNotificationAsync when ready to enable email notifications.
+    private PendingValidationEmailNotification BuildPendingValidationEmailNotification(Dokumen dokumen)
+    {
+        var dokumenTitle = BuildDokumenEmailTitle(dokumen);
+        var isLolos = string.Equals(dokumen.DokumenStatus, "lolos", StringComparison.OrdinalIgnoreCase);
+        var errorCount = dokumen.DokumenJumlahKesalahan ?? 0;
+
+        return new PendingValidationEmailNotification(
+            dokumen.MhsNrp,
+            dokumenTitle,
+            isLolos,
+            errorCount);
+    }
+
+    private async Task SendValidationEmailNotificationAsync(
+        SttsDbContext sttsDb,
+        IEmailService emailService,
+        PendingValidationEmailNotification notification,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(notification.MahasiswaNrp))
+        {
+            _logger.LogWarning("Skipping validation email notification because mahasiswa NRP is empty");
+            return;
+        }
+
+        try
+        {
+            var mahasiswa = await sttsDb.Mahasiswas
+                .AsNoTracking()
+                .Where(m => m.MhsNrp == notification.MahasiswaNrp)
+                .Select(m => new { m.MhsNama, m.MhsEmail })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (mahasiswa == null)
+            {
+                _logger.LogWarning(
+                    "Skipping validation email notification because mahasiswa data was not found for NRP: {Nrp}",
+                    notification.MahasiswaNrp);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(mahasiswa.MhsEmail))
+            {
+                _logger.LogWarning(
+                    "Skipping validation email notification because mahasiswa email is empty for NRP: {Nrp}",
+                    notification.MahasiswaNrp);
+                return;
+            }
+
+            var recipientName = string.IsNullOrWhiteSpace(mahasiswa.MhsNama)
+                ? notification.MahasiswaNrp
+                : mahasiswa.MhsNama;
+
+            var sent = await emailService.SendValidationCompleteNotificationAsync(
+                mahasiswa.MhsEmail,
+                recipientName,
+                notification.DokumenTitle,
+                notification.IsLolos,
+                notification.ErrorCount);
+
+            if (!sent)
+            {
+                _logger.LogWarning(
+                    "Validation email notification failed for NRP: {Nrp}, Dokumen: {DokumenTitle}",
+                    notification.MahasiswaNrp,
+                    notification.DokumenTitle);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Unexpected error while sending validation email notification for NRP: {Nrp}",
+                notification.MahasiswaNrp);
+        }
+    }
+
+    private static string BuildDokumenEmailTitle(Dokumen dokumen)
+    {
+        var rawTitle = string.IsNullOrWhiteSpace(dokumen.DokumenFilename)
+            ? null
+            : Path.GetFileNameWithoutExtension(dokumen.DokumenFilename.Trim());
+
+        return string.IsNullOrWhiteSpace(rawTitle)
+            ? $"Dokumen #{dokumen.DokumenId}"
+            : rawTitle;
+    }
 
     private async Task<int> EnrichAndStoreErrorsAsync(
         KorektorBukuDbContext db,

@@ -18,16 +18,8 @@ public partial class GeminiService
         IReadOnlyList<EnhancedValidationError> errors,
         IReadOnlyList<RuleDefinitionPayload> ruleDefinitions,
         IReadOnlyDictionary<int, OpenXmlContextPayload>? openXmlContexts,
-        IReadOnlyList<PageImageInfo>? pageImages,
         bool strictJson = false)
     {
-        var imageIndexByPage = new Dictionary<int, int>();
-        if (pageImages != null)
-        {
-            foreach (var info in pageImages)
-                imageIndexByPage[info.Page] = info.ImageIndex;
-        }
-
         var errorPayloadWithContext = errors
             .Select(err => new
             {
@@ -53,11 +45,6 @@ public partial class GeminiService
                 next_element_text = TruncateText(err.Error.NextElementText, NeighborTextMaxChars),
                 next_element_label = err.Error.NextElementLabel,
                 has_numbering = err.HasNumbering,
-                image_page = err.Error.Locations.FirstOrDefault()?.HalamanKe,
-                image_index = err.Error.Locations.FirstOrDefault()?.HalamanKe is int page &&
-                              imageIndexByPage.TryGetValue(page, out var idx)
-                    ? idx
-                    : (int?)null,
                 openxml_summary = BuildOpenXmlSummary(openXmlContexts, err.Index),
                 location = err.Error.Locations.Count > 0
                     ? new
@@ -111,9 +98,6 @@ public partial class GeminiService
         sb.AppendLine($"JUMLAH_ERROR_INPUT: {errors.Count}");
         sb.AppendLine("ATURAN_AKTIF_JSON:");
         sb.AppendLine(JsonSerializer.Serialize(filteredRules, promptJsonOptions));
-        sb.AppendLine("IMAGE_INDEX_MAP_JSON:");
-        sb.AppendLine(JsonSerializer.Serialize(pageImages ?? Array.Empty<PageImageInfo>(), promptJsonOptions));
-        sb.AppendLine("Catatan: Gambar halaman penuh dikirim sebagai inline data sesuai IMAGE_INDEX_MAP_JSON.");
         sb.AppendLine("KESALAHAN_JSON:");
         sb.AppendLine(JsonSerializer.Serialize(errorPayloadWithContext, promptJsonOptions));
 

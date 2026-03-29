@@ -32,6 +32,8 @@ services:
       - Email__SenderEmail=${Email__SenderEmail}
       - Email__SenderName=${Email__SenderName}
       - Email__SenderPassword=${Email__SenderPassword}
+      - Email__OverrideRecipientsEnabled=${Email__OverrideRecipientsEnabled}
+      - Email__OverrideRecipientEmail=${Email__OverrideRecipientEmail}
       - AllowedHosts=${AllowedHosts}
     volumes:
       - "${VOLUME_BASE_PATH}:/app/storage"

@@ -7,45 +7,12 @@ using System.Net;
 namespace ValidasiTugasAkhir.MainService.Services;
 
 /// <summary>
-/// Interface untuk Email Service
+/// Implementasi Email Service berbasis SMTP dengan link frontend dinamis.
 /// </summary>
-public interface IEmailService
-{
-    /// <summary>
-    /// Kirim email ke satu penerima
-    /// </summary>
-    Task<bool> SendEmailAsync(string toEmail, string toName, string subject, string bodyHtml);
-    
-    /// <summary>
-    /// Kirim email ke multiple penerima
-    /// </summary>
-    Task<bool> SendEmailAsync(List<(string Email, string Name)> recipients, string subject, string bodyHtml);
-    
-    /// <summary>
-    /// Kirim email dengan attachment
-    /// </summary>
-    Task<bool> SendEmailWithAttachmentAsync(string toEmail, string toName, string subject, string bodyHtml, string attachmentPath);
-    
-    /// <summary>
-    /// Kirim notifikasi validasi selesai ke mahasiswa
-    /// </summary>
-    Task<bool> SendValidationCompleteNotificationAsync(
-        string toEmail,
-        string toName,
-        string resourceType,
-        int resourceId,
-        string resourceTitle,
-        bool isLolos,
-        int errorCount);
-}
-
-/// <summary>
-/// Email Service berbasis SMTP.
-/// </summary>
-public class EmailService : IEmailService
+public class SmtpEmailService : IEmailService
 {
     private readonly IConfiguration _configuration;
-    private readonly ILogger<EmailService> _logger;
+    private readonly ILogger<SmtpEmailService> _logger;
 
     private readonly string _smtpHost;
     private readonly int _smtpPort;
@@ -54,9 +21,10 @@ public class EmailService : IEmailService
     private readonly string _senderName;
     private readonly string? _smtpSenderPassword;
     private readonly string _frontendBaseUrl;
-    private readonly string _dashboardUrl;
+    private readonly bool _overrideRecipientsEnabled;
+    private readonly string? _overrideRecipientEmail;
 
-    public EmailService(IConfiguration configuration, ILogger<EmailService> logger)
+    public SmtpEmailService(IConfiguration configuration, ILogger<SmtpEmailService> logger)
     {
         _configuration = configuration;
         _logger = logger;
@@ -68,37 +36,49 @@ public class EmailService : IEmailService
         _senderName = _configuration["Email:SenderName"] ?? "Validasi Tugas Akhir";
         _smtpSenderPassword = _configuration["Email:SenderPassword"];
         _frontendBaseUrl = (_configuration["Email:DashboardUrl"] ?? "http://localhost:5173").TrimEnd('/');
-        _dashboardUrl = _frontendBaseUrl;
+        _overrideRecipientsEnabled = bool.Parse(_configuration["Email:OverrideRecipientsEnabled"] ?? "false");
+        _overrideRecipientEmail = _configuration["Email:OverrideRecipientEmail"];
 
         var hasSmtpConfig = !string.IsNullOrEmpty(_smtpSenderEmail) &&
                             !string.IsNullOrEmpty(_smtpSenderPassword);
 
         if (hasSmtpConfig)
         {
-            _logger.LogInformation("EmailService dikonfigurasi menggunakan SMTP");
+            _logger.LogInformation("SmtpEmailService dikonfigurasi menggunakan SMTP");
         }
         else
         {
-            _logger.LogWarning("EmailService tidak dikonfigurasi dengan benar. Email tidak akan terkirim.");
+            _logger.LogWarning("SmtpEmailService tidak dikonfigurasi dengan benar. Email tidak akan terkirim.");
+        }
+
+        if (_overrideRecipientsEnabled)
+        {
+            var effectiveOverrideRecipient = GetEffectiveOverrideRecipientEmail();
+            if (string.IsNullOrWhiteSpace(effectiveOverrideRecipient))
+            {
+                _logger.LogWarning(
+                    "Email recipient override aktif tetapi Email:OverrideRecipientEmail dan Email:SenderEmail kosong. Recipient override akan diabaikan.");
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Email recipient override aktif. Semua email akan diarahkan ke {OverrideRecipient}",
+                    effectiveOverrideRecipient);
+            }
         }
     }
 
-    /// <summary>
-    /// Kirim email ke satu penerima
-    /// </summary>
     public async Task<bool> SendEmailAsync(string toEmail, string toName, string subject, string bodyHtml)
     {
         try
         {
-            // Buat MIME message
             var message = CreateMimeMessage(
                 new List<(string Email, string Name)> { (toEmail, toName) },
                 subject,
-                bodyHtml
-            );
+                bodyHtml);
 
             await SendViaSmtpAsync(message);
-            
+
             _logger.LogInformation("Email berhasil dikirim ke {ToEmail} dengan subject: {Subject}", toEmail, subject);
             return true;
         }
@@ -109,9 +89,6 @@ public class EmailService : IEmailService
         }
     }
 
-    /// <summary>
-    /// Kirim email ke multiple penerima
-    /// </summary>
     public async Task<bool> SendEmailAsync(List<(string Email, string Name)> recipients, string subject, string bodyHtml)
     {
         try
@@ -119,9 +96,11 @@ public class EmailService : IEmailService
             var message = CreateMimeMessage(recipients, subject, bodyHtml);
 
             await SendViaSmtpAsync(message);
-            
-            _logger.LogInformation("Email berhasil dikirim ke {Count} penerima dengan subject: {Subject}", 
-                recipients.Count, subject);
+
+            _logger.LogInformation(
+                "Email berhasil dikirim ke {Count} penerima dengan subject: {Subject}",
+                recipients.Count,
+                subject);
             return true;
         }
         catch (Exception ex)
@@ -131,25 +110,27 @@ public class EmailService : IEmailService
         }
     }
 
-    /// <summary>
-    /// Kirim email dengan attachment
-    /// </summary>
     public async Task<bool> SendEmailWithAttachmentAsync(string toEmail, string toName, string subject, string bodyHtml, string attachmentPath)
     {
         try
         {
+            var effectiveRecipients = ResolveRecipients(
+                new List<(string Email, string Name)> { (toEmail, toName) });
             var message = new MimeMessage();
             message.From.Add(new MailboxAddress(_senderName, GetSenderEmail()));
-            message.To.Add(new MailboxAddress(toName, toEmail));
+
+            foreach (var (email, name) in effectiveRecipients)
+            {
+                message.To.Add(new MailboxAddress(name, email));
+            }
+
             message.Subject = subject;
 
-            // Buat multipart body (HTML + attachment)
             var builder = new BodyBuilder
             {
                 HtmlBody = bodyHtml
             };
 
-            // Tambah attachment jika file exists
             if (File.Exists(attachmentPath))
             {
                 builder.Attachments.Add(attachmentPath);
@@ -162,7 +143,7 @@ public class EmailService : IEmailService
             message.Body = builder.ToMessageBody();
 
             await SendViaSmtpAsync(message);
-            
+
             _logger.LogInformation("Email dengan attachment berhasil dikirim ke {ToEmail}", toEmail);
             return true;
         }
@@ -173,9 +154,6 @@ public class EmailService : IEmailService
         }
     }
 
-    /// <summary>
-    /// Kirim notifikasi validasi selesai ke mahasiswa
-    /// </summary>
     public async Task<bool> SendValidationCompleteNotificationAsync(
         string toEmail,
         string toName,
@@ -185,13 +163,16 @@ public class EmailService : IEmailService
         bool isLolos,
         int errorCount)
     {
-        var dokumenTitle = resourceTitle;
+        var normalizedResourceType = NormalizeResourceType(resourceType);
+        var resourceLabel = normalizedResourceType == "buku" ? "Buku" : "Dokumen";
         var status = isLolos ? "LOLOS" : "TIDAK LOLOS";
         var statusColor = isLolos ? "#22c55e" : "#ef4444";
-        var statusEmoji = isLolos ? "✅" : "❌";
-        
-        var subject = $"{statusEmoji} Hasil Validasi Dokumen: {dokumenTitle}";
-        
+        var subject = $"Hasil Validasi {resourceLabel}: {resourceTitle}";
+        var detailUrl = BuildValidationDetailUrl(normalizedResourceType, resourceId);
+        var encodedRecipientName = WebUtility.HtmlEncode(toName);
+        var encodedResourceTitle = WebUtility.HtmlEncode(resourceTitle);
+        var encodedDetailUrl = WebUtility.HtmlEncode(detailUrl);
+
         var bodyHtml = $@"
 <!DOCTYPE html>
 <html>
@@ -211,25 +192,25 @@ public class EmailService : IEmailService
 <body>
     <div class='container'>
         <div class='header'>
-            <h1 style='margin: 0;'>📄 Validasi Dokumen</h1>
+            <h1 style='margin: 0;'>Validasi {resourceLabel}</h1>
             <p style='margin: 10px 0 0 0; opacity: 0.9;'>Sistem Validasi Tugas Akhir</p>
         </div>
         <div class='content'>
-            <p>Halo <strong>{toName}</strong>,</p>
-            <p>Proses validasi dokumen Anda telah selesai. Berikut adalah hasilnya:</p>
-            
+            <p>Halo <strong>{encodedRecipientName}</strong>,</p>
+            <p>Proses validasi {resourceLabel.ToLowerInvariant()} Anda telah selesai. Berikut adalah hasilnya:</p>
+
             <div class='info-box'>
-                <p style='margin: 0 0 10px 0;'><strong>📁 Dokumen:</strong> {dokumenTitle}</p>
-                <p style='margin: 0;'><strong>📊 Status:</strong> <span class='status-badge'>{status}</span></p>
-                {(errorCount > 0 ? $"<p style='margin: 10px 0 0 0;'><strong>⚠️ Jumlah Kesalahan:</strong> {errorCount} kesalahan</p>" : "")}
+                <p style='margin: 0 0 10px 0;'><strong>{resourceLabel}:</strong> {encodedResourceTitle}</p>
+                <p style='margin: 0;'><strong>Status:</strong> <span class='status-badge'>{status}</span></p>
+                {(errorCount > 0 ? $"<p style='margin: 10px 0 0 0;'><strong>Jumlah Kesalahan:</strong> {errorCount} kesalahan</p>" : "")}
             </div>
-            
-            {(isLolos 
-                ? "<p>🎉 <strong>Selamat!</strong> Dokumen Anda telah memenuhi semua standar format yang ditetapkan.</p>" 
-                : "<p>Silakan login ke sistem untuk melihat detail kesalahan dan cara memperbaikinya.</p>")}
-            
+
+            {(isLolos
+                ? $"<p><strong>Selamat!</strong> {resourceLabel} Anda telah memenuhi semua standar format yang ditetapkan.</p>"
+                : $"<p>Silakan buka detail {resourceLabel.ToLowerInvariant()} untuk melihat kesalahan dan langkah perbaikannya.</p>")}
+
             <center>
-                <a href='{_dashboardUrl}' class='button'>Lihat Detail di Dashboard</a>
+                <a href='{encodedDetailUrl}' class='button'>Lihat Detail {resourceLabel}</a>
             </center>
         </div>
         <div class='footer'>
@@ -243,38 +224,78 @@ public class EmailService : IEmailService
         return await SendEmailAsync(toEmail, toName, subject, bodyHtml);
     }
 
-    #region Private Helper Methods
-
-    /// <summary>
-    /// Get sender email from SMTP config
-    /// </summary>
     private string GetSenderEmail()
     {
         return _smtpSenderEmail!;
     }
 
-    /// <summary>
-    /// Create MIME message
-    /// </summary>
+    private string BuildValidationDetailUrl(string resourceType, int resourceId)
+    {
+        var mahasiswaBaseUrl = _frontendBaseUrl.EndsWith("/mahasiswa", StringComparison.OrdinalIgnoreCase)
+            ? _frontendBaseUrl
+            : $"{_frontendBaseUrl}/mahasiswa";
+
+        return $"{mahasiswaBaseUrl}/{resourceType}/{resourceId}";
+    }
+
+    private static string NormalizeResourceType(string resourceType)
+    {
+        return string.Equals(resourceType, "buku", StringComparison.OrdinalIgnoreCase)
+            ? "buku"
+            : "dokumen";
+    }
+
     private MimeMessage CreateMimeMessage(List<(string Email, string Name)> recipients, string subject, string bodyHtml)
     {
+        var effectiveRecipients = ResolveRecipients(recipients);
         var message = new MimeMessage();
         message.From.Add(new MailboxAddress(_senderName, GetSenderEmail()));
-        
-        foreach (var (email, name) in recipients)
+
+        foreach (var (email, name) in effectiveRecipients)
         {
             message.To.Add(new MailboxAddress(name, email));
         }
-        
+
         message.Subject = subject;
         message.Body = new TextPart(TextFormat.Html) { Text = bodyHtml };
-        
+
         return message;
     }
 
-    /// <summary>
-    /// Kirim via SMTP
-    /// </summary>
+    private List<(string Email, string Name)> ResolveRecipients(List<(string Email, string Name)> recipients)
+    {
+        if (!_overrideRecipientsEnabled)
+            return recipients;
+
+        var overrideRecipientEmail = GetEffectiveOverrideRecipientEmail();
+        if (string.IsNullOrWhiteSpace(overrideRecipientEmail))
+            return recipients;
+
+        var originalRecipients = recipients
+            .Select(r => string.IsNullOrWhiteSpace(r.Name) ? r.Email : $"{r.Name} <{r.Email}>")
+            .ToList();
+
+        _logger.LogInformation(
+            "Email recipient override aktif. Original recipients: {OriginalRecipients}. Redirected to: {OverrideRecipient}",
+            string.Join(", ", originalRecipients),
+            overrideRecipientEmail);
+
+        return new List<(string Email, string Name)>
+        {
+            (overrideRecipientEmail, "Development Override")
+        };
+    }
+
+    private string? GetEffectiveOverrideRecipientEmail()
+    {
+        if (!string.IsNullOrWhiteSpace(_overrideRecipientEmail))
+            return _overrideRecipientEmail.Trim();
+
+        return string.IsNullOrWhiteSpace(_smtpSenderEmail)
+            ? null
+            : _smtpSenderEmail.Trim();
+    }
+
     private async Task SendViaSmtpAsync(MimeMessage message)
     {
         if (string.IsNullOrEmpty(_smtpSenderEmail) || string.IsNullOrEmpty(_smtpSenderPassword))
@@ -283,19 +304,17 @@ public class EmailService : IEmailService
         }
 
         using var smtp = new SmtpClient();
-        
+
         try
         {
-            // Connect ke SMTP server
-            await smtp.ConnectAsync(_smtpHost, _smtpPort, 
+            await smtp.ConnectAsync(
+                _smtpHost,
+                _smtpPort,
                 _useSsl ? SecureSocketOptions.StartTls : SecureSocketOptions.None);
-            
-            // Authenticate
+
             await smtp.AuthenticateAsync(_smtpSenderEmail, _smtpSenderPassword);
-            
-            // Kirim email
             await smtp.SendAsync(message);
-            
+
             _logger.LogDebug("Email berhasil dikirim via SMTP {Host}:{Port}", _smtpHost, _smtpPort);
         }
         finally
@@ -303,6 +322,4 @@ public class EmailService : IEmailService
             await smtp.DisconnectAsync(true);
         }
     }
-
-    #endregion
 }

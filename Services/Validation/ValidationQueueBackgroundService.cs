@@ -20,14 +20,24 @@ public class ValidationQueueBackgroundService : BackgroundService
     private sealed class PendingValidationEmailNotification
     {
         public string MahasiswaNrp { get; }
-        public string DokumenTitle { get; }
+        public string ResourceType { get; }
+        public int ResourceId { get; }
+        public string ResourceTitle { get; }
         public bool IsLolos { get; }
         public int ErrorCount { get; }
 
-        public PendingValidationEmailNotification(string mahasiswaNrp, string dokumenTitle, bool isLolos, int errorCount)
+        public PendingValidationEmailNotification(
+            string mahasiswaNrp,
+            string resourceType,
+            int resourceId,
+            string resourceTitle,
+            bool isLolos,
+            int errorCount)
         {
             MahasiswaNrp = mahasiswaNrp;
-            DokumenTitle = dokumenTitle;
+            ResourceType = resourceType;
+            ResourceId = resourceId;
+            ResourceTitle = resourceTitle;
             IsLolos = isLolos;
             ErrorCount = errorCount;
         }
@@ -257,12 +267,10 @@ public class ValidationQueueBackgroundService : BackgroundService
                         }
                         else if (queue.AntrianTipe == "buku" && queue.BukuId.HasValue)
                         {
-                            // Check if all babs are validated
-                            var allBabsValidated = !await db.Antrians
-                                .AnyAsync(a => a.BukuId == queue.BukuId && 
-                                               a.AntrianTipe == "buku" && 
-                                               a.AntrianId != queue.AntrianId &&
-                                               a.AntrianValidationStatus != "completed", stoppingToken);
+                            var (allBabsValidated, babs) = await AreAllBukuBabsValidationCompletedAsync(
+                                db,
+                                queue,
+                                stoppingToken);
 
                             if (allBabsValidated)
                             {
@@ -270,16 +278,11 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 if (buku != null)
                                 {
                                     var bukuRefId = (uint)queue.BukuId.Value;
-                                    var babResults = await db.Babs
-                                        .Where(b => b.BukuId == bukuRefId)
-                                        .Select(b => new { b.BabSkor, b.BabSkorMinimal })
-                                        .ToListAsync(stoppingToken);
-
-                                    var scoredBabScores = babResults
-                                        .Where(result => result.BabSkor.HasValue)
-                                        .Select(result => (decimal)result.BabSkor!.Value)
+                                    var scoredBabScores = babs
+                                        .Where(b => b.BabSkor.HasValue)
+                                        .Select(b => (decimal)b.BabSkor!.Value)
                                         .ToList();
-                                    var allBabsHaveScore = babResults.Count > 0 && babResults.Count == scoredBabScores.Count;
+                                    var allBabsHaveScore = babs.Count > 0 && babs.Count == scoredBabScores.Count;
                                     var averageScore = allBabsHaveScore
                                         ? scoredBabScores.Average()
                                         : 0m;
@@ -289,14 +292,14 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         .OrderByDescending(a => a.AturanCreatedAt)
                                         .FirstOrDefaultAsync(stoppingToken);
                                     var defaultMinimumScore = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
-                                    var useFallbackMinimum = babResults.Any(result => !result.BabSkorMinimal.HasValue);
-                                    var isLolos = allBabsHaveScore && babResults.All(result =>
+                                    var useFallbackMinimum = babs.Any(b => !b.BabSkorMinimal.HasValue);
+                                    var isLolos = allBabsHaveScore && babs.All(b =>
                                     {
-                                        if (!result.BabSkor.HasValue)
+                                        if (!b.BabSkor.HasValue)
                                             return false;
 
-                                        var minimum = result.BabSkorMinimal ?? defaultMinimumScore;
-                                        return result.BabSkor.Value >= minimum;
+                                        var minimum = b.BabSkorMinimal ?? defaultMinimumScore;
+                                        return b.BabSkor.Value >= minimum;
                                     });
 
                                     var totalKesalahan = await (
@@ -330,6 +333,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         defaultMinimumScore,
                                         useFallbackMinimum,
                                         totalKesalahan);
+                                    pendingValidationEmail = BuildPendingValidationEmailNotification(buku);
                                 }
                             }
                         }
@@ -402,7 +406,24 @@ public class ValidationQueueBackgroundService : BackgroundService
 
         return new PendingValidationEmailNotification(
             dokumen.MhsNrp,
+            "dokumen",
+            dokumen.DokumenId,
             dokumenTitle,
+            isLolos,
+            errorCount);
+    }
+
+    private PendingValidationEmailNotification BuildPendingValidationEmailNotification(Buku buku)
+    {
+        var bukuTitle = BuildBukuEmailTitle(buku);
+        var isLolos = string.Equals(buku.BukuStatus, "lolos", StringComparison.OrdinalIgnoreCase);
+        var errorCount = buku.BukuJumlahKesalahan ?? 0;
+
+        return new PendingValidationEmailNotification(
+            buku.MhsNrp,
+            "buku",
+            buku.BukuId,
+            bukuTitle,
             isLolos,
             errorCount);
     }
@@ -450,16 +471,20 @@ public class ValidationQueueBackgroundService : BackgroundService
             var sent = await emailService.SendValidationCompleteNotificationAsync(
                 mahasiswa.MhsEmail,
                 recipientName,
-                notification.DokumenTitle,
+                notification.ResourceType,
+                notification.ResourceId,
+                notification.ResourceTitle,
                 notification.IsLolos,
                 notification.ErrorCount);
 
             if (!sent)
             {
                 _logger.LogWarning(
-                    "Validation email notification failed for NRP: {Nrp}, Dokumen: {DokumenTitle}",
+                    "Validation email notification failed for NRP: {Nrp}, ResourceType: {ResourceType}, ResourceId: {ResourceId}, Title: {ResourceTitle}",
                     notification.MahasiswaNrp,
-                    notification.DokumenTitle);
+                    notification.ResourceType,
+                    notification.ResourceId,
+                    notification.ResourceTitle);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -484,6 +509,83 @@ public class ValidationQueueBackgroundService : BackgroundService
         return string.IsNullOrWhiteSpace(rawTitle)
             ? $"Dokumen #{dokumen.DokumenId}"
             : rawTitle;
+    }
+
+    private static string BuildBukuEmailTitle(Buku buku)
+    {
+        var rawTitle = string.IsNullOrWhiteSpace(buku.BukuJudul)
+            ? null
+            : buku.BukuJudul.Trim();
+
+        return string.IsNullOrWhiteSpace(rawTitle)
+            ? $"Buku #{buku.BukuId}"
+            : rawTitle;
+    }
+
+    private async Task<(bool AllBabsCompleted, List<Bab> Babs)> AreAllBukuBabsValidationCompletedAsync(
+        KorektorBukuDbContext db,
+        Antrian currentQueue,
+        CancellationToken cancellationToken)
+    {
+        if (!currentQueue.BukuId.HasValue)
+            return (false, new List<Bab>());
+
+        var bukuId = currentQueue.BukuId.Value;
+        var babs = await db.Babs
+            .Where(b => b.BukuId == bukuId)
+            .OrderBy(b => b.BabOrder)
+            .ThenBy(b => b.BabId)
+            .ToListAsync(cancellationToken);
+
+        if (babs.Count == 0)
+        {
+            _logger.LogWarning(
+                "Skipping buku finalization because no bab rows were found for buku ID: {BukuId}",
+                bukuId);
+            return (false, babs);
+        }
+
+        var babIds = babs.Select(b => b.BabId).ToList();
+        var queues = await db.Antrians
+            .Where(a => a.AntrianTipe == "buku" &&
+                        a.BukuId == bukuId &&
+                        a.BabId.HasValue &&
+                        babIds.Contains(a.BabId.Value))
+            .ToListAsync(cancellationToken);
+
+        var currentQueueIndex = queues.FindIndex(a => a.AntrianId == currentQueue.AntrianId);
+        if (currentQueueIndex >= 0)
+        {
+            queues[currentQueueIndex] = currentQueue;
+        }
+        else if (currentQueue.BabId.HasValue && babIds.Contains(currentQueue.BabId.Value))
+        {
+            queues.Add(currentQueue);
+        }
+
+        var missingQueueBabIds = babIds
+            .Where(babId => !queues.Any(a => a.BabId == babId))
+            .ToList();
+        var incompleteQueueStates = queues
+            .Where(a => a.BabId.HasValue &&
+                        !string.Equals(a.AntrianValidationStatus, "completed", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(a => a.BabId)
+            .ThenBy(a => a.AntrianCreatedAt ?? DateTime.MinValue)
+            .ThenBy(a => a.AntrianId)
+            .Select(a => $"{a.BabId}:{a.AntrianId}:{a.AntrianValidationStatus ?? "null"}")
+            .ToList();
+
+        if (missingQueueBabIds.Count > 0 || incompleteQueueStates.Count > 0)
+        {
+            _logger.LogDebug(
+                "Skipping buku finalization for buku ID: {BukuId}. MissingBabQueues={MissingBabQueues}. IncompleteQueues={IncompleteQueues}",
+                bukuId,
+                missingQueueBabIds.Count == 0 ? "-" : string.Join(",", missingQueueBabIds),
+                incompleteQueueStates.Count == 0 ? "-" : string.Join(",", incompleteQueueStates));
+            return (false, babs);
+        }
+
+        return (true, babs);
     }
 
     private async Task<int> EnrichAndStoreErrorsAsync(

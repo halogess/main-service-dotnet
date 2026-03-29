@@ -29,7 +29,7 @@ public class SttsDbContext : DbContext
                       .HasMaxLength(200);
 
                 entity.Property(e => e.MhsEmail)
-                      .HasColumnName("mhs_email")
+                      .HasColumnName("mhs_email_stts")
                       .HasMaxLength(255);
 
                 entity.Property(e => e.MhsHp)

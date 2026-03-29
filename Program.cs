@@ -62,7 +62,7 @@ builder.Services.AddHostedService<ValidationQueueBackgroundService>();
 builder.Services.AddHttpClient<IGeminiService, GeminiService>();
 
 // Register Email Service
-builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<IEmailService, SmtpEmailService>();
 
 var app = builder.Build();
 

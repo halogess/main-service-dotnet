@@ -75,14 +75,23 @@ internal static class AturanExportCatalog
             "footnote",
             """
             {"numbering":{"number_format":{"value":"arabic","is_editable":true},"type":{"value":"continuous","is_editable":true}},"separator":{"paragraph":{"alignment":{"value":"left","is_editable":false},"indentation":{"left_indent":{"value":0,"is_editable":false},"first_line_indent":{"value":0,"is_editable":false}},"spacing":{"before":{"value":0,"is_editable":false},"after":{"value":0,"is_editable":false},"line_spacing":{"value":1,"is_editable":true}}},"cegah_tab_awal":{"value":true,"is_editable":true}},"footnote_text":{"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":10,"is_editable":true}},"paragraph":{"alignment":{"value":"left","is_editable":true},"spacing":{"line_spacing":{"value":1,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"struktur_konten":{"satu_enter_sebelum":{"value":true,"is_editable":true}}},"sumber":{"wajib_berisi_sumber":{"value":true,"is_editable":false},"format_penulisan":{"value":[{"keterangan":"","format":"","contoh":""}],"is_editable":false}}}
-            """),
-        new(
-            "Referensi",
-            "daftar_pustaka",
-            """
-            {"font":{"font_name":{"value":"Times New Roman","is_editable":true},"font_size":{"value":12,"is_editable":true}},"paragraph":{"alignment":{"value":"justify","is_editable":true},"spacing":{"line_spacing":{"value":1,"is_editable":true},"before":{"value":0,"is_editable":true},"after":{"value":0,"is_editable":true}}},"struktur_konten":{"satu_enter_antar_sumber":{"value":true,"is_editable":true}},"urut_abjad":{"value":true,"is_editable":true}}
             """)
     ];
+
+    public static IReadOnlyList<AturanDetail> CreateDefaultDetails(uint aturanId, bool appendTemplateNote = false)
+    {
+        return ValidationRuleTemplates
+            .Select(template => new AturanDetail
+            {
+                AturanId = aturanId,
+                AturanDetailKategori = template.Kategori,
+                AturanDetailKey = template.Key,
+                AturanDetailJsonValue = template.JsonValue,
+                AturanDetailStatus = 1,
+                AturanDetailCatatan = appendTemplateNote ? TemplateNote : null
+            })
+            .ToList();
+    }
 
     public static IReadOnlyList<AturanDetail> MergeValidationTemplates(IReadOnlyList<AturanDetail> details)
     {
@@ -100,16 +109,10 @@ internal static class AturanExportCatalog
             if (existingKeys.Contains(template.Key))
                 continue;
 
-            merged.Add(new AturanDetail
-            {
-                AturanDetailId = syntheticId++,
-                AturanId = aturanId,
-                AturanDetailKategori = template.Kategori,
-                AturanDetailKey = template.Key,
-                AturanDetailJsonValue = template.JsonValue,
-                AturanDetailStatus = 1,
-                AturanDetailCatatan = TemplateNote
-            });
+            var detail = CreateDefaultDetails(aturanId, appendTemplateNote: true)
+                .First(item => string.Equals(item.AturanDetailKey, template.Key, StringComparison.OrdinalIgnoreCase));
+            detail.AturanDetailId = syntheticId++;
+            merged.Add(detail);
         }
 
         return merged;

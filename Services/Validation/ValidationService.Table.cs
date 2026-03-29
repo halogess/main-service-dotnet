@@ -49,7 +49,7 @@ public partial class ValidationService
         }
 
         var aturan = await _db.Aturans
-            .Where(a => a.AturanStatus == 1)
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -164,6 +164,9 @@ public partial class ValidationService
         var pagesWithParagraph = BuildPagesWithParagraph(bodyElements, labelMap, pageNumbersById);
 
         var captionPrefixes = BuildCaptionPrefixes(captionRule?.Numbering);
+        if (captionPrefixes.Count == 0)
+            captionPrefixes.Add("Tabel");
+        var normalizedCaptionPosition = NormalizePositionValue(captionRule?.Position?.Value);
 
         var tableBlocks = new List<TableBlockInfo>();
         var structuralViolations = new List<TableStructuralViolationInfo>();
@@ -202,12 +205,12 @@ public partial class ValidationService
 
             if (captionRule != null)
             {
-                if (normalizedLabel != "caption_tabel")
-                    continue;
-
                 var content = ParseElementContent(elem.DelemenJsonTree);
                 var normalizedText = NormalizeWhitespace(content.PlainText);
                 if (string.IsNullOrWhiteSpace(normalizedText))
+                    continue;
+
+                if (!IsTableCaptionCandidateLabel(normalizedLabel, normalizedText, captionPrefixes))
                     continue;
 
                 captionCandidates.Add(new CaptionInfo
@@ -217,6 +220,45 @@ public partial class ValidationService
                     Content = content,
                     NormalizedText = normalizedText
                 });
+            }
+        }
+
+        if (captionCandidates.Count > 0)
+        {
+            var structuralViolationIds = structuralViolations
+                .Select(violation => violation.ElementId)
+                .ToHashSet();
+            var tableBlockIds = tableBlocks
+                .Select(block => block.ElementId)
+                .ToHashSet();
+
+            foreach (var caption in captionCandidates)
+            {
+                foreach (var targetIndex in GetAdjacentElementIndices(caption.OrderIndex, bodyElements.Count, normalizedCaptionPosition))
+                {
+                    var targetElement = bodyElements[targetIndex];
+                    if (structuralViolationIds.Contains(targetElement.DelemenId) ||
+                        tableBlockIds.Contains(targetElement.DelemenId))
+                    {
+                        continue;
+                    }
+
+                    var targetLabel = labelMap.TryGetValue(targetElement.DelemenId, out var rawTargetLabel)
+                        ? NormalizeLabel(rawTargetLabel)
+                        : string.Empty;
+
+                    if (!TryDescribeImageLikeElement(targetElement, targetLabel, out var evidence, out var elementType, out var _))
+                        continue;
+
+                    structuralViolations.Add(new TableStructuralViolationInfo
+                    {
+                        ElementId = targetElement.DelemenId,
+                        ElementType = elementType,
+                        Evidence = evidence
+                    });
+                    structuralViolationIds.Add(targetElement.DelemenId);
+                    break;
+                }
             }
         }
 
@@ -482,7 +524,7 @@ public partial class ValidationService
                 CaptionInfo? selectedCaption = null;
                 var positionRule = captionRule.Position?.Value?.Trim();
                 var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
-                    ? null
+                    ? normalizedCaptionPosition
                     : positionRule.ToLowerInvariant();
 
                 if (normalizedPosition == "before")
@@ -881,6 +923,20 @@ public partial class ValidationService
         return prefixes;
     }
 
+    private static List<string> BuildCaptionPrefixes(CaptionNumberingRule? numberingRule)
+    {
+        var prefixes = new List<string>();
+        var format = numberingRule?.NumberFormat?.Value;
+        if (string.IsNullOrWhiteSpace(format))
+            return prefixes;
+
+        var prefix = ExtractCaptionPrefix(format);
+        if (!string.IsNullOrWhiteSpace(prefix))
+            prefixes.Add(prefix);
+
+        return prefixes;
+    }
+
     private static string ExtractCaptionPrefix(string format)
     {
         if (string.IsNullOrWhiteSpace(format))
@@ -891,6 +947,119 @@ public partial class ValidationService
         var prefix = bracketIndex > 0 ? trimmed[..bracketIndex] : trimmed;
         prefix = NormalizeWhitespace(prefix);
         return prefix.Trim().TrimEnd('.', ':', '-', ' ');
+    }
+
+    private static string? NormalizePositionValue(string? position)
+    {
+        if (string.IsNullOrWhiteSpace(position))
+            return null;
+
+        return position.Trim().ToLowerInvariant();
+    }
+
+    private static bool IsTableCaptionCandidateLabel(
+        string normalizedLabel,
+        string normalizedText,
+        IReadOnlyList<string> prefixes)
+    {
+        if (normalizedLabel == "caption_tabel")
+            return true;
+
+        return normalizedLabel == "caption_gambar" &&
+               MatchesCaptionNumbering(normalizedText, prefixes);
+    }
+
+    private static bool IsCodeTitleCandidateLabel(
+        string normalizedLabel,
+        string normalizedText,
+        IReadOnlyList<string> prefixes)
+    {
+        if (normalizedLabel == "judul_kode")
+            return true;
+
+        return normalizedLabel == "caption_gambar" &&
+               MatchesCaptionNumbering(normalizedText, prefixes);
+    }
+
+    private static bool IsImageCaptionCandidateLabel(
+        string normalizedLabel,
+        string normalizedText,
+        IReadOnlyList<string> tablePrefixes,
+        IReadOnlyList<string> codePrefixes)
+    {
+        if (normalizedLabel != "caption_gambar")
+            return false;
+
+        return !MatchesCaptionNumbering(normalizedText, tablePrefixes) &&
+               !MatchesCaptionNumbering(normalizedText, codePrefixes);
+    }
+
+    private static IEnumerable<int> GetAdjacentElementIndices(
+        int sourceIndex,
+        int totalCount,
+        string? normalizedPosition)
+    {
+        if (sourceIndex < 0 || totalCount <= 0)
+            yield break;
+
+        if (normalizedPosition == "before")
+        {
+            if (sourceIndex + 1 < totalCount)
+                yield return sourceIndex + 1;
+            yield break;
+        }
+
+        if (normalizedPosition == "after")
+        {
+            if (sourceIndex - 1 >= 0)
+                yield return sourceIndex - 1;
+            yield break;
+        }
+
+        if (sourceIndex + 1 < totalCount)
+            yield return sourceIndex + 1;
+
+        if (sourceIndex - 1 >= 0)
+            yield return sourceIndex - 1;
+    }
+
+    private static bool TryDescribeImageLikeElement(
+        BodyElementInfo element,
+        string normalizedLabel,
+        out string evidence,
+        out string? elementType,
+        out ElementContentInfo content)
+    {
+        evidence = "Gambar";
+        elementType = element.DelemenType;
+        content = ParseElementContent(element.DelemenJsonTree);
+
+        var normalizedText = NormalizeWhitespace(content.PlainText);
+        var imageItems = ExtractImageItems(element.DelemenJsonTree);
+        var isImageElementType =
+            string.Equals(element.DelemenType, "gambar", StringComparison.OrdinalIgnoreCase) ||
+            IsImageType(element.DelemenType);
+        var isImageLabel =
+            normalizedLabel == "gambar" ||
+            normalizedLabel == "image";
+        var hasStandaloneImageContent =
+            imageItems.Count > 0 &&
+            string.IsNullOrWhiteSpace(normalizedText);
+
+        if (!isImageElementType && !hasStandaloneImageContent && !(isImageLabel && string.IsNullOrWhiteSpace(normalizedText)))
+            return false;
+
+        if (imageItems.Count > 0)
+            evidence = BuildImageEvidence(imageItems);
+        else if (string.IsNullOrWhiteSpace(evidence))
+            evidence = "Gambar";
+
+        if (string.IsNullOrWhiteSpace(elementType))
+        {
+            elementType = isImageLabel ? normalizedLabel : "gambar";
+        }
+
+        return true;
     }
 
     private static CaptionInfo? SelectPreferredCaptionCandidate(

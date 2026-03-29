@@ -22,7 +22,7 @@ public class AturanControllerNormalizationTests
                 {
                     AturanId = 1,
                     AturanVersi = "v1",
-                    AturanStatus = 1,
+                    AturanStatus = AturanStatusValues.Aktif,
                     AturanSkorMinimum = 90,
                     AturanTemplateFilePath = "templates/template.dotx",
                     AturanCreatedAt = new DateTime(2026, 3, 1, 10, 0, 0),
@@ -70,7 +70,8 @@ public class AturanControllerNormalizationTests
         db.Aturans.Add(new Aturan
         {
             AturanId = 1,
-            AturanVersi = "v1"
+            AturanVersi = "v1",
+            AturanStatus = AturanStatusValues.MenungguReview
         });
         db.AturanDetails.Add(new AturanDetail
         {
@@ -109,6 +110,55 @@ public class AturanControllerNormalizationTests
         Assert.Equal(
             """{"continue":{"value":true,"is_editable":false,"is_hard_constraint":false}}""",
             updated!.AturanDetailJsonValue);
+        var aturan = await db.Aturans.FindAsync((uint)1);
+        Assert.Equal(AturanStatusValues.TidakAktif, aturan!.AturanStatus);
+    }
+
+    [Fact]
+    public async Task PatchAturanDetail_ShouldKeepActiveStatusWhenEditingActiveAturan()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        db.Aturans.Add(new Aturan
+        {
+            AturanId = 2,
+            AturanVersi = "v2",
+            AturanStatus = AturanStatusValues.Aktif
+        });
+        db.AturanDetails.Add(new AturanDetail
+        {
+            AturanDetailId = 20,
+            AturanId = 2,
+            AturanDetailKey = "nomor_halaman_akhir",
+            AturanDetailJsonValue = """{"continue":{"value":false,"is_editable":false,"is_hard_constraint":false}}"""
+        });
+        await db.SaveChangesAsync();
+
+        var controller = new AturanController(Mock.Of<IAturanService>(), db)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+        controller.HttpContext.Items["Role"] = "admin";
+
+        var request = new AturanDetailPatchRequest
+        {
+            details =
+            [
+                new AturanDetailPatchItem
+                {
+                    aturan_detail_id = 20,
+                    json_value = """{"continue":true}"""
+                }
+            ]
+        };
+
+        var result = await controller.PatchAturanDetail(2, request);
+
+        Assert.IsType<OkObjectResult>(result);
+        var aturan = await db.Aturans.FindAsync((uint)2);
+        Assert.Equal(AturanStatusValues.Aktif, aturan!.AturanStatus);
     }
 
     [Fact]

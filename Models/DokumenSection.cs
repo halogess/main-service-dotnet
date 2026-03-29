@@ -72,10 +72,10 @@ public class DokumenSection
     public string? DsecOrientation { get; set; }
 
     [Column("dsec_margin_top_twips")]
-    public uint? DsecMarginTopTwips { get; set; }
+    public long? DsecMarginTopTwips { get; set; }
 
     [Column("dsec_margin_bottom_twips")]
-    public uint? DsecMarginBottomTwips { get; set; }
+    public long? DsecMarginBottomTwips { get; set; }
 
     [Column("dsec_margin_left_twips")]
     public uint? DsecMarginLeftTwips { get; set; }

@@ -83,28 +83,28 @@ public class DokumenFormatParagraf
 
     // Indentation (twips)
     [Column("dfp_ind_left_twips")]
-    public uint? DfpIndLeftTwips { get; set; }
+    public long? DfpIndLeftTwips { get; set; }
 
     [Column("dfp_ind_right_twips")]
-    public uint? DfpIndRightTwips { get; set; }
+    public long? DfpIndRightTwips { get; set; }
 
     [Column("dfp_ind_first_line_twips")]
-    public uint? DfpIndFirstLineTwips { get; set; }
+    public long? DfpIndFirstLineTwips { get; set; }
 
     [Column("dfp_ind_hanging_twips")]
-    public uint? DfpIndHangingTwips { get; set; }
+    public long? DfpIndHangingTwips { get; set; }
 
     [Column("dfp_ind_start_twips")]
-    public uint? DfpIndStartTwips { get; set; }
+    public long? DfpIndStartTwips { get; set; }
 
     [Column("dfp_ind_end_twips")]
-    public uint? DfpIndEndTwips { get; set; }
+    public long? DfpIndEndTwips { get; set; }
 
     [Column("dfp_ind_left_chars")]
-    public uint? DfpIndLeftChars { get; set; }
+    public long? DfpIndLeftChars { get; set; }
 
     [Column("dfp_ind_right_chars")]
-    public uint? DfpIndRightChars { get; set; }
+    public long? DfpIndRightChars { get; set; }
 
     // Alignment
     [Column("dfp_jc")]

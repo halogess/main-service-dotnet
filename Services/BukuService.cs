@@ -10,6 +10,23 @@ public interface IBukuService
 
 public class BukuService : IBukuService
 {
+    private static readonly string[] NonChapterSectionTokens =
+    [
+        "cover",
+        "sampul",
+        "abstrak",
+        "abstract",
+        "kata pengantar",
+        "daftar isi",
+        "table of content",
+        "table of contents",
+        "daftar pustaka",
+        "bibliography",
+        "references",
+        "lampiran",
+        "appendix"
+    ];
+
     private readonly IFileService _fileService;
     private readonly IBukuArchiveService _bukuArchiveService;
     private readonly KorektorBukuDbContext _db;
@@ -33,6 +50,7 @@ public class BukuService : IBukuService
     public async Task<Buku> UploadBuku(string nrp, string judul, List<IFormFile> files)
     {
         _logger.LogInformation("Upload buku dimulai: NRP={Nrp}, Judul={Judul}, Jumlah file={Count}", nrp, judul, files.Count);
+        ValidateChapterFiles(files);
 
         var buku = new Buku
         {
@@ -106,5 +124,39 @@ public class BukuService : IBukuService
 
         _logger.LogInformation("Upload buku selesai: ID={BukuId}", buku.BukuId);
         return buku;
+    }
+
+    private static void ValidateChapterFiles(IEnumerable<IFormFile> files)
+    {
+        var invalidFiles = files
+            .Select(file => Path.GetFileName(file.FileName))
+            .Where(FilenameLooksLikeNonChapterSection)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (invalidFiles.Count == 0)
+            return;
+
+        throw new InvalidOperationException(
+            $"Upload buku hanya menerima file isi buku per BAB. File berikut terdeteksi bukan BAB: {string.Join(", ", invalidFiles)}. Cover, abstrak, daftar isi, lampiran, dan bagian lain divalidasi oleh korektor buku.");
+    }
+
+    private static bool FilenameLooksLikeNonChapterSection(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+            return false;
+
+        var normalizedFileName = NormalizeFilename(Path.GetFileNameWithoutExtension(fileName));
+        return NonChapterSectionTokens.Any(token => normalizedFileName.Contains(token, StringComparison.Ordinal));
+    }
+
+    private static string NormalizeFilename(string fileName)
+    {
+        var normalizedChars = fileName
+            .Select(ch => char.IsLetterOrDigit(ch) ? char.ToLowerInvariant(ch) : ' ')
+            .ToArray();
+
+        return string.Join(' ', new string(normalizedChars)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 }

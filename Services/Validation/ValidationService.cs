@@ -874,36 +874,6 @@ public class FootnoteSourceFormatRule
     public string? Contoh { get; set; }
 }
 
-public class DaftarPustakaRule
-{
-    [JsonPropertyName("font")]
-    public ParagraphFontRule? Font { get; set; }
-
-    [JsonPropertyName("paragraph")]
-    public DaftarPustakaParagraphRule? Paragraph { get; set; }
-
-    [JsonPropertyName("struktur_konten")]
-    public DaftarPustakaContentStructureRule? StrukturKonten { get; set; }
-
-    [JsonPropertyName("urut_abjad")]
-    public RuleValue<bool>? UrutAbjad { get; set; }
-}
-
-public class DaftarPustakaParagraphRule
-{
-    [JsonPropertyName("alignment")]
-    public RuleValue<string>? Alignment { get; set; }
-
-    [JsonPropertyName("spacing")]
-    public TitleParagraphSpacingRule? Spacing { get; set; }
-}
-
-public class DaftarPustakaContentStructureRule
-{
-    [JsonPropertyName("satu_enter_antar_sumber")]
-    public RuleValue<bool>? SatuEnterAntarSumber { get; set; }
-}
-
 #endregion
 
 #region Validation Result DTOs
@@ -1250,10 +1220,6 @@ public partial class ValidationService : IValidationService
             var footnoteResult = await ValidateFootnoteAsync(dokumenId, cancellationToken);
             result.MergeFrom(footnoteResult);
         }
-
-        // Validate bibliography
-        var daftarPustakaResult = await ValidateDaftarPustakaAsync(dokumenId, cancellationToken);
-        result.MergeFrom(daftarPustakaResult);
 
         // Validate images
         var imageResult = await ValidateImageAsync(dokumenId, cancellationToken);
@@ -1814,6 +1780,19 @@ public partial class ValidationService : IValidationService
             return null;
 
         return Math.Round(twips.Value / TwipsPerCm, 2);
+    }
+
+    private static decimal? TwipsToCm(long? twips)
+    {
+        if (!twips.HasValue)
+            return null;
+
+        return Math.Round(twips.Value / TwipsPerCm, 2);
+    }
+
+    private static decimal? TwipsToPoints(long? twips)
+    {
+        return twips.HasValue ? twips.Value / 20m : null;
     }
 
     private static string NormalizeAlignmentValue(string? alignment)

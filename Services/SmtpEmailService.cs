@@ -21,6 +21,7 @@ public class SmtpEmailService : IEmailService
     private readonly string _senderName;
     private readonly string? _smtpSenderPassword;
     private readonly string _frontendBaseUrl;
+    private readonly bool _checkCertificateRevocation;
     private readonly bool _overrideRecipientsEnabled;
     private readonly string? _overrideRecipientEmail;
 
@@ -33,9 +34,10 @@ public class SmtpEmailService : IEmailService
         _smtpPort = int.Parse(_configuration["Email:SmtpPort"] ?? "587");
         _useSsl = bool.Parse(_configuration["Email:UseSsl"] ?? "true");
         _smtpSenderEmail = _configuration["Email:SenderEmail"];
-        _senderName = _configuration["Email:SenderName"] ?? "Validasi Tugas Akhir";
+        _senderName = _configuration["Email:SenderName"] ?? "Validasi Format Buku TA/Tesis";
         _smtpSenderPassword = _configuration["Email:SenderPassword"];
         _frontendBaseUrl = (_configuration["Email:DashboardUrl"] ?? "http://localhost:5173").TrimEnd('/');
+        _checkCertificateRevocation = bool.Parse(_configuration["Email:CheckCertificateRevocation"] ?? "true");
         _overrideRecipientsEnabled = bool.Parse(_configuration["Email:OverrideRecipientsEnabled"] ?? "false");
         _overrideRecipientEmail = _configuration["Email:OverrideRecipientEmail"];
 
@@ -45,6 +47,9 @@ public class SmtpEmailService : IEmailService
         if (hasSmtpConfig)
         {
             _logger.LogInformation("SmtpEmailService dikonfigurasi menggunakan SMTP");
+            _logger.LogInformation(
+                "SMTP certificate revocation check: {CertificateRevocationCheck}",
+                _checkCertificateRevocation ? "enabled" : "disabled");
         }
         else
         {
@@ -167,7 +172,7 @@ public class SmtpEmailService : IEmailService
         var resourceLabel = normalizedResourceType == "buku" ? "Buku" : "Dokumen";
         var status = isLolos ? "LOLOS" : "TIDAK LOLOS";
         var statusColor = isLolos ? "#22c55e" : "#ef4444";
-        var subject = $"Hasil Validasi {resourceLabel}: {resourceTitle}";
+        var subject = $"Hasil Validasi Format {resourceLabel}: {resourceTitle}";
         var detailUrl = BuildValidationDetailUrl(normalizedResourceType, resourceId);
         var encodedRecipientName = WebUtility.HtmlEncode(toName);
         var encodedResourceTitle = WebUtility.HtmlEncode(resourceTitle);
@@ -183,17 +188,17 @@ public class SmtpEmailService : IEmailService
         .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
         .header {{ background: linear-gradient(135deg, #3b82f6, #1d4ed8); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
         .content {{ background: #f8fafc; padding: 30px; border: 1px solid #e2e8f0; }}
-        .status-badge {{ display: inline-block; padding: 10px 20px; border-radius: 20px; font-weight: bold; font-size: 18px; color: white; background-color: {statusColor}; }}
+        .status-badge {{ display: inline-block; padding: 7px 16px; border-radius: 16px; font-weight: 700; font-size: 14px; line-height: 1.2; color: white; background-color: {statusColor}; }}
         .info-box {{ background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3b82f6; }}
         .footer {{ text-align: center; padding: 20px; color: #64748b; font-size: 12px; }}
-        .button {{ display: inline-block; background: #3b82f6; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 20px; }}
+        .button {{ display: inline-block; background: #3b82f6; color: #ffffff !important; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 20px; font-weight: 600; }}
     </style>
 </head>
 <body>
     <div class='container'>
         <div class='header'>
             <h1 style='margin: 0;'>Validasi {resourceLabel}</h1>
-            <p style='margin: 10px 0 0 0; opacity: 0.9;'>Sistem Validasi Tugas Akhir</p>
+            <p style='margin: 10px 0 0 0; opacity: 0.9;'>Validasi Format Buku TA/Tesis</p>
         </div>
         <div class='content'>
             <p>Halo <strong>{encodedRecipientName}</strong>,</p>
@@ -206,11 +211,11 @@ public class SmtpEmailService : IEmailService
             </div>
 
             {(isLolos
-                ? $"<p><strong>Selamat!</strong> {resourceLabel} Anda telah memenuhi semua standar format yang ditetapkan.</p>"
+                ? $"<p>{resourceLabel} Anda telah memenuhi persyaratan format yang ditetapkan.</p>"
                 : $"<p>Silakan buka detail {resourceLabel.ToLowerInvariant()} untuk melihat kesalahan dan langkah perbaikannya.</p>")}
 
             <center>
-                <a href='{encodedDetailUrl}' class='button'>Lihat Detail {resourceLabel}</a>
+                <a href='{encodedDetailUrl}' class='button' style='display:inline-block;background:#3b82f6;color:#ffffff !important;-webkit-text-fill-color:#ffffff;padding:12px 24px;text-decoration:none;border-radius:6px;margin-top:20px;font-weight:600;'>Lihat Detail {resourceLabel}</a>
             </center>
         </div>
         <div class='footer'>
@@ -303,7 +308,10 @@ public class SmtpEmailService : IEmailService
             throw new InvalidOperationException("SMTP credentials tidak dikonfigurasi");
         }
 
-        using var smtp = new SmtpClient();
+        using var smtp = new SmtpClient
+        {
+            CheckCertificateRevocation = _checkCertificateRevocation
+        };
 
         try
         {

@@ -22,6 +22,9 @@ public class Antrian
     [Column("dokumen_id")]
     public uint? DokumenId { get; set; }
 
+    [Column("aturan_id")]
+    public uint? AturanId { get; set; }
+
     [Column("antrian_extraction_status")]
     public string? AntrianExtractionStatus { get; set; } // 'in_queue', 'processing', 'completed', 'failed'
 

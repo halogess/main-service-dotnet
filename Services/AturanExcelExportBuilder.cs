@@ -88,14 +88,15 @@ public static class AturanExcelExportBuilder
 
     public static List<AturanExcelExportRow> BuildRows(IReadOnlyList<AturanDetail> details)
     {
+        var visibleDetails = AturanDetailVisibility.FilterVisible(details);
         var rows = new List<AturanExcelExportRow>();
-        var detailKeys = details
+        var detailKeys = visibleDetails
             .Select(d => d.AturanDetailKey)
             .Where(k => !string.IsNullOrWhiteSpace(k))
             .Select(k => k!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var detail in details)
+        foreach (var detail in visibleDetails)
         {
             AppendDetailRows(rows, detail, detailKeys);
         }
@@ -105,8 +106,9 @@ public static class AturanExcelExportBuilder
 
     private static List<AturanExcelExportRow> BuildExportRows(IReadOnlyList<AturanDetail> details)
     {
-        var mergedDetails = AturanExportCatalog.MergeValidationTemplates(details);
-        var syntheticElements = AturanExportCatalog.GetSyntheticElementKeys(details);
+        var visibleDetails = AturanDetailVisibility.FilterVisible(details);
+        var mergedDetails = AturanExportCatalog.MergeValidationTemplates(visibleDetails);
+        var syntheticElements = AturanExportCatalog.GetSyntheticElementKeys(visibleDetails);
         return BuildRows(mergedDetails)
             .Select(row => syntheticElements.Contains(row.Elemen)
                 ? row with { Note = AturanExportCatalog.AppendTemplateNote(row.Note) }

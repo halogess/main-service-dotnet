@@ -60,7 +60,7 @@ public partial class ValidationService
             return result;
 
         var aturan = await _db.Aturans
-            .Where(a => a.AturanStatus == 1)
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 

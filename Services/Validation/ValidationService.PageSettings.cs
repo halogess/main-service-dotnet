@@ -34,7 +34,7 @@ public partial class ValidationService
 
         // Get active aturan with details
         var aturan = await _db.Aturans
-            .Where(a => a.AturanStatus == 1)
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -289,7 +289,7 @@ public partial class ValidationService
         ValidationResult result,
         string marginName,
         DokumenSection section,
-        uint? actualTwips,
+        long? actualTwips,
         decimal? expectedCm,
         int sectionNumber,
         string sectionType,
@@ -320,6 +320,27 @@ public partial class ValidationService
                 Locations = BuildPageSettingsLocations($"margin_{marginName}", section, sectionPageMap, expectedCm)
             });
         }
+    }
+
+    private void ValidateSingleMargin(
+        ValidationResult result,
+        string marginName,
+        DokumenSection section,
+        uint? actualTwips,
+        decimal? expectedCm,
+        int sectionNumber,
+        string sectionType,
+        Dictionary<uint, int> sectionPageMap)
+    {
+        ValidateSingleMargin(
+            result,
+            marginName,
+            section,
+            actualTwips.HasValue ? (long?)actualTwips.Value : null,
+            expectedCm,
+            sectionNumber,
+            sectionType,
+            sectionPageMap);
     }
 
     private void ValidateHeaderFooter(
@@ -1114,6 +1135,18 @@ public partial class ValidationService
     }
 
     private static decimal ResolveDistancePoints(uint? twips, decimal? expectedDistanceCm)
+    {
+        var actual = TwipsToPoints(twips) ?? 0m;
+        if (actual > 0m)
+            return actual;
+
+        if (expectedDistanceCm.HasValue && expectedDistanceCm.Value > 0m)
+            return expectedDistanceCm.Value * TwipsPerCm / 20m;
+
+        return 0m;
+    }
+
+    private static decimal ResolveDistancePoints(long? twips, decimal? expectedDistanceCm)
     {
         var actual = TwipsToPoints(twips) ?? 0m;
         if (actual > 0m)

@@ -13,7 +13,10 @@ public class TestingController : ControllerBase
     private readonly SttsDbContext _sttsDb;
     private readonly IDocxExtractionService _docxExtraction;
 
-    public TestingController(KorektorBukuDbContext db, SttsDbContext sttsDb, IDocxExtractionService docxExtraction)
+    public TestingController(
+        KorektorBukuDbContext db,
+        SttsDbContext sttsDb,
+        IDocxExtractionService docxExtraction)
     {
         _db = db;
         _sttsDb = sttsDb;

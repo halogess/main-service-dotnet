@@ -86,9 +86,9 @@ public static class SectionExtractor
         if (pageMargin != null)
         {
             if (pageMargin.Top != null)
-                section.DsecMarginTopTwips = (uint)Math.Abs((int)pageMargin.Top);
+                section.DsecMarginTopTwips = pageMargin.Top.Value;
             if (pageMargin.Bottom != null)
-                section.DsecMarginBottomTwips = (uint)Math.Abs((int)pageMargin.Bottom);
+                section.DsecMarginBottomTwips = pageMargin.Bottom.Value;
             if (pageMargin.Left != null)
                 section.DsecMarginLeftTwips = pageMargin.Left.Value;
             if (pageMargin.Right != null)

@@ -281,8 +281,9 @@ public class DocxExtractionService : IDocxExtractionService
                         if (effectiveHanging.HasValue)
                         {
                             var existingHanging = format.DfpIndHangingTwips ?? 0;
-                            if (effectiveHanging.Value > existingHanging)
-                                format.DfpIndHangingTwips = effectiveHanging.Value;
+                            var resolvedHanging = (long)effectiveHanging.Value;
+                            if (resolvedHanging > existingHanging)
+                                format.DfpIndHangingTwips = resolvedHanging;
                         }
                     }
 
@@ -484,8 +485,9 @@ public class DocxExtractionService : IDocxExtractionService
                     if (effectiveHanging.HasValue)
                     {
                         var existingHanging = format.DfpIndHangingTwips ?? 0;
-                        if (effectiveHanging.Value > existingHanging)
-                            format.DfpIndHangingTwips = effectiveHanging.Value;
+                        var resolvedHanging = (long)effectiveHanging.Value;
+                        if (resolvedHanging > existingHanging)
+                            format.DfpIndHangingTwips = resolvedHanging;
                     }
                 }
 

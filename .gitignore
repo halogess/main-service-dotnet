@@ -44,3 +44,6 @@ appsettings.json
 
 # Local DOCX test fixtures
 Tests/TestData/Docx/*.docx
+
+# Local backups / database dumps
+backups/*.sql

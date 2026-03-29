@@ -133,14 +133,14 @@ public class ParagraphFormatExtractor
         format.DfpTextAlignment = effective.TextAlignment;
         
         // Indentation (RESOLVED from docDefaults → style → numbering → direct)
-        format.DfpIndLeftTwips = effective.IndentLeft.HasValue ? (uint?)effective.IndentLeft.Value : null;
-        format.DfpIndRightTwips = effective.IndentRight.HasValue ? (uint?)effective.IndentRight.Value : null;
-        format.DfpIndFirstLineTwips = effective.IndentFirstLine.HasValue ? (uint?)effective.IndentFirstLine.Value : null;
-        format.DfpIndHangingTwips = effective.IndentHanging.HasValue ? (uint?)effective.IndentHanging.Value : null;
-        format.DfpIndStartTwips = effective.IndentStart.HasValue ? (uint?)effective.IndentStart.Value : null;
-        format.DfpIndEndTwips = effective.IndentEnd.HasValue ? (uint?)effective.IndentEnd.Value : null;
-        format.DfpIndLeftChars = effective.IndentLeftChars.HasValue ? (uint?)effective.IndentLeftChars.Value : null;
-        format.DfpIndRightChars = effective.IndentRightChars.HasValue ? (uint?)effective.IndentRightChars.Value : null;
+        format.DfpIndLeftTwips = effective.IndentLeft;
+        format.DfpIndRightTwips = effective.IndentRight;
+        format.DfpIndFirstLineTwips = effective.IndentFirstLine;
+        format.DfpIndHangingTwips = effective.IndentHanging;
+        format.DfpIndStartTwips = effective.IndentStart;
+        format.DfpIndEndTwips = effective.IndentEnd;
+        format.DfpIndLeftChars = effective.IndentLeftChars;
+        format.DfpIndRightChars = effective.IndentRightChars;
         
         // Spacing (RESOLVED)
         format.DfpSpacingBeforeTwips = effective.SpaceBefore.HasValue ? (uint?)effective.SpaceBefore.Value : null;
@@ -218,21 +218,21 @@ public class ParagraphFormatExtractor
         if (ind != null)
         {
             if (ind.Left?.HasValue == true)
-                format.DfpIndLeftTwips = ParseUint(ind.Left.Value?.ToString() ?? "");
+                format.DfpIndLeftTwips = ParseInt(ind.Left.Value?.ToString() ?? "");
             if (ind.Right?.HasValue == true)
-                format.DfpIndRightTwips = ParseUint(ind.Right.Value?.ToString() ?? "");
+                format.DfpIndRightTwips = ParseInt(ind.Right.Value?.ToString() ?? "");
             if (ind.FirstLine?.HasValue == true)
-                format.DfpIndFirstLineTwips = ParseUint(ind.FirstLine.Value?.ToString() ?? "");
+                format.DfpIndFirstLineTwips = ParseInt(ind.FirstLine.Value?.ToString() ?? "");
             if (ind.Hanging?.HasValue == true)
-                format.DfpIndHangingTwips = ParseUint(ind.Hanging.Value?.ToString() ?? "");
+                format.DfpIndHangingTwips = ParseInt(ind.Hanging.Value?.ToString() ?? "");
             if (ind.Start?.HasValue == true)
-                format.DfpIndStartTwips = ParseUint(ind.Start.Value?.ToString() ?? "");
+                format.DfpIndStartTwips = ParseInt(ind.Start.Value?.ToString() ?? "");
             if (ind.End?.HasValue == true)
-                format.DfpIndEndTwips = ParseUint(ind.End.Value?.ToString() ?? "");
+                format.DfpIndEndTwips = ParseInt(ind.End.Value?.ToString() ?? "");
             if (ind.LeftChars?.HasValue == true)
-                format.DfpIndLeftChars = (uint)ind.LeftChars.Value;
+                format.DfpIndLeftChars = ind.LeftChars.Value;
             if (ind.RightChars?.HasValue == true)
-                format.DfpIndRightChars = (uint)ind.RightChars.Value;
+                format.DfpIndRightChars = ind.RightChars.Value;
         }
         
         // Alignment
@@ -251,6 +251,11 @@ public class ParagraphFormatExtractor
         if (int.TryParse(value, out int result))
             return result >= 0 ? (uint)result : null;
         return null;
+    }
+
+    private static int? ParseInt(string value)
+    {
+        return int.TryParse(value, out int result) ? result : null;
     }
     
     private static bool IsToggleOn(OnOffType? toggle)

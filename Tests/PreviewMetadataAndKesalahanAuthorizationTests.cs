@@ -15,6 +15,7 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
     public async Task GetDokumenById_ShouldReturnAvailablePagesFromStorageImages()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
         db.Dokumens.Add(new Dokumen
         {
             DokumenId = 1,
@@ -39,6 +40,7 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
 
             var controller = new DokumenController(
                 db,
+                sttsDb,
                 Mock.Of<IDokumenService>(),
                 Mock.Of<IDokumenImportService>(),
                 Mock.Of<IDokumenHistoryPurgeService>(),
@@ -60,6 +62,66 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
             var valueType = value.GetType();
             Assert.Equal(3, valueType.GetProperty("total_halaman")!.GetValue(value));
             Assert.Equal([1, 2, 10], Assert.IsType<List<int>>(valueType.GetProperty("available_pages")!.GetValue(value)));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("STORAGE_PATH", originalStoragePath);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GetDokumenById_ShouldReturnDocxAndPdfReadyFlagsBasedOnPhysicalFiles()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
+        db.Dokumens.Add(new Dokumen
+        {
+            DokumenId = 2,
+            MhsNrp = "05111740000123",
+            DokumenFilename = "Bab2.docx",
+            DokumenStatus = "diproses",
+            DokumenDocxPath = "dokumen/05111740000123/2/docx/Bab2.docx",
+            DokumenPdfPath = "dokumen/05111740000123/2/pdf/Bab2.pdf"
+        });
+        await db.SaveChangesAsync();
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"dokumen-ready-test-{Guid.NewGuid():N}");
+        var originalStoragePath = Environment.GetEnvironmentVariable("STORAGE_PATH");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            Environment.SetEnvironmentVariable("STORAGE_PATH", tempDir);
+            var docxFullPath = Path.Combine(tempDir, "dokumen", "05111740000123", "2", "docx", "Bab2.docx");
+            Directory.CreateDirectory(Path.GetDirectoryName(docxFullPath)!);
+            await File.WriteAllBytesAsync(docxFullPath, [1, 2, 3]);
+
+            var controller = new DokumenController(
+                db,
+                sttsDb,
+                Mock.Of<IDokumenService>(),
+                Mock.Of<IDokumenImportService>(),
+                Mock.Of<IDokumenHistoryPurgeService>(),
+                Mock.Of<IValidationReportService>())
+            {
+                ControllerContext = new ControllerContext
+                {
+                    HttpContext = new DefaultHttpContext()
+                }
+            };
+
+            controller.HttpContext.Items["Nrp"] = "05111740000123";
+            controller.HttpContext.Items["Role"] = "mahasiswa";
+
+            var result = await controller.GetDokumenById(2);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            using var json = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
+            var root = json.RootElement;
+            Assert.True(root.GetProperty("docx_ready").GetBoolean());
+            Assert.False(root.GetProperty("pdf_ready").GetBoolean());
         }
         finally
         {
@@ -124,6 +186,78 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
         finally
         {
             Environment.SetEnvironmentVariable("STORAGE_PATH", originalStoragePath);
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GetBukuById_ShouldReturnArchiveReadyFlagsBasedOnPhysicalFiles()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
+        db.Bukus.Add(new Buku
+        {
+            BukuId = 2,
+            MhsNrp = "05111740000123",
+            BukuJudul = "Test Buku Ready",
+            BukuStatus = "diproses",
+            BukuDocxZipPath = "buku/05111740000123/2/docx/buku-docx.zip",
+            BukuPdfZipPath = "buku/05111740000123/2/pdf/buku-pdf.zip"
+        });
+        await db.SaveChangesAsync();
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"buku-ready-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var docxArchivePath = Path.Combine(tempDir, "buku", "05111740000123", "2", "docx", "buku-docx.zip");
+            Directory.CreateDirectory(Path.GetDirectoryName(docxArchivePath)!);
+            await File.WriteAllBytesAsync(docxArchivePath, [1, 2, 3]);
+
+            var archiveService = new Mock<IBukuArchiveService>();
+            archiveService
+                .Setup(service => service.TryResolveStorageFilePath(It.IsAny<string>(), out It.Ref<string>.IsAny))
+                .Returns((string relativePath, out string fullPath) =>
+                {
+                    fullPath = Path.Combine(tempDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    return true;
+                });
+            archiveService
+                .Setup(service => service.GetDocxArchiveRelativePath("05111740000123", 2))
+                .Returns("buku/05111740000123/2/docx/buku-docx.zip");
+            archiveService
+                .Setup(service => service.GetPdfArchiveRelativePath("05111740000123", 2))
+                .Returns("buku/05111740000123/2/pdf/buku-pdf.zip");
+
+            var controller = new BukuController(
+                db,
+                sttsDb,
+                Mock.Of<IBukuService>(),
+                Mock.Of<IWebSocketService>(),
+                Mock.Of<IValidationReportService>(),
+                archiveService.Object)
+            {
+                ControllerContext = new ControllerContext
+                {
+                    HttpContext = new DefaultHttpContext()
+                }
+            };
+
+            controller.HttpContext.Items["Nrp"] = "05111740000123";
+            controller.HttpContext.Items["Role"] = "mahasiswa";
+
+            var result = await controller.GetBukuById(2);
+
+            var ok = Assert.IsType<OkObjectResult>(result);
+            using var json = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
+            var root = json.RootElement;
+            Assert.True(root.GetProperty("docx_archive_ready").GetBoolean());
+            Assert.False(root.GetProperty("pdf_archive_ready").GetBoolean());
+        }
+        finally
+        {
             if (Directory.Exists(tempDir))
                 Directory.Delete(tempDir, recursive: true);
         }
@@ -234,6 +368,7 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
     public async Task GetKesalahanDetailsByDokumenPage_ShouldReturnOnlyRequestedPageItems()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
         db.Dokumens.Add(new Dokumen
         {
             DokumenId = 1,
@@ -282,6 +417,7 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
 
         var controller = new DokumenController(
             db,
+            sttsDb,
             Mock.Of<IDokumenService>(),
             Mock.Of<IDokumenImportService>(),
             Mock.Of<IDokumenHistoryPurgeService>(),
@@ -314,6 +450,7 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
     public async Task GetKesalahanDetailsByDokumenPage_ShouldForbidMahasiswaWhoDoesNotOwnDokumen()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
         db.Dokumens.Add(new Dokumen
         {
             DokumenId = 7,
@@ -325,6 +462,7 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
 
         var controller = new DokumenController(
             db,
+            sttsDb,
             Mock.Of<IDokumenService>(),
             Mock.Of<IDokumenImportService>(),
             Mock.Of<IDokumenHistoryPurgeService>(),

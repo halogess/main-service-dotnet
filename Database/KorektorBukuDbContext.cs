@@ -37,6 +37,8 @@ public class KorektorBukuDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        var isSqlite = Database.ProviderName?.Contains("Sqlite", StringComparison.OrdinalIgnoreCase) == true;
+
         modelBuilder.Entity<Buku>(entity =>
         {
             entity.Property(e => e.BukuCreatedAt)
@@ -85,8 +87,11 @@ public class KorektorBukuDbContext : DbContext
         modelBuilder.Entity<DokumenElemenVisual>(entity =>
         {
             entity.HasKey(e => e.DevId);
-            entity.Property(e => e.DevRefTipe)
-                .HasColumnType("enum('dokumen','bab')");
+            if (!isSqlite)
+            {
+                entity.Property(e => e.DevRefTipe)
+                    .HasColumnType("enum('dokumen','bab','buku','aturan')");
+            }
             entity.Property(e => e.DevText).HasColumnType("longtext");
         });
 
@@ -98,8 +103,11 @@ public class KorektorBukuDbContext : DbContext
         modelBuilder.Entity<DokumenSection>(entity =>
         {
             entity.HasKey(e => e.DsecId);
-            entity.Property(e => e.DsecRefTipe)
-                .HasColumnType("enum('bab','dokumen')");
+            if (!isSqlite)
+            {
+                entity.Property(e => e.DsecRefTipe)
+                    .HasColumnType("enum('bab','dokumen','buku','aturan')");
+            }
         });
 
         modelBuilder.Entity<DokumenPart>(entity =>
@@ -198,6 +206,11 @@ public class KorektorBukuDbContext : DbContext
         modelBuilder.Entity<Antrian>(entity =>
         {
             entity.HasKey(e => e.AntrianId);
+            if (!isSqlite)
+            {
+                entity.Property(e => e.AntrianTipe)
+                    .HasColumnType("enum('dokumen','buku','aturan')");
+            }
             entity.Property(e => e.AntrianCreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
             entity.Property(e => e.AntrianUpdatedAt)
@@ -209,6 +222,11 @@ public class KorektorBukuDbContext : DbContext
         {
             entity.HasKey(e => e.AturanId);
             entity.HasIndex(e => e.AturanVersi).IsUnique();
+            if (!isSqlite)
+            {
+                entity.Property(e => e.AturanStatus)
+                    .HasColumnType("enum('diproses','menunggu_review','tidak_aktif','aktif','gagal')");
+            }
             entity.Property(e => e.AturanCreatedAt)
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
             entity.Property(e => e.AturanUpdatedAt)
@@ -234,8 +252,12 @@ public class KorektorBukuDbContext : DbContext
                     v => v.ToString(),
                     v => string.Equals(v, "buku", StringComparison.OrdinalIgnoreCase)
                         ? KesalahanRefTipe.bab
-                        : Enum.Parse<KesalahanRefTipe>(v, true))
-                .HasColumnType("enum('bab','dokumen')");
+                        : Enum.Parse<KesalahanRefTipe>(v, true));
+            if (!isSqlite)
+            {
+                entity.Property(e => e.KesalahanRefTipe)
+                    .HasColumnType("enum('bab','dokumen')");
+            }
             entity.HasMany(e => e.Details)
                 .WithOne(d => d.Kesalahan)
                 .HasForeignKey(d => d.KesalahanId)

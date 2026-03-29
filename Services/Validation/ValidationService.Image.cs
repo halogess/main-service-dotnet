@@ -69,7 +69,7 @@ public partial class ValidationService
         }
 
         var aturan = await _db.Aturans
-            .Where(a => a.AturanStatus == 1)
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -89,10 +89,27 @@ public partial class ValidationService
             .Where(d => d.AturanDetailKategori == "Isi Buku")
             .Where(d => d.AturanDetailKey == "caption_gambar")
             .FirstOrDefaultAsync(cancellationToken);
+        var tableDetail = await _db.AturanDetails
+            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanDetailKategori == "Isi Buku")
+            .Where(d => d.AturanDetailKey == "tabel")
+            .FirstOrDefaultAsync(cancellationToken);
+        var tableCaptionDetail = await _db.AturanDetails
+            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanDetailKategori == "Isi Buku")
+            .Where(d => d.AturanDetailKey == "caption_tabel")
+            .FirstOrDefaultAsync(cancellationToken);
+        var codeDetail = await _db.AturanDetails
+            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanDetailKategori == "Isi Buku")
+            .Where(d => d.AturanDetailKey == "kode")
+            .FirstOrDefaultAsync(cancellationToken);
 
         var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         ImageRule? imageRule = null;
         CaptionImageRule? captionRule = null;
+        TableCaptionRule? tableCaptionRule = null;
+        CodeTitleRule? codeTitleRule = null;
 
         if (gambarDetail != null)
         {
@@ -131,6 +148,57 @@ public partial class ValidationService
                     Field = "gambar",
                     Message = "Format aturan gambar tidak valid"
                 });
+            }
+        }
+
+        if (tableDetail != null)
+        {
+            try
+            {
+                var rawJson = tableDetail.AturanDetailJsonValue ?? "{}";
+                using var doc = JsonDocument.Parse(rawJson);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    tableCaptionDetail == null &&
+                    doc.RootElement.TryGetProperty("caption_tabel", out var captionElement))
+                {
+                    tableCaptionRule = JsonSerializer.Deserialize<TableCaptionRule>(captionElement.GetRawText(), jsonOptions);
+                }
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse embedded aturan caption_tabel while validating gambar");
+            }
+        }
+
+        if (tableCaptionDetail != null)
+        {
+            try
+            {
+                tableCaptionRule = JsonSerializer.Deserialize<TableCaptionRule>(
+                    tableCaptionDetail.AturanDetailJsonValue ?? "{}",
+                    jsonOptions);
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse aturan caption_tabel while validating gambar");
+            }
+        }
+
+        if (codeDetail != null)
+        {
+            try
+            {
+                var rawJson = codeDetail.AturanDetailJsonValue ?? "{}";
+                using var doc = JsonDocument.Parse(rawJson);
+                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                    doc.RootElement.TryGetProperty("judul_kode", out var judulElement))
+                {
+                    codeTitleRule = JsonSerializer.Deserialize<CodeTitleRule>(judulElement.GetRawText(), jsonOptions);
+                }
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse aturan judul_kode while validating gambar");
             }
         }
 
@@ -176,6 +244,20 @@ public partial class ValidationService
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
         var pageNumbersById = await LoadPageNumbersAsync(orderedElementIds, cancellationToken);
+        var imageCaptionPrefixes = BuildCaptionPrefixes(captionRule?.Numbering);
+        if (imageCaptionPrefixes.Count == 0)
+            imageCaptionPrefixes.Add("Gambar");
+        var tableCaptionPrefixes = BuildCaptionPrefixes(tableCaptionRule?.Numbering);
+        if (tableCaptionPrefixes.Count == 0)
+            tableCaptionPrefixes.Add("Tabel");
+        var codeTitlePrefixes = BuildCaptionPrefixes(codeTitleRule?.Numbering);
+        if (codeTitlePrefixes.Count == 0)
+        {
+            codeTitlePrefixes.Add("Algoritma");
+            codeTitlePrefixes.Add("Segmen Program");
+        }
+        var normalizedTableCaptionPosition = NormalizePositionValue(tableCaptionRule?.Position?.Value);
+        var normalizedCodeTitlePosition = NormalizePositionValue(codeTitleRule?.Position?.Value);
         var paragraphElementIds = bodyElements
             .Where(element =>
                 labelMap.TryGetValue(element.DelemenId, out var label) &&
@@ -203,6 +285,8 @@ public partial class ValidationService
 
         var imageBlocks = new List<ImageBlockInfo>();
         var captionCandidates = new List<CaptionInfo>();
+        var tableCaptionCandidates = new List<CaptionInfo>();
+        var codeCaptionCandidates = new List<CaptionInfo>();
 
         for (var index = 0; index < bodyElements.Count; index++)
         {
@@ -231,16 +315,70 @@ public partial class ValidationService
             }
 
             if (IsParagraphElement(elem.DelemenType) &&
-                !string.IsNullOrWhiteSpace(normalizedText) &&
-                normalizedLabel == "caption_gambar")
+                !string.IsNullOrWhiteSpace(normalizedText))
             {
-                captionCandidates.Add(new CaptionInfo
+                var captionInfo = new CaptionInfo
                 {
                     ElementId = elem.DelemenId,
                     OrderIndex = index,
                     Content = content,
                     NormalizedText = normalizedText
-                });
+                };
+
+                if (IsImageCaptionCandidateLabel(normalizedLabel, normalizedText, tableCaptionPrefixes, codeTitlePrefixes))
+                    captionCandidates.Add(captionInfo);
+
+                if (IsTableCaptionCandidateLabel(normalizedLabel, normalizedText, tableCaptionPrefixes))
+                    tableCaptionCandidates.Add(captionInfo);
+
+                if (IsCodeTitleCandidateLabel(normalizedLabel, normalizedText, codeTitlePrefixes))
+                    codeCaptionCandidates.Add(captionInfo);
+            }
+        }
+
+        if (imageBlocks.Count > 0)
+        {
+            var nonImageBlockIds = new HashSet<ulong>();
+
+            foreach (var caption in tableCaptionCandidates)
+            {
+                foreach (var targetIndex in GetAdjacentElementIndices(caption.OrderIndex, bodyElements.Count, normalizedTableCaptionPosition))
+                {
+                    var targetElement = bodyElements[targetIndex];
+                    var targetLabel = labelMap.TryGetValue(targetElement.DelemenId, out var rawTargetLabel)
+                        ? NormalizeLabel(rawTargetLabel)
+                        : string.Empty;
+
+                    if (!TryDescribeImageLikeElement(targetElement, targetLabel, out var _evidence, out var _elementType, out var _content))
+                        continue;
+
+                    nonImageBlockIds.Add(targetElement.DelemenId);
+                    break;
+                }
+            }
+
+            foreach (var caption in codeCaptionCandidates)
+            {
+                foreach (var targetIndex in GetAdjacentElementIndices(caption.OrderIndex, bodyElements.Count, normalizedCodeTitlePosition))
+                {
+                    var targetElement = bodyElements[targetIndex];
+                    var targetLabel = labelMap.TryGetValue(targetElement.DelemenId, out var rawTargetLabel)
+                        ? NormalizeLabel(rawTargetLabel)
+                        : string.Empty;
+
+                    if (!TryDescribeImageLikeElement(targetElement, targetLabel, out var _evidence, out var _elementType, out var _content))
+                        continue;
+
+                    nonImageBlockIds.Add(targetElement.DelemenId);
+                    break;
+                }
+            }
+
+            if (nonImageBlockIds.Count > 0)
+            {
+                imageBlocks = imageBlocks
+                    .Where(block => !nonImageBlockIds.Contains(block.ElementId))
+                    .ToList();
             }
         }
 
@@ -270,7 +408,7 @@ public partial class ValidationService
             if (string.IsNullOrWhiteSpace(normalizedNextText) || nextContent.HasNonTextContent)
                 continue;
 
-            if (IsCaptionCandidate(normalizedNextText))
+            if (IsCaptionCandidate(normalizedNextText, imageCaptionPrefixes, tableCaptionPrefixes, codeTitlePrefixes))
                 continue;
 
             captionContinuationCandidates.Add(new CaptionContinuationCandidate
@@ -1776,12 +1914,18 @@ public partial class ValidationService
         return false;
     }
 
-    private static bool IsCaptionCandidate(string text)
+    private static bool IsCaptionCandidate(string text, params IReadOnlyList<string>[] prefixGroups)
     {
         if (string.IsNullOrWhiteSpace(text))
             return false;
 
-        return Regex.IsMatch(text, "^Gambar\\b", RegexOptions.IgnoreCase);
+        foreach (var prefixes in prefixGroups)
+        {
+            if (MatchesCaptionNumbering(text, prefixes))
+                return true;
+        }
+
+        return false;
     }
 
     private static bool TryParseCaptionNumbering(

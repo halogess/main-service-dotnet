@@ -49,7 +49,7 @@ public partial class ValidationService
         }
 
         var aturan = await _db.Aturans
-            .Where(a => a.AturanStatus == 1)
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -130,6 +130,13 @@ public partial class ValidationService
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
+        var titlePrefixes = BuildCaptionPrefixes(titleRule?.Numbering);
+        if (titlePrefixes.Count == 0)
+        {
+            titlePrefixes.Add("Algoritma");
+            titlePrefixes.Add("Segmen Program");
+        }
+        var normalizedTitlePosition = NormalizePositionValue(titleRule?.Position?.Value);
 
         var codeElements = new List<CodeElementInfo>();
         var structuralViolations = new List<CodeStructuralViolationInfo>();
@@ -187,12 +194,12 @@ public partial class ValidationService
 
             if (titleRule != null)
             {
-                if (!IsCodeCaptionLabel(normalizedLabel))
-                    continue;
-
                 var captionContent = GetContent();
                 var normalizedText = NormalizeWhitespace(captionContent.PlainText);
                 if (string.IsNullOrWhiteSpace(normalizedText))
+                    continue;
+
+                if (!IsCodeTitleCandidateLabel(normalizedLabel, normalizedText, titlePrefixes))
                     continue;
 
                 captionCandidates.Add(new CaptionInfo
@@ -202,6 +209,59 @@ public partial class ValidationService
                     Content = captionContent,
                     NormalizedText = normalizedText
                 });
+            }
+        }
+
+        if (captionCandidates.Count > 0)
+        {
+            var structuralViolationIds = structuralViolations
+                .Select(violation => violation.ElementId)
+                .ToHashSet();
+            var codeElementIds = codeElements
+                .Select(element => element.ElementId)
+                .ToHashSet();
+
+            foreach (var caption in captionCandidates)
+            {
+                foreach (var targetIndex in GetAdjacentElementIndices(caption.OrderIndex, bodyElements.Count, normalizedTitlePosition))
+                {
+                    var targetElement = bodyElements[targetIndex];
+                    if (structuralViolationIds.Contains(targetElement.DelemenId) ||
+                        codeElementIds.Contains(targetElement.DelemenId))
+                    {
+                        continue;
+                    }
+
+                    var targetLabel = labelMap.TryGetValue(targetElement.DelemenId, out var rawTargetLabel)
+                        ? NormalizeLabel(rawTargetLabel)
+                        : string.Empty;
+
+                    if (TryDescribeImageLikeElement(targetElement, targetLabel, out var _evidence, out var elementType, out var content))
+                    {
+                        structuralViolations.Add(new CodeStructuralViolationInfo
+                        {
+                            ElementId = targetElement.DelemenId,
+                            ElementType = elementType,
+                            Content = content,
+                            IsImageType = true
+                        });
+                        structuralViolationIds.Add(targetElement.DelemenId);
+                        break;
+                    }
+
+                    if (!IsCodeTableElementType(targetElement.DelemenType) && !IsTableLabel(targetLabel))
+                        continue;
+
+                    structuralViolations.Add(new CodeStructuralViolationInfo
+                    {
+                        ElementId = targetElement.DelemenId,
+                        ElementType = targetElement.DelemenType,
+                        Content = ParseElementContent(targetElement.DelemenJsonTree),
+                        IsTableType = true
+                    });
+                    structuralViolationIds.Add(targetElement.DelemenId);
+                    break;
+                }
             }
         }
 
@@ -384,7 +444,7 @@ public partial class ValidationService
             CaptionInfo? selectedCaption = null;
             var positionRule = titleRule.Position?.Value?.Trim();
             var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
-                ? null
+                ? normalizedTitlePosition
                 : positionRule.ToLowerInvariant();
 
             if (normalizedPosition == "after")

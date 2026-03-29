@@ -9,6 +9,7 @@ public interface IWebSocketService
 {
     Task HandleWebSocketAsync(WebSocket webSocket, string nrp);
     Task NotifyDokumenStatusChanged(string nrp, int dokumenId, string status);
+    Task NotifyDokumenFileReady(string nrp, int dokumenId, bool docxReady, bool pdfReady);
     Task NotifyDokumenCancelled(string nrp, int dokumenId);
     Task NotifyQueuePositionChanged(string nrp, int position);
     Task NotifyBukuStatusChanged(string nrp, int bukuId, string status);
@@ -52,6 +53,18 @@ public class WebSocketService : IWebSocketService
             type = "status_changed",
             dokumen_id = dokumenId,
             status = status,
+            timestamp = DateTime.Now
+        });
+    }
+
+    public async Task NotifyDokumenFileReady(string nrp, int dokumenId, bool docxReady, bool pdfReady)
+    {
+        await SendMessage(nrp, new
+        {
+            type = "dokumen_file_ready",
+            dokumen_id = dokumenId,
+            docx_ready = docxReady,
+            pdf_ready = pdfReady,
             timestamp = DateTime.Now
         });
     }

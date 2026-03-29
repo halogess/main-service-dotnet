@@ -39,7 +39,7 @@ public partial class ValidationService
         }
 
         var aturan = await _db.Aturans
-            .Where(a => a.AturanStatus == 1)
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -116,9 +116,13 @@ public partial class ValidationService
 
         var orderedElementIds = bodyElements.Select(e => e.DelemenId).ToList();
         var elementJsonById = bodyElements.ToDictionary(e => e.DelemenId, e => (string?)e.DelemenJsonTree);
+        var elementContentById = bodyElements.ToDictionary(
+            e => e.DelemenId,
+            e => ParseElementContent(e.DelemenJsonTree));
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
+        var visualSummaryById = await LoadVisualElementSummariesAsync(orderedElementIds, cancellationToken);
 
         // Find subchapter label elements
         var labelSubchapterIds = labelMap
@@ -140,7 +144,8 @@ public partial class ValidationService
                 if (!resolvedSubchapterIds.Contains(elem.DelemenId))
                     continue;
 
-                var content = ParseElementContent(elem.DelemenJsonTree);
+                if (!elementContentById.TryGetValue(elem.DelemenId, out var content))
+                    content = ParseElementContent(elem.DelemenJsonTree);
                 subchapterElements.Add((elem.DelemenId, content));
             }
         }
@@ -173,14 +178,15 @@ public partial class ValidationService
             : (rule?.StrukturKonten?.MinimalSatuParagrafSetelah?.Value ?? true ? 1 : 0);
         var preventBottomPosition = rule?.StrukturKonten?.CegahPosisiPalingBawah?.Value ?? true;
         
-        var bodyElementIds = bodyElements.Select(e => e.DelemenId).ToList();
         if (expectedParagraphAfterCount > 0 || preventBottomPosition)
         {
             await ValidateParagraphAfterSubchapterAsync(
                 result,
-                bodyElementIds,
+                bodyElements,
+                elementContentById,
                 subchapterElements,
                 labelMap,
+                visualSummaryById,
                 neighborContexts,
                 expectedParagraphAfterCount,
                 preventBottomPosition,
@@ -1066,9 +1072,11 @@ public partial class ValidationService
 
     private async Task ValidateParagraphAfterSubchapterAsync(
         ValidationResult result,
-        List<ulong> bodyElementIds,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById,
         List<(ulong Id, ElementContentInfo Content)> subchapterElements,
         Dictionary<ulong, string> labelMap,
+        IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById,
         Dictionary<ulong, ElementNeighborContext> contextById,
         int expectedParagraphCount,
         bool validateBottomPosition,
@@ -1076,9 +1084,9 @@ public partial class ValidationService
     {
         // Build index mapping for body elements
         var elementIndexMap = new Dictionary<ulong, int>();
-        for (int i = 0; i < bodyElementIds.Count; i++)
+        for (int i = 0; i < bodyElements.Count; i++)
         {
-            elementIndexMap[bodyElementIds[i]] = i;
+            elementIndexMap[bodyElements[i].DelemenId] = i;
         }
 
         foreach (var (subchapterId, content) in subchapterElements)
@@ -1103,19 +1111,44 @@ public partial class ValidationService
 
                 var paragraphCount = 0;
                 var cursor = subchapterIndex + 1;
-                while (cursor < bodyElementIds.Count)
-                {
-                    var nextElementId = bodyElementIds[cursor];
+                visualSummaryById.TryGetValue(subchapterId, out var anchorVisual);
 
-                    if (labelMap.TryGetValue(nextElementId, out var nextLabel))
+                while (cursor < bodyElements.Count)
+                {
+                    var nextElement = bodyElements[cursor];
+                    var nextElementId = nextElement.DelemenId;
+                    cursor++;
+
+                    if (!elementContentById.TryGetValue(nextElementId, out var nextContent) ||
+                        IsEmptyElement(nextContent))
+                        continue;
+
+                    visualSummaryById.TryGetValue(nextElementId, out var nextVisual);
+                    var isVisuallyBelowAnchor = true;
+                    if (anchorVisual != null &&
+                        nextVisual != null)
                     {
-                        var normalizedLabel = NormalizeLabel(nextLabel);
-                        if (normalizedLabel == "paragraf")
-                        {
-                            paragraphCount++;
-                            cursor++;
-                            continue;
-                        }
+                        isVisuallyBelowAnchor = TryGetVisualPositionBelow(
+                            anchorVisual,
+                            nextVisual,
+                            out var belowPage,
+                            out var belowY0);
+                    }
+
+                    if (!isVisuallyBelowAnchor)
+                    {
+                        continue;
+                    }
+
+                    labelMap.TryGetValue(nextElementId, out var nextLabel);
+                    if (ShouldTreatAsParagraphAfterSubchapter(
+                            nextElement.DelemenType,
+                            nextLabel,
+                            nextVisual?.Labels,
+                            hasContent: true))
+                    {
+                        paragraphCount++;
+                        continue;
                     }
 
                     break;
@@ -1150,6 +1183,168 @@ public partial class ValidationService
                 await ValidateSubchapterPositionAsync(result, subchapterId, plainText, locations, context, cancellationToken);
             }
         }
+    }
+
+    private sealed class VisualElementSummary
+    {
+        public HashSet<string> Labels { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<VisualPageBounds> Bounds { get; } = new();
+    }
+
+    private sealed class VisualPageBounds
+    {
+        public int Page { get; set; }
+        public double Y0 { get; set; }
+        public double Y1 { get; set; }
+    }
+
+    private async Task<Dictionary<ulong, VisualElementSummary>> LoadVisualElementSummariesAsync(
+        IEnumerable<ulong> delemenIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = delemenIds.Distinct().ToList();
+        var summaries = new Dictionary<ulong, VisualElementSummary>();
+        if (ids.Count == 0)
+            return summaries;
+
+        var (idColumn, labelColumn) = await ResolveVisualColumnsAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(idColumn))
+            return summaries;
+
+        var connection = _db.Database.GetDbConnection();
+        var shouldClose = connection.State != ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+
+        try
+        {
+            foreach (var chunk in ids.Chunk(500))
+            {
+                var idList = string.Join(",", chunk);
+                var selectLabel = !string.IsNullOrWhiteSpace(labelColumn)
+                    ? $", `{labelColumn}` AS label"
+                    : ", NULL AS label";
+                var sql = $"SELECT `{idColumn}` AS delemen_id, `dev_page`, `dev_bbox_y0`, `dev_bbox_y1`{selectLabel} " +
+                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList})";
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = sql;
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    if (reader["delemen_id"] == DBNull.Value)
+                        continue;
+
+                    var id = Convert.ToUInt64(reader["delemen_id"]);
+                    if (!summaries.TryGetValue(id, out var summary))
+                    {
+                        summary = new VisualElementSummary();
+                        summaries[id] = summary;
+                    }
+
+                    var label = reader["label"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(label))
+                        summary.Labels.Add(NormalizeLabel(label));
+
+                    if (reader["dev_page"] == DBNull.Value ||
+                        reader["dev_bbox_y0"] == DBNull.Value ||
+                        reader["dev_bbox_y1"] == DBNull.Value)
+                    {
+                        continue;
+                    }
+
+                    var page = Convert.ToInt32(reader["dev_page"]);
+                    var y0 = Convert.ToDouble(reader["dev_bbox_y0"]);
+                    var y1 = Convert.ToDouble(reader["dev_bbox_y1"]);
+
+                    var existingBounds = summary.Bounds.FirstOrDefault(bounds => bounds.Page == page);
+                    if (existingBounds == null)
+                    {
+                        summary.Bounds.Add(new VisualPageBounds
+                        {
+                            Page = page,
+                            Y0 = y0,
+                            Y1 = y1
+                        });
+                    }
+                    else
+                    {
+                        existingBounds.Y0 = Math.Min(existingBounds.Y0, y0);
+                        existingBounds.Y1 = Math.Max(existingBounds.Y1, y1);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load visual summaries from dokumen_elemen_visual");
+        }
+        finally
+        {
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+        }
+
+        foreach (var summary in summaries.Values)
+            summary.Bounds.Sort((left, right) => left.Page != right.Page ? left.Page.CompareTo(right.Page) : left.Y0.CompareTo(right.Y0));
+
+        return summaries;
+    }
+
+    private static bool ShouldTreatAsParagraphAfterSubchapter(
+        string? elementType,
+        string? primaryLabel,
+        IReadOnlyCollection<string>? visualLabels,
+        bool hasContent)
+    {
+        if (!hasContent)
+            return false;
+
+        var normalizedPrimaryLabel = NormalizeLabel(primaryLabel);
+        if (normalizedPrimaryLabel == "paragraf")
+            return true;
+
+        if (visualLabels != null && visualLabels.Any(label => NormalizeLabel(label) == "paragraf"))
+            return true;
+
+        if (!string.Equals(elementType, "paragraph", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return string.IsNullOrWhiteSpace(normalizedPrimaryLabel);
+    }
+
+    private static bool TryGetVisualPositionBelow(
+        VisualElementSummary anchor,
+        VisualElementSummary candidate,
+        out int page,
+        out double y0)
+    {
+        page = default;
+        y0 = default;
+
+        if (anchor.Bounds.Count == 0 || candidate.Bounds.Count == 0)
+            return false;
+
+        const double visualTolerance = 0.5d;
+        var anchorFirstBounds = anchor.Bounds[0];
+        var anchorPage = anchorFirstBounds.Page;
+        var anchorBottom = anchor.Bounds
+            .Where(bounds => bounds.Page == anchorPage)
+            .Max(bounds => bounds.Y1);
+
+        var candidateBounds = candidate.Bounds
+            .Where(bounds => bounds.Page > anchorPage ||
+                             (bounds.Page == anchorPage && bounds.Y0 >= anchorBottom - visualTolerance))
+            .OrderBy(bounds => bounds.Page)
+            .ThenBy(bounds => bounds.Y0)
+            .FirstOrDefault();
+
+        if (candidateBounds == null)
+            return false;
+
+        page = candidateBounds.Page;
+        y0 = candidateBounds.Y0;
+        return true;
     }
 
     private async Task ValidateSubchapterPositionAsync(

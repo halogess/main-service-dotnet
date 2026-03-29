@@ -11,6 +11,7 @@ namespace ValidasiTugasAkhir.MainService.Controllers;
 public class DokumenController : ControllerBase
 {
     private readonly KorektorBukuDbContext _db;
+    private readonly SttsDbContext _sttsDb;
     private readonly IDokumenService _dokumenService;
     private readonly IDokumenImportService _dokumenImportService;
     private readonly IDokumenHistoryPurgeService _dokumenHistoryPurgeService;
@@ -18,12 +19,14 @@ public class DokumenController : ControllerBase
 
     public DokumenController(
         KorektorBukuDbContext db,
+        SttsDbContext sttsDb,
         IDokumenService dokumenService,
         IDokumenImportService dokumenImportService,
         IDokumenHistoryPurgeService dokumenHistoryPurgeService,
         IValidationReportService reportService)
     {
         _db = db;
+        _sttsDb = sttsDb;
         _dokumenService = dokumenService;
         _dokumenImportService = dokumenImportService;
         _dokumenHistoryPurgeService = dokumenHistoryPurgeService;
@@ -44,7 +47,14 @@ public class DokumenController : ControllerBase
         try
         {
             var dokumen = await _dokumenService.UploadDokumen(nrp!, file);
-            return Ok(new { message = "Dokumen berhasil diupload", dokumen_id = dokumen.DokumenId });
+            var notificationEmail = await GetNotificationEmailAsync(nrp!);
+
+            return Ok(new
+            {
+                message = BuildProcessingNoticeMessage("Dokumen", notificationEmail),
+                dokumen_id = dokumen.DokumenId,
+                notification_email = notificationEmail
+            });
         }
         catch (Exception ex)
         {
@@ -331,6 +341,10 @@ public class DokumenController : ControllerBase
         if (availablePages.Count == 0 && fallbackPages.Count > 0)
             availablePages = fallbackPages;
 
+        var notificationEmail = await GetNotificationEmailAsync(dokumen.MhsNrp);
+        var docxReady = IsStorageFileReady(dokumen.DokumenDocxPath);
+        var pdfReady = IsStorageFileReady(dokumen.DokumenPdfPath);
+
         return Ok(new
         {
             id = dokumen.DokumenId,
@@ -344,6 +358,9 @@ public class DokumenController : ControllerBase
             available_pages = availablePages,
             created_at = dokumen.DokumenCreatedAt,
             updated_at = dokumen.DokumenUpdatedAt,
+            docx_ready = docxReady,
+            pdf_ready = pdfReady,
+            notification_email = notificationEmail,
             kesalahan = kesalahanData
         });
     }
@@ -537,6 +554,18 @@ public class DokumenController : ControllerBase
         return true;
     }
 
+    private static bool IsStorageFileReady(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+            return false;
+
+        if (!TryResolveStorageFilePath(relativePath, out var fullPath))
+            return false;
+
+        var fileInfo = new FileInfo(fullPath);
+        return fileInfo.Exists && fileInfo.Length > 0;
+    }
+
     private static string BuildDocxDownloadFileName(string? dokumenFilename, int dokumenId)
     {
         if (!string.IsNullOrWhiteSpace(dokumenFilename))
@@ -691,6 +720,26 @@ public class DokumenController : ControllerBase
             .OrderBy(x => NormalizeSortPage(x.HalamanKe))
             .ThenBy(x => x.YTerkecil)
             .ToList();
+    }
+
+    private async Task<string?> GetNotificationEmailAsync(string nrp)
+    {
+        if (string.IsNullOrWhiteSpace(nrp))
+            return null;
+
+        return await _sttsDb.Mahasiswas
+            .AsNoTracking()
+            .Where(m => m.MhsNrp == nrp)
+            .Select(m => m.MhsEmail)
+            .FirstOrDefaultAsync();
+    }
+
+    private static string BuildProcessingNoticeMessage(string resourceLabel, string? notificationEmail)
+    {
+        if (!string.IsNullOrWhiteSpace(notificationEmail))
+            return $"{resourceLabel} berhasil disubmit. Notifikasi akan dikirim ke {notificationEmail.Trim()} setelah selesai.";
+
+        return $"{resourceLabel} berhasil disubmit. Notifikasi akan dikirim ke email STTS Anda setelah selesai.";
     }
 }
 

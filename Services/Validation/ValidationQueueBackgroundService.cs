@@ -83,6 +83,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                 var wsService = scope.ServiceProvider.GetRequiredService<IWebSocketService>();
                 var validationService = scope.ServiceProvider.GetRequiredService<IValidationService>();
                 var reportService = scope.ServiceProvider.GetRequiredService<IValidationReportService>();
+                var aturanImportService = scope.ServiceProvider.GetRequiredService<IAturanImportService>();
 
                 var queue = await db.Antrians
                     .Where(a => a.AntrianValidationStatus == "in_queue")
@@ -102,7 +103,11 @@ public class ValidationQueueBackgroundService : BackgroundService
                     {
                         ValidationResult? validationResult = null;
 
-                        if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
+                        if (queue.AntrianTipe == "aturan" && queue.AturanId.HasValue)
+                        {
+                            await aturanImportService.ImportFromArtifactsAsync(queue.AturanId.Value, stoppingToken);
+                        }
+                        else if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                         {
                             var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
                             if (dokumen != null)
@@ -157,7 +162,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 }
 
                                 var activeAturan = await db.Aturans
-                                    .Where(a => a.AturanStatus == 1)
+                                    .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
                                     .OrderByDescending(a => a.AturanCreatedAt)
                                     .FirstOrDefaultAsync(stoppingToken);
 
@@ -207,7 +212,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 bab.BabSkor = roundedScore;
 
                                 var activeAturan = await db.Aturans
-                                    .Where(a => a.AturanStatus == 1)
+                                    .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
                                     .OrderByDescending(a => a.AturanCreatedAt)
                                     .FirstOrDefaultAsync(stoppingToken);
                                 var minimumScoreValue = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
@@ -288,7 +293,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         : 0m;
 
                                     var activeAturan = await db.Aturans
-                                        .Where(a => a.AturanStatus == 1)
+                                        .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
                                         .OrderByDescending(a => a.AturanCreatedAt)
                                         .FirstOrDefaultAsync(stoppingToken);
                                     var defaultMinimumScore = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
@@ -345,6 +350,16 @@ public class ValidationQueueBackgroundService : BackgroundService
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = ex.Message.Length > 255 ? ex.Message[..252] + "..." : ex.Message;
                         _logger.LogError(ex, "Failed validation for antrian ID: {AntrianId}", queue.AntrianId);
+
+                        if (queue.AntrianTipe == "aturan" && queue.AturanId.HasValue)
+                        {
+                            var aturan = await db.Aturans.FindAsync(new object[] { queue.AturanId.Value }, stoppingToken);
+                            if (aturan != null)
+                            {
+                                aturan.AturanStatus = AturanStatusValues.Gagal;
+                                aturan.AturanUpdatedAt = DateTime.Now;
+                            }
+                        }
 
                         // Notify failure via WebSocket
                         if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
@@ -604,16 +619,16 @@ public class ValidationQueueBackgroundService : BackgroundService
             return 0;
 
         var aturan = await db.Aturans
-            .Where(a => a.AturanStatus == 1)
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
 
         List<AturanDetail> aturanDetails = new();
         if (aturan != null)
         {
-            aturanDetails = await db.AturanDetails
+            aturanDetails = AturanDetailVisibility.FilterVisible(await db.AturanDetails
                 .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
-                .ToListAsync(cancellationToken);
+                .ToListAsync(cancellationToken));
         }
 
         var llmErrors = await BuildLlmErrorsAsync(

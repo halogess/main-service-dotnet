@@ -16,7 +16,7 @@ public class AturanServiceTests
         {
             AturanId = 1,
             AturanVersi = "v1",
-            AturanStatus = 1
+            AturanStatus = AturanStatusValues.Aktif
         });
         db.AturanDetails.AddRange(
             new AturanDetail
@@ -33,7 +33,11 @@ public class AturanServiceTests
             });
         await db.SaveChangesAsync();
 
-        var service = new AturanService(db, Mock.Of<ILogger<AturanService>>());
+        var service = new AturanService(
+            db,
+            Mock.Of<IFileService>(),
+            Mock.Of<IExtractionArtifactCleanupService>(),
+            Mock.Of<ILogger<AturanService>>());
 
         var result = await service.GetByIdWithDetailsAsync(1);
 

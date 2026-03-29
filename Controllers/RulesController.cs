@@ -31,9 +31,9 @@ public class RulesController : ControllerBase
         var result = new List<object>();
         foreach (var a in aturans)
         {
-            var details = await _db.AturanDetails
+            var details = AturanDetailVisibility.FilterVisible(await _db.AturanDetails
                 .Where(d => d.AturanId == a.AturanId)
-                .ToListAsync();
+                .ToListAsync());
 
             result.Add(new
             {
@@ -68,9 +68,9 @@ public class RulesController : ControllerBase
         if (aturan == null)
             return NotFound(new { message = "Aturan tidak ditemukan" });
 
-        var details = await _db.AturanDetails
+        var details = AturanDetailVisibility.FilterVisible(await _db.AturanDetails
             .Where(d => d.AturanId == id)
-            .ToListAsync();
+            .ToListAsync());
 
         return Ok(new
         {
@@ -137,7 +137,9 @@ public class RulesController : ControllerBase
         var aturan = new Aturan
         {
             AturanVersi = request.aturan_versi,
-            AturanStatus = request.aturan_status ?? 1,
+            AturanStatus = string.IsNullOrWhiteSpace(request.aturan_status)
+                ? AturanStatusValues.TidakAktif
+                : request.aturan_status.Trim().ToLowerInvariant(),
             AturanSkorMinimum = request.aturan_skor_minimum ?? 80,
             AturanTemplateFilePath = request.aturan_template_file_path
         };
@@ -230,8 +232,8 @@ public class RulesController : ControllerBase
                 return BadRequest(new { message = "aturan_versi sudah ada" });
             aturan.AturanVersi = request.aturan_versi;
         }
-        if (request.aturan_status.HasValue)
-            aturan.AturanStatus = request.aturan_status.Value;
+        if (!string.IsNullOrWhiteSpace(request.aturan_status))
+            aturan.AturanStatus = request.aturan_status.Trim().ToLowerInvariant();
         if (request.aturan_skor_minimum.HasValue)
             aturan.AturanSkorMinimum = request.aturan_skor_minimum.Value;
         if (request.aturan_template_file_path != null)
@@ -320,7 +322,7 @@ public class RulesController : ControllerBase
 public class RulesCreateRequest
 {
     public string aturan_versi { get; set; } = string.Empty;
-    public sbyte? aturan_status { get; set; }
+    public string? aturan_status { get; set; }
     public uint? aturan_skor_minimum { get; set; }
     public string? aturan_template_file_path { get; set; }
     public List<RulesDetailRequest>? details { get; set; }
@@ -329,7 +331,7 @@ public class RulesCreateRequest
 public class RulesUpdateRequest
 {
     public string? aturan_versi { get; set; }
-    public sbyte? aturan_status { get; set; }
+    public string? aturan_status { get; set; }
     public uint? aturan_skor_minimum { get; set; }
     public string? aturan_template_file_path { get; set; }
     public List<RulesDetailUpdateRequest>? details { get; set; }

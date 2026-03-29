@@ -50,7 +50,14 @@ public class BukuController : ControllerBase
         try
         {
             var buku = await _bukuService.UploadBuku(nrp!, judul, files);
-            return Ok(new { message = "Buku berhasil diupload", buku_id = buku.BukuId });
+            var notificationEmail = await GetNotificationEmailAsync(nrp!);
+
+            return Ok(new
+            {
+                message = $"{BuildProcessingNoticeMessage("File BAB", notificationEmail)} Hanya isi buku yang divalidasi.",
+                buku_id = buku.BukuId,
+                notification_email = notificationEmail
+            });
         }
         catch (Exception ex)
         {
@@ -199,20 +206,30 @@ public class BukuController : ControllerBase
 
         var mahasiswa = await _sttsDb.Mahasiswas
             .Where(m => m.MhsNrp == buku.MhsNrp)
-            .Select(m => new { m.MhsNama })
+            .Select(m => new { m.MhsNama, m.MhsEmail })
             .FirstOrDefaultAsync();
+
+        var docxArchiveReady = HasArchiveFile(
+            string.IsNullOrWhiteSpace(buku.BukuDocxZipPath)
+                ? _bukuArchiveService.GetDocxArchiveRelativePath(buku.MhsNrp, buku.BukuId)
+                : buku.BukuDocxZipPath);
+        var pdfArchiveReady = HasArchiveFile(
+            string.IsNullOrWhiteSpace(buku.BukuPdfZipPath)
+                ? _bukuArchiveService.GetPdfArchiveRelativePath(buku.MhsNrp, buku.BukuId)
+                : buku.BukuPdfZipPath);
 
         var response = new Dictionary<string, object?>
         {
             ["id"] = buku.BukuId,
             ["judul"] = buku.BukuJudul,
             ["nama"] = mahasiswa?.MhsNama ?? "Unknown",
+            ["notification_email"] = mahasiswa?.MhsEmail,
             ["status"] = buku.BukuStatus,
             ["jumlah_bab"] = buku.BukuJumlahBab,
             ["docx_archive_path"] = buku.BukuDocxZipPath,
             ["pdf_archive_path"] = buku.BukuPdfZipPath,
-            ["docx_archive_ready"] = !string.IsNullOrWhiteSpace(buku.BukuDocxZipPath),
-            ["pdf_archive_ready"] = !string.IsNullOrWhiteSpace(buku.BukuPdfZipPath),
+            ["docx_archive_ready"] = docxArchiveReady,
+            ["pdf_archive_ready"] = pdfArchiveReady,
             ["created_at"] = buku.BukuCreatedAt,
             ["updated_at"] = buku.BukuUpdatedAt
         };
@@ -361,6 +378,19 @@ public class BukuController : ControllerBase
             ? string.Empty
             : filePath.Trim().Replace('\\', '/');
 
+    private bool HasArchiveFile(string? archiveRelativePath)
+    {
+        var normalizedPath = NormalizeRelativePath(archiveRelativePath);
+        if (string.IsNullOrWhiteSpace(normalizedPath))
+            return false;
+
+        if (!_bukuArchiveService.TryResolveStorageFilePath(normalizedPath, out var archiveFullPath))
+            return false;
+
+        var archiveInfo = new FileInfo(archiveFullPath);
+        return archiveInfo.Exists && archiveInfo.Length > 0;
+    }
+
     private static string BuildArchiveDownloadFileName(string? nrp, string archiveKind, DateTime timestamp)
         => $"{SanitizeFileNameSegment(nrp)}_{SanitizeFileNameSegment(archiveKind)}_{timestamp.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture)}.zip";
 
@@ -475,6 +505,26 @@ public class BukuController : ControllerBase
         }).ToList();
 
         return Ok(new { data = result, total = totalCount, limit, offset });
+    }
+
+    private async Task<string?> GetNotificationEmailAsync(string nrp)
+    {
+        if (string.IsNullOrWhiteSpace(nrp))
+            return null;
+
+        return await _sttsDb.Mahasiswas
+            .AsNoTracking()
+            .Where(m => m.MhsNrp == nrp)
+            .Select(m => m.MhsEmail)
+            .FirstOrDefaultAsync();
+    }
+
+    private static string BuildProcessingNoticeMessage(string resourceLabel, string? notificationEmail)
+    {
+        if (!string.IsNullOrWhiteSpace(notificationEmail))
+            return $"{resourceLabel} berhasil disubmit. Notifikasi akan dikirim ke {notificationEmail.Trim()} setelah selesai.";
+
+        return $"{resourceLabel} berhasil disubmit. Notifikasi akan dikirim ke email STTS Anda setelah selesai.";
     }
 
 }

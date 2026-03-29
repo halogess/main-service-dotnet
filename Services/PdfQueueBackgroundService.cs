@@ -7,16 +7,19 @@ public class PdfQueueBackgroundService : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<PdfQueueBackgroundService> _logger;
+    private readonly DateTime _workerStartedAt;
 
     public PdfQueueBackgroundService(IServiceProvider serviceProvider, ILogger<PdfQueueBackgroundService> logger)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _workerStartedAt = DateTime.Now;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("PDF Queue Background Service started");
+        await RecoverOrphanedProcessingQueuesAsync(stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -26,6 +29,7 @@ public class PdfQueueBackgroundService : BackgroundService
                 var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
                 var pdfService = scope.ServiceProvider.GetRequiredService<IPdfConversionService>();
                 var bukuArchiveService = scope.ServiceProvider.GetRequiredService<IBukuArchiveService>();
+                var extractionCleanupService = scope.ServiceProvider.GetRequiredService<IExtractionArtifactCleanupService>();
                 var wsService = scope.ServiceProvider.GetRequiredService<IWebSocketService>();
 
                 var queue = await db.Antrians
@@ -42,7 +46,9 @@ public class PdfQueueBackgroundService : BackgroundService
                         ? (await db.Babs.FindAsync(queue.BabId.Value))?.BabDocxPath ?? ""
                         : queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue
                             ? (await db.Dokumens.FindAsync((int)queue.DokumenId.Value))?.DokumenDocxPath ?? ""
-                            : "";
+                            : queue.AntrianTipe == "aturan" && queue.AturanId.HasValue
+                                ? (await db.Aturans.FindAsync(new object[] { queue.AturanId.Value }, stoppingToken))?.AturanTemplateFilePath ?? ""
+                                : "";
 
                     _logger.LogInformation("Processing antrian ID: {AntrianId}, File: {FilePath}", queue.AntrianId, filePath);
 
@@ -71,6 +77,15 @@ public class PdfQueueBackgroundService : BackgroundService
                             await wsService.NotifyBukuStatusChanged(buku.MhsNrp, (int)queue.BukuId.Value, "diproses");
                         }
                     }
+                    else if (queue.AntrianTipe == "aturan" && queue.AturanId.HasValue)
+                    {
+                        var aturan = await db.Aturans.FindAsync(new object[] { queue.AturanId.Value }, stoppingToken);
+                        if (aturan != null)
+                        {
+                            aturan.AturanStatus = AturanStatusValues.Diproses;
+                            aturan.AturanUpdatedAt = DateTime.Now;
+                        }
+                    }
 
                     await db.SaveChangesAsync(stoppingToken);
 
@@ -86,14 +101,23 @@ public class PdfQueueBackgroundService : BackgroundService
                         if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                         {
                             var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
+                            await extractionCleanupService.ResetAsync("dokumen", queue.DokumenId.Value, stoppingToken);
                             await docxExtraction.ExtractDocxToDatabase(fullFilePath, (int)queue.DokumenId.Value);
                             _logger.LogInformation("Extracted DOCX elements for dokumen ID: {DokumenId}", queue.DokumenId);
                         }
                         else if (queue.AntrianTipe == "buku" && queue.BabId.HasValue)
                         {
                             var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
+                            await extractionCleanupService.ResetAsync("bab", queue.BabId.Value, stoppingToken);
                             await docxExtraction.ExtractDocxToDatabase(fullFilePath, "bab", queue.BabId.Value);
                             _logger.LogInformation("Extracted DOCX elements for bab ID: {BabId}", queue.BabId);
+                        }
+                        else if (queue.AntrianTipe == "aturan" && queue.AturanId.HasValue)
+                        {
+                            var docxExtraction = scope.ServiceProvider.GetRequiredService<IDocxExtractionService>();
+                            await extractionCleanupService.ResetAsync("aturan", queue.AturanId.Value, stoppingToken);
+                            await docxExtraction.ExtractDocxToDatabase(fullFilePath, "aturan", queue.AturanId.Value);
+                            _logger.LogInformation("Extracted DOCX elements for aturan ID: {AturanId}", queue.AturanId);
                         }
 
                         var credential = await db.AdobeCredentials
@@ -157,8 +181,31 @@ public class PdfQueueBackgroundService : BackgroundService
                                 }
                             }
                         }
+                        else if (queue.AntrianTipe == "aturan" && queue.AturanId.HasValue)
+                        {
+                            var aturan = await db.Aturans.FindAsync(new object[] { queue.AturanId.Value }, stoppingToken);
+                            if (aturan != null)
+                            {
+                                aturan.AturanTemplatePdfPath = pdfPath;
+                                aturan.AturanUpdatedAt = DateTime.Now;
+                                _logger.LogInformation("Updated aturan ID: {AturanId}, pdf_path: {PdfPath}", queue.AturanId, pdfPath);
+                            }
+                        }
 
                         await db.SaveChangesAsync(stoppingToken);
+
+                        if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
+                        {
+                            var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
+                            if (dokumen != null)
+                            {
+                                await wsService.NotifyDokumenFileReady(
+                                    dokumen.MhsNrp,
+                                    (int)queue.DokumenId.Value,
+                                    docxReady: !string.IsNullOrWhiteSpace(dokumen.DokumenDocxPath),
+                                    pdfReady: !string.IsNullOrWhiteSpace(dokumen.DokumenPdfPath));
+                            }
+                        }
 
                         if (queue.AntrianTipe == "buku" && queue.BukuId.HasValue)
                         {
@@ -199,6 +246,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = $"File tidak ditemukan: {ex.Message}";
+                        await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (HttpRequestException ex)
@@ -206,6 +254,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = $"Adobe API error: {ex.Message}";
+                        await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (InvalidOperationException ex)
@@ -213,6 +262,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = $"Konversi gagal: {ex.Message}";
+                        await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (Exception ex)
@@ -220,6 +270,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = ex.Message.Length > 255 ? ex.Message[..252] + "..." : ex.Message;
+                        await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
 
@@ -249,6 +300,38 @@ public class PdfQueueBackgroundService : BackgroundService
         }
 
         _logger.LogInformation("PDF Queue Background Service stopped");
+    }
+
+    private async Task RecoverOrphanedProcessingQueuesAsync(CancellationToken stoppingToken)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
+
+        var orphanedQueues = await db.Antrians
+            .Where(queue => queue.AntrianExtractionStatus == "processing" &&
+                (!queue.AntrianUpdatedAt.HasValue || queue.AntrianUpdatedAt.Value < _workerStartedAt))
+            .OrderBy(queue => queue.AntrianUpdatedAt)
+            .ToListAsync(stoppingToken);
+
+        if (orphanedQueues.Count == 0)
+            return;
+
+        var recoveredAt = DateTime.Now;
+        foreach (var queue in orphanedQueues)
+        {
+            queue.AntrianExtractionStatus = "in_queue";
+            queue.AntrianLabelingStatus = null;
+            queue.AntrianValidationStatus = null;
+            queue.AntrianUpdatedAt = recoveredAt;
+            queue.AntrianErrorMessage = "Queue dipulihkan setelah service restart saat ekstraksi masih berjalan.";
+        }
+
+        await db.SaveChangesAsync(stoppingToken);
+
+        _logger.LogWarning(
+            "Recovered {Count} orphaned extraction queue(s) left in processing before startup: {QueueIds}",
+            orphanedQueues.Count,
+            string.Join(", ", orphanedQueues.Select(queue => queue.AntrianId)));
     }
 
     private static async Task EnsureBukuDocxArchiveReadyAsync(
@@ -286,5 +369,24 @@ public class PdfQueueBackgroundService : BackgroundService
             return false;
 
         return File.Exists(archiveFullPath) && new FileInfo(archiveFullPath).Length > 0;
+    }
+
+    private static async Task MarkAturanFailedAsync(
+        KorektorBukuDbContext db,
+        Antrian queue,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(queue.AntrianTipe, "aturan", StringComparison.OrdinalIgnoreCase) ||
+            !queue.AturanId.HasValue)
+        {
+            return;
+        }
+
+        var aturan = await db.Aturans.FindAsync(new object[] { queue.AturanId.Value }, cancellationToken);
+        if (aturan == null)
+            return;
+
+        aturan.AturanStatus = AturanStatusValues.Gagal;
+        aturan.AturanUpdatedAt = DateTime.Now;
     }
 }

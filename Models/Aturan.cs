@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Models;
 
@@ -16,7 +17,8 @@ public class Aturan
     public string AturanVersi { get; set; } = string.Empty;
 
     [Column("aturan_status")]
-    public sbyte AturanStatus { get; set; } = 1;
+    [MaxLength(32)]
+    public string AturanStatus { get; set; } = AturanStatusValues.TidakAktif;
 
     [Column("aturan_skor_minimum")]
     public uint AturanSkorMinimum { get; set; } = 80;
@@ -24,6 +26,10 @@ public class Aturan
     [Column("aturan_template_file_path")]
     [MaxLength(255)]
     public string? AturanTemplateFilePath { get; set; }
+
+    [Column("aturan_template_pdf_path")]
+    [MaxLength(255)]
+    public string? AturanTemplatePdfPath { get; set; }
 
     [Column("aturan_created_at")]
     public DateTime? AturanCreatedAt { get; set; }

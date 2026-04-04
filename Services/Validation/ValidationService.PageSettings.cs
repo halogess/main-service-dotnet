@@ -2,11 +2,14 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
+using ValidasiTugasAkhir.MainService.Controllers;
 
 namespace ValidasiTugasAkhir.MainService.Services;
 
 public partial class ValidationService
 {
+    private const decimal PageEndBlankLineHeightPoints = 18m;
+
     private sealed class NomorHalamanSectionRule
     {
         public bool? Continue { get; init; }
@@ -14,6 +17,21 @@ public partial class ValidationService
         public bool? DifferentOddEven { get; init; }
         public bool? FirstPageIsEmpty { get; init; }
         public string? NumberFormat { get; init; }
+    }
+
+    private sealed class PageEndVisualRow
+    {
+        public int Page { get; init; }
+        public uint? SectionId { get; init; }
+        public string? PartType { get; init; }
+        public string? Label { get; init; }
+        public string? Text { get; init; }
+        public string? ElementType { get; init; }
+        public string? ElementJsonTree { get; init; }
+        public decimal? X0 { get; init; }
+        public decimal? Y0 { get; init; }
+        public decimal? X1 { get; init; }
+        public decimal? Y1 { get; init; }
     }
 
     public async Task<ValidationResult> ValidatePageSettingsAsync(int dokumenId, CancellationToken cancellationToken = default)
@@ -107,8 +125,10 @@ public partial class ValidationService
         }
 
         var sectionPageMap = await LoadSectionPageMapAsync(sections, cancellationToken);
+        var firstPhysicalPageSectionId = ResolveFirstPhysicalPageSectionId(sections, sectionPageMap);
+        var renderedPageNumberStartsBySection = BuildRenderedPageNumberStartsBySection(sections, sectionPageMap);
         var pageNumberParagraphsBySection = await LoadPageNumberParagraphsBySectionAsync(
-            sections.Select(section => section.DsecId),
+            sections,
             cancellationToken);
 
         _logger.LogInformation("Validating {Count} sections for ref {RefType}:{RefId}, logical ID: {DokumenId}, treated as bagian isi",
@@ -143,10 +163,32 @@ public partial class ValidationService
                 pageNumberParagraphsBySection.TryGetValue(section.DsecId, out var sectionParagraphs)
                     ? sectionParagraphs
                     : Array.Empty<PageNumberParagraphInfo>(),
+                sections,
+                renderedPageNumberStartsBySection,
+                section.DsecId == firstPhysicalPageSectionId,
+                CanUseManualFirstPageFallback(section, sections, sectionPageMap),
                 i + 1,
                 sectionPageMap,
                 cancellationToken);
         }
+
+        await ValidatePageEndBlankLinesAsync(
+            result,
+            sections,
+            effectivePageSettings.AkhirHalaman,
+            sectionPageMap,
+            sectionRefType,
+            sectionRefId,
+            cancellationToken);
+
+        await ValidateEmptyPagesAsync(
+            result,
+            sections,
+            effectivePageSettings.AkhirHalaman,
+            sectionPageMap,
+            sectionRefType,
+            sectionRefId,
+            cancellationToken);
 
         return result;
     }
@@ -179,6 +221,9 @@ public partial class ValidationService
         effectiveRule.Gutter.Position ??= new RuleValue<string> { Value = "left" };
 
         effectiveRule.Column ??= new RuleValue<int> { Value = 1 };
+        effectiveRule.AkhirHalaman ??= new PageEndRule();
+        effectiveRule.AkhirHalaman.MaxBarisKosong ??= new DecimalRuleValue { Value = 3m };
+        effectiveRule.AkhirHalaman.CegahHalamanKosong ??= new RuleValue<bool> { Value = true };
         return effectiveRule;
     }
 
@@ -539,6 +584,481 @@ public partial class ValidationService
         }
     }
 
+    private async Task ValidatePageEndBlankLinesAsync(
+        ValidationResult result,
+        IReadOnlyList<DokumenSection> sections,
+        PageEndRule? rule,
+        Dictionary<uint, int> sectionPageMap,
+        string sectionRefType,
+        uint sectionRefId,
+        CancellationToken cancellationToken)
+    {
+        var expectedMaxBlankLines = Math.Max(0m, rule?.MaxBarisKosong?.Value ?? 3m);
+        var preventEmptyPages = rule?.CegahHalamanKosong?.Value == true;
+        var visualRows = await LoadPageEndVisualRowsAsync(sectionRefType, sectionRefId, cancellationToken);
+        var previewLastPage = await ResolveValidationTargetLastPageAsync(sectionRefType, sectionRefId, cancellationToken);
+        var visualLastPage = visualRows.Count > 0 ? visualRows.Max(row => row.Page) : 0;
+        var lastPage = Math.Max(visualLastPage, previewLastPage ?? 0);
+        if (lastPage <= 1)
+            return;
+
+        var sectionNumbersById = sections
+            .Select((section, index) => new { section.DsecId, Number = index + 1 })
+            .ToDictionary(item => item.DsecId, item => item.Number);
+        var pageGroups = visualRows
+            .Where(row => row.Page > 0)
+            .GroupBy(row => row.Page)
+            .OrderBy(group => group.Key)
+            .ToList();
+
+        foreach (var pageGroup in pageGroups.Where(group => group.Key < lastPage))
+        {
+            var section = ResolveSectionForPage(sections, sectionPageMap, pageGroup.Key, pageGroup.Select(row => row.SectionId));
+            if (section == null)
+                continue;
+
+            if (!TryBuildTextAreaBoundsPoints(
+                    section,
+                    out var textAreaLeft,
+                    out var textAreaTop,
+                    out var textAreaRight,
+                    out var textAreaBottom,
+                    out var pageWidth,
+                    out var pageHeight))
+            {
+                continue;
+            }
+
+            var contentBottomBoundary = ResolvePageEndBottomBoundary(pageGroup, textAreaBottom, pageHeight);
+            if (contentBottomBoundary <= textAreaTop)
+                contentBottomBoundary = textAreaBottom;
+
+            result.IncrementTotalChecks();
+
+            var contentRows = pageGroup
+                .Where(row => HasMeaningfulBodyContent(row) && row.Y1.HasValue)
+                .OrderByDescending(row => row.Y1)
+                .ThenByDescending(row => row.X1)
+                .ToList();
+
+            if (preventEmptyPages && contentRows.Count == 0)
+            {
+                result.IncrementPassedChecks();
+                continue;
+            }
+
+            ErrorBbox? bbox;
+            int detectedBlankLines;
+
+            if (contentRows.Count == 0)
+            {
+                detectedBlankLines = EstimatePageEndBlankLines(Math.Max(0m, contentBottomBoundary - textAreaTop));
+                bbox = CreateBbox(
+                    textAreaLeft,
+                    textAreaTop,
+                    textAreaRight,
+                    contentBottomBoundary,
+                    pageWidth,
+                    pageHeight);
+            }
+            else
+            {
+                var lastContentRow = contentRows[0];
+                var lastElementBottom = ClampToRange(lastContentRow.Y1!.Value, 0m, pageHeight);
+                detectedBlankLines = EstimatePageEndBlankLines(Math.Max(0m, contentBottomBoundary - lastElementBottom));
+                bbox = CreateBbox(
+                    textAreaLeft,
+                    lastElementBottom,
+                    textAreaRight,
+                    contentBottomBoundary,
+                    pageWidth,
+                    pageHeight);
+            }
+
+            if (detectedBlankLines <= expectedMaxBlankLines)
+            {
+                result.IncrementPassedChecks();
+                continue;
+            }
+
+            sectionNumbersById.TryGetValue(section.DsecId, out var sectionNumber);
+            result.Errors.Add(new ValidationError
+            {
+                Category = "Pengaturan Halaman",
+                Field = "max_baris_kosong_akhir_halaman",
+                Message = $"Sisa ruang kosong di akhir halaman {pageGroup.Key} melebihi batas, maksimal {FormatBlankLineCount(expectedMaxBlankLines)} baris, terdeteksi sekitar {detectedBlankLines} baris",
+                Expected = $"Maksimal {FormatBlankLineCount(expectedMaxBlankLines)} baris kosong",
+                Actual = $"Sekitar {detectedBlankLines} baris kosong",
+                SectionIndex = sectionNumber > 0 ? sectionNumber : null,
+                Locations =
+                [
+                    new ErrorLocation
+                    {
+                        HalamanKe = pageGroup.Key,
+                        Bbox = bbox
+                    }
+                ]
+            });
+        }
+    }
+
+    private static decimal ResolvePageEndBottomBoundary(
+        IGrouping<int, PageEndVisualRow> pageGroup,
+        decimal textAreaBottom,
+        decimal pageHeight)
+    {
+        var boundary = textAreaBottom;
+
+        var footnoteTop = pageGroup
+            .Where(IsFootnotePageEndVisual)
+            .Select(row => row.Y0)
+            .Where(y => y.HasValue)
+            .Select(y => ClampToRange(y!.Value, 0m, pageHeight))
+            .DefaultIfEmpty(boundary)
+            .Min();
+
+        return Math.Min(boundary, footnoteTop);
+    }
+
+    private async Task<List<PageEndVisualRow>> LoadPageEndVisualRowsAsync(
+        string sectionRefType,
+        uint sectionRefId,
+        CancellationToken cancellationToken)
+    {
+        return await (
+            from visual in _db.DokumenElemenVisuals
+            where visual.DevPage.HasValue &&
+                  visual.DevRefId == sectionRefId &&
+                  (visual.DevRefTipe == sectionRefType ||
+                   visual.DevRefTipe == null ||
+                   visual.DevRefTipe == string.Empty)
+            join element in _db.DokumenElemens on visual.DokumenElemenId equals (ulong?)element.DelemenId into elementJoin
+            from element in elementJoin.DefaultIfEmpty()
+            join part in _db.DokumenParts on element.DpartId equals (uint?)part.DpartId into partJoin
+            from part in partJoin.DefaultIfEmpty()
+            select new PageEndVisualRow
+            {
+                Page = (int)visual.DevPage!.Value,
+                SectionId = part != null ? part.DsecId : null,
+                PartType = part != null ? part.DpartType : null,
+                Label = visual.DevLabelStruktural ?? visual.DevLabel,
+                Text = visual.DevText,
+                ElementType = element != null ? element.DelemenType : null,
+                ElementJsonTree = element != null ? element.DelemenJsonTree : null,
+                X0 = visual.DevBboxX0.HasValue ? (decimal?)visual.DevBboxX0.Value : null,
+                Y0 = visual.DevBboxY0.HasValue ? (decimal?)visual.DevBboxY0.Value : null,
+                X1 = visual.DevBboxX1.HasValue ? (decimal?)visual.DevBboxX1.Value : null,
+                Y1 = visual.DevBboxY1.HasValue ? (decimal?)visual.DevBboxY1.Value : null
+            }).ToListAsync(cancellationToken);
+    }
+
+    private async Task ValidateEmptyPagesAsync(
+        ValidationResult result,
+        IReadOnlyList<DokumenSection> sections,
+        PageEndRule? rule,
+        Dictionary<uint, int> sectionPageMap,
+        string sectionRefType,
+        uint sectionRefId,
+        CancellationToken cancellationToken)
+    {
+        var preventEmptyPages = rule?.CegahHalamanKosong?.Value ?? false;
+        if (!preventEmptyPages)
+            return;
+
+        var visualRows = await LoadPageEndVisualRowsAsync(sectionRefType, sectionRefId, cancellationToken);
+        var previewLastPage = await ResolveValidationTargetLastPageAsync(sectionRefType, sectionRefId, cancellationToken);
+        var visualLastPage = visualRows.Count > 0 ? visualRows.Max(row => row.Page) : 0;
+        var lastPage = Math.Max(visualLastPage, previewLastPage ?? 0);
+        if (lastPage <= 0)
+            return;
+
+        var sectionNumbersById = sections
+            .Select((section, index) => new { section.DsecId, Number = index + 1 })
+            .ToDictionary(item => item.DsecId, item => item.Number);
+
+        for (var page = 1; page <= lastPage; page++)
+        {
+            var pageRows = visualRows
+                .Where(row => row.Page == page)
+                .ToList();
+            var section = ResolveSectionForPage(sections, sectionPageMap, page, pageRows.Select(row => row.SectionId));
+            if (section == null || !TryGetPageBoundsPoints(section, out var pageWidth, out var pageHeight))
+                continue;
+
+            result.IncrementTotalChecks();
+
+            if (pageRows.Any(HasMeaningfulBodyContent))
+            {
+                result.IncrementPassedChecks();
+                continue;
+            }
+
+            sectionNumbersById.TryGetValue(section.DsecId, out var sectionNumber);
+            result.Errors.Add(new ValidationError
+            {
+                Category = "Pengaturan Halaman",
+                Field = "cegah_halaman_kosong",
+                Message = $"Halaman {page} kosong, tidak ada isi body selain whitespace",
+                Expected = "Setiap halaman harus memiliki isi body",
+                Actual = "Halaman hanya berisi whitespace atau header/footer",
+                SectionIndex = sectionNumber > 0 ? sectionNumber : null,
+                Locations =
+                [
+                    new ErrorLocation
+                    {
+                        HalamanKe = page,
+                        Bbox = CreateBbox(0m, 0m, pageWidth, pageHeight, pageWidth, pageHeight)
+                    }
+                ]
+            });
+        }
+    }
+
+    private async Task<int?> ResolveValidationTargetLastPageAsync(
+        string sectionRefType,
+        uint sectionRefId,
+        CancellationToken cancellationToken)
+    {
+        var pages = await LoadValidationTargetPreviewPagesAsync(sectionRefType, sectionRefId, cancellationToken);
+        return pages.Count > 0 ? pages.Max() : null;
+    }
+
+    private async Task<List<int>> LoadValidationTargetPreviewPagesAsync(
+        string sectionRefType,
+        uint sectionRefId,
+        CancellationToken cancellationToken)
+    {
+        var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+        var fullStoragePath = Path.GetFullPath(storagePath);
+
+        if (string.Equals(sectionRefType, "dokumen", StringComparison.OrdinalIgnoreCase))
+        {
+            var dokumen = await _db.Dokumens
+                .AsNoTracking()
+                .Where(item => item.DokumenId == (int)sectionRefId)
+                .Select(item => new
+                {
+                    item.DokumenId,
+                    item.MhsNrp,
+                    item.DokumenImagesPath
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (dokumen == null)
+                return [];
+
+            var candidateDirs = BuildValidationDokumenImageDirectories(
+                storagePath,
+                fullStoragePath,
+                dokumen.DokumenImagesPath,
+                dokumen.MhsNrp,
+                dokumen.DokumenId);
+            return PreviewImageHelper.EnumerateAvailablePages(candidateDirs);
+        }
+
+        if (string.Equals(sectionRefType, "bab", StringComparison.OrdinalIgnoreCase))
+        {
+            var bab = await _db.Babs
+                .AsNoTracking()
+                .Where(item => item.BabId == sectionRefId)
+                .Join(
+                    _db.Bukus.AsNoTracking(),
+                    item => item.BukuId,
+                    buku => (uint)buku.BukuId,
+                    (item, buku) => new
+                    {
+                        item.BabImagesPath,
+                        item.BukuId,
+                        item.BabOrder,
+                        buku.MhsNrp
+                    })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (bab == null)
+                return [];
+
+            var candidateDirs = BuildValidationBabImageDirectories(
+                storagePath,
+                fullStoragePath,
+                bab.BabImagesPath,
+                bab.MhsNrp,
+                bab.BukuId,
+                bab.BabOrder);
+            return PreviewImageHelper.EnumerateAvailablePages(candidateDirs);
+        }
+
+        return [];
+    }
+
+    private static IReadOnlyList<string> BuildValidationDokumenImageDirectories(
+        string storagePath,
+        string fullStoragePath,
+        string? configuredImagesPath,
+        string nrp,
+        int dokumenId)
+    {
+        var candidateDirs = new List<string?>();
+        var configuredImagesDir = PreviewImageHelper.ResolveConfiguredImagesDirectory(
+            storagePath,
+            fullStoragePath,
+            configuredImagesPath);
+        if (!string.IsNullOrWhiteSpace(configuredImagesDir))
+            candidateDirs.Add(configuredImagesDir);
+
+        candidateDirs.Add(Path.Combine(storagePath, "dokumen", nrp, dokumenId.ToString(), "images"));
+        return PreviewImageHelper.BuildSafeCandidateDirectories(fullStoragePath, candidateDirs);
+    }
+
+    private static IReadOnlyList<string> BuildValidationBabImageDirectories(
+        string storagePath,
+        string fullStoragePath,
+        string? configuredImagesPath,
+        string nrp,
+        uint bukuId,
+        byte? babOrder)
+    {
+        var candidateDirs = new List<string?>();
+        var configuredImagesDir = PreviewImageHelper.ResolveConfiguredImagesDirectory(
+            storagePath,
+            fullStoragePath,
+            configuredImagesPath);
+        if (!string.IsNullOrWhiteSpace(configuredImagesDir))
+            candidateDirs.Add(configuredImagesDir);
+
+        var baseImagesDir = Path.Combine(storagePath, "buku", nrp, bukuId.ToString(), "images");
+        if (babOrder.HasValue)
+            candidateDirs.Add(Path.Combine(baseImagesDir, babOrder.Value.ToString()));
+
+        candidateDirs.Add(baseImagesDir);
+        return PreviewImageHelper.BuildSafeCandidateDirectories(fullStoragePath, candidateDirs);
+    }
+
+    private static bool IsExcludedPageEndVisual(PageEndVisualRow row)
+    {
+        var partType = (row.PartType ?? string.Empty).Trim().ToLowerInvariant();
+        if (partType is "header" or "footer")
+            return true;
+
+        var normalizedLabel = NormalizeLabel(row.Label);
+        return normalizedLabel is "page_header" or "page_footer" or "header" or "footer";
+    }
+
+    private static bool IsFootnotePageEndVisual(PageEndVisualRow row)
+    {
+        var normalizedLabel = NormalizeLabel(row.Label);
+        return normalizedLabel.StartsWith("footnote", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasMeaningfulBodyContent(PageEndVisualRow row)
+    {
+        var partType = (row.PartType ?? string.Empty).Trim().ToLowerInvariant();
+        if (partType != "body" || IsExcludedPageEndVisual(row))
+            return false;
+
+        if (!IsParagraphElement(row.ElementType))
+            return true;
+
+        var content = ParseElementContent(row.ElementJsonTree);
+        return !IsEmptyElement(content);
+    }
+
+    private static bool HasVisiblePageBodyContent(PageEndVisualRow row)
+    {
+        if (IsExcludedPageEndVisual(row))
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(row.Text))
+            return true;
+
+        var normalizedLabel = NormalizeLabel(row.Label);
+        return normalizedLabel is
+            "gambar" or
+            "caption_gambar" or
+            "tabel" or
+            "caption_tabel" or
+            "kode" or
+            "judul_kode" or
+            "rumus" or
+            "formula";
+    }
+
+    private DokumenSection? ResolveSectionForPage(
+        IReadOnlyList<DokumenSection> sections,
+        Dictionary<uint, int> sectionPageMap,
+        int page,
+        IEnumerable<uint?> candidateSectionIds)
+    {
+        foreach (var sectionId in candidateSectionIds
+                     .Where(id => id.HasValue)
+                     .Select(id => id!.Value)
+                     .Distinct())
+        {
+            var explicitSection = sections.FirstOrDefault(section => section.DsecId == sectionId);
+            if (explicitSection != null)
+                return explicitSection;
+        }
+
+        var mappedSection = sections
+            .Where(section => sectionPageMap.TryGetValue(section.DsecId, out var startPage) && startPage <= page)
+            .OrderByDescending(section => sectionPageMap[section.DsecId])
+            .ThenByDescending(section => section.DsecIndex)
+            .FirstOrDefault();
+        if (mappedSection != null)
+            return mappedSection;
+
+        return sections
+            .OrderBy(section => section.DsecIndex)
+            .FirstOrDefault();
+    }
+
+    private bool TryBuildTextAreaBoundsPoints(
+        DokumenSection section,
+        out decimal left,
+        out decimal top,
+        out decimal right,
+        out decimal bottom,
+        out decimal pageWidth,
+        out decimal pageHeight)
+    {
+        left = 0m;
+        top = 0m;
+        right = 0m;
+        bottom = 0m;
+        pageWidth = 0m;
+        pageHeight = 0m;
+
+        if (!TryGetPageBoundsPoints(section, out pageWidth, out pageHeight))
+            return false;
+
+        var leftMargin = TwipsToPoints(section.DsecMarginLeftTwips) ?? 0m;
+        var rightMargin = TwipsToPoints(section.DsecMarginRightTwips) ?? 0m;
+        var topMargin = TwipsToPoints(section.DsecMarginTopTwips) ?? 0m;
+        var bottomMargin = TwipsToPoints(section.DsecMarginBottomTwips) ?? 0m;
+
+        left = ClampToRange(leftMargin, 0m, pageWidth);
+        right = ClampToRange(pageWidth - rightMargin, 0m, pageWidth);
+        top = ClampToRange(topMargin, 0m, pageHeight);
+        bottom = ClampToRange(pageHeight - bottomMargin, 0m, pageHeight);
+
+        return right > left && bottom > top;
+    }
+
+    private static int EstimatePageEndBlankLines(decimal remainingPoints)
+    {
+        if (remainingPoints <= 0m)
+            return 0;
+
+        return (int)Math.Floor((remainingPoints + 0.5m) / PageEndBlankLineHeightPoints);
+    }
+
+    private static string FormatBlankLineCount(decimal value)
+    {
+        if (decimal.Truncate(value) == value)
+            return value.ToString("0", CultureInfo.InvariantCulture);
+
+        return value.ToString("0.##", CultureInfo.InvariantCulture);
+    }
+
     private PageNumberingSpec? GetExpectedPageNumbering(PageNumberingSectionRules rules, string sectionType)
     {
         return sectionType.ToLower() switch
@@ -654,15 +1174,9 @@ public partial class ValidationService
             var expectedContinue = rule.Continue.Value;
             var hasExplicitRestart = section.DsecPageNumStart.HasValue && section.DsecPageNumStart.Value > 0;
             var actualContinue = !hasExplicitRestart;
-            var canUseManualFallback = CanUseManualPageNumberFallback(section);
 
             if (actualContinue == expectedContinue)
             {
-                result.IncrementPassedChecks();
-            }
-            else if (!expectedContinue && canUseManualFallback)
-            {
-                // Manual numbering in header/footer does not always persist restart metadata.
                 result.IncrementPassedChecks();
             }
             else
@@ -685,15 +1199,9 @@ public partial class ValidationService
             result.IncrementTotalChecks();
             var expectedDifferentFirstPage = rule.DifferentFirstPage.Value;
             var actualDifferentFirstPage = section.DsecHasTitlePage;
-            var canUseManualFallback = CanUseManualPageNumberFallback(section);
 
             if (actualDifferentFirstPage == expectedDifferentFirstPage)
             {
-                result.IncrementPassedChecks();
-            }
-            else if (expectedDifferentFirstPage && canUseManualFallback)
-            {
-                // Some documents emulate "different first page" manually while visual output remains correct.
                 result.IncrementPassedChecks();
             }
             else
@@ -712,11 +1220,11 @@ public partial class ValidationService
         }
 
         // With current extraction data we cannot validate first-page emptiness directly.
-        // We use title-page flag as best-effort proxy.
+        // We use title-page flag as best-effort proxy; manual numbering does not satisfy this rule.
         if (rule.FirstPageIsEmpty == true)
         {
             result.IncrementTotalChecks();
-            if (section.DsecHasTitlePage || CanUseManualPageNumberFallback(section))
+            if (section.DsecHasTitlePage)
             {
                 result.IncrementPassedChecks();
             }
@@ -915,12 +1423,6 @@ public partial class ValidationService
             "none" => null,
             _ => normalized
         };
-    }
-
-    private static bool CanUseManualPageNumberFallback(DokumenSection section)
-    {
-        // Manual page numbers can be visually correct without explicit restart metadata.
-        return !section.DsecPageNumStart.HasValue || section.DsecPageNumStart.Value == 0;
     }
 
     private async Task<Dictionary<uint, int>> LoadSectionPageMapAsync(

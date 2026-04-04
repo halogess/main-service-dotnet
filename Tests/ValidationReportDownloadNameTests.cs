@@ -7,6 +7,7 @@ using Xunit;
 
 namespace Tests;
 
+[Collection("storage-path")]
 public class ValidationReportDownloadNameTests
 {
     [Fact]
@@ -35,12 +36,13 @@ public class ValidationReportDownloadNameTests
             Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
             await File.WriteAllBytesAsync(reportPath, new byte[] { 1, 2, 3, 4 });
             File.SetLastWriteTime(reportPath, new DateTime(2026, 3, 16, 10, 11, 12, DateTimeKind.Local));
+            var expectedTimestamp = File.GetLastWriteTime(reportPath).ToString("yyyyMMddHHmmss");
 
             var service = new ValidationReportService(db, sttsDb, Mock.Of<ILogger<ValidationReportService>>());
 
             var result = await service.GenerateDokumenReportAsync(7, "05111740000123", "mahasiswa", refresh: false, CancellationToken.None);
 
-            Assert.Equal("05111740000123_report_dokumen_20260316101112.pdf", result.FileName);
+            Assert.Equal($"05111740000123_report_dokumen_{expectedTimestamp}.pdf", result.FileName);
             Assert.Equal(new byte[] { 1, 2, 3, 4 }, result.Content);
         }
         finally
@@ -77,12 +79,13 @@ public class ValidationReportDownloadNameTests
             Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
             await File.WriteAllBytesAsync(reportPath, new byte[] { 9, 8, 7 });
             File.SetLastWriteTime(reportPath, new DateTime(2026, 3, 16, 13, 14, 15, DateTimeKind.Local));
+            var expectedTimestamp = File.GetLastWriteTime(reportPath).ToString("yyyyMMddHHmmss");
 
             var service = new ValidationReportService(db, sttsDb, Mock.Of<ILogger<ValidationReportService>>());
 
             var result = await service.GenerateBukuReportAsync(9, "05111740000123", "mahasiswa", refresh: false, CancellationToken.None);
 
-            Assert.Equal("05111740000123_report_buku_20260316131415.pdf", result.FileName);
+            Assert.Equal($"05111740000123_report_buku_{expectedTimestamp}.pdf", result.FileName);
             Assert.Equal(new byte[] { 9, 8, 7 }, result.Content);
         }
         finally

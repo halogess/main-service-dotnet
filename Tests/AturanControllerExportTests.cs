@@ -169,7 +169,7 @@ public class AturanControllerExportTests
     }
 
     [Fact]
-    public void BuildWorkbook_ShouldIncludeSyntheticValidationRulesOnAturanSheetOnly()
+    public void BuildWorkbook_ShouldIncludeOnlyVisibleSyntheticValidationRulesOnAturanSheet()
     {
         IReadOnlyList<AturanDetail> details =
         [
@@ -197,7 +197,7 @@ public class AturanControllerExportTests
         var aturanRows = aturanWorksheet.RowsUsed().Skip(1).ToList();
 
         Assert.Contains(aturanRows, row => row.Cell(1).GetString() == "Footnote");
-        Assert.Contains(aturanRows, row => row.Cell(1).GetString() == "Daftar Pustaka");
+        Assert.DoesNotContain(aturanRows, row => row.Cell(1).GetString() == "Daftar Pustaka");
         Assert.Equal(["Aturan"], workbook.Worksheets.Select(sheet => sheet.Name).ToList());
     }
 }

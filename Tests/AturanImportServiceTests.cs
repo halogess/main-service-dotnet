@@ -102,6 +102,116 @@ public class AturanImportServiceTests
         Assert.Equal(1.27m, codeJson["kode"]!["paragraph"]!["indentation"]!["hanging"]!["value"]!.GetValue<decimal>());
     }
 
+    [Fact]
+    public async Task ImportFromArtifactsAsync_ShouldInferDifferentFirstPageFromFirstSectionOnly()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        SeedAturanArtifactsForDifferentFirstPageInference(db, aturanId: 4, firstHasTitlePage: true, secondHasTitlePage: false);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+
+        await service.ImportFromArtifactsAsync(4);
+
+        var detail = db.AturanDetails.Single(item => item.AturanId == 4 && item.AturanDetailKey == "nomor_halaman");
+        var json = JsonNode.Parse(detail.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.True(json["variation"]!["different_first_page"]!["enabled"]!["value"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task ImportFromArtifactsAsync_ShouldIgnoreLaterSectionDifferentFirstPageWhenFirstSectionDoesNotUseIt()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        SeedAturanArtifactsForDifferentFirstPageInference(db, aturanId: 5, firstHasTitlePage: false, secondHasTitlePage: true);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+
+        await service.ImportFromArtifactsAsync(5);
+
+        var detail = db.AturanDetails.Single(item => item.AturanId == 5 && item.AturanDetailKey == "nomor_halaman");
+        var json = JsonNode.Parse(detail.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.False(json["variation"]!["different_first_page"]!["enabled"]!["value"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task ImportFromArtifactsAsync_ShouldPersistPageSettingsProvenance()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        SeedAturanArtifacts(db);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+
+        await service.ImportFromArtifactsAsync(1);
+
+        var detail = db.AturanDetails.Single(item => item.AturanId == 1 && item.AturanDetailKey == "page_settings");
+        Assert.Equal(
+            "template_extracted=paper|margin|header_footer|gutter|column; manual_default=akhir_halaman",
+            detail.AturanDetailCatatan);
+    }
+
+    [Fact]
+    public async Task ImportFromArtifactsAsync_ShouldPersistSubchapterHangingRangeAndManualDefaultNotes()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        SeedAturanArtifactsWithNumberedSubchapterAndCodeSamples(db, aturanId: 3);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+
+        await service.ImportFromArtifactsAsync(3);
+
+        var detail = db.AturanDetails.Single(item => item.AturanId == 3 && item.AturanDetailKey == "judul_subbab");
+        var json = JsonNode.Parse(detail.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.Equal(1.27m, json["paragraph"]!["hanging_min_cm"]!["value"]!.GetValue<decimal>());
+        Assert.Equal(1.27m, json["paragraph"]!["hanging_max_cm"]!["value"]!.GetValue<decimal>());
+        Assert.Null(json["paragraph"]!["indentation"]!["hanging"]);
+        Assert.Contains("par.hanging_range", detail.AturanDetailCatatan);
+        Assert.Contains("manual_default=num.format|struct", detail.AturanDetailCatatan);
+    }
+
+    [Fact]
+    public async Task ImportFromArtifactsAsync_ShouldKeepManualDefaultCodeNumberingAndCompactCatatan()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        SeedAturanArtifactsWithNumberedSubchapterAndCodeSamples(db, aturanId: 3);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+
+        await service.ImportFromArtifactsAsync(3);
+
+        var detail = db.AturanDetails.Single(item => item.AturanId == 3 && item.AturanDetailKey == "kode");
+        var json = JsonNode.Parse(detail.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.True(json["kode"]!["numbering"]!["use_numbering"]!["value"]!.GetValue<bool>());
+        Assert.Contains("manual_default=code.num", detail.AturanDetailCatatan);
+        Assert.DoesNotContain("template_extracted=code.num", detail.AturanDetailCatatan);
+        Assert.True(detail.AturanDetailCatatan!.Length <= 255);
+    }
+
+    [Fact]
+    public async Task ImportFromArtifactsAsync_ShouldMarkTableContinuationAndConstraintsAsManualDefaultWhenNoTemplateSampleExists()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        SeedAturanArtifacts(db);
+        await db.SaveChangesAsync();
+
+        var service = CreateService(db);
+
+        await service.ImportFromArtifactsAsync(1);
+
+        var detail = db.AturanDetails.Single(item => item.AturanId == 1 && item.AturanDetailKey == "tabel");
+
+        Assert.Contains("tbl.no_image", detail.AturanDetailCatatan);
+        Assert.Contains("cap.cont", detail.AturanDetailCatatan);
+        Assert.DoesNotContain("template_extracted=tbl.no_image", detail.AturanDetailCatatan);
+    }
+
     private static AturanImportService CreateService(KorektorBukuDbContext db)
     {
         var configuration = new ConfigurationBuilder()
@@ -469,6 +579,46 @@ public class AturanImportServiceTests
             CreateVisual(31, 31, "judul_subbab", aturanId),
             CreateVisual(32, 32, "kode", aturanId),
             CreateVisual(33, 33, "kode", aturanId));
+    }
+
+    private static void SeedAturanArtifactsForDifferentFirstPageInference(
+        KorektorBukuDbContext db,
+        uint aturanId,
+        bool firstHasTitlePage,
+        bool secondHasTitlePage)
+    {
+        db.Aturans.Add(new Aturan
+        {
+            AturanId = aturanId,
+            AturanVersi = "Template Importer Page Order",
+            AturanStatus = AturanStatusValues.Diproses
+        });
+
+        db.DokumenSections.AddRange(
+            CreateAturanSection((uint)(aturanId * 10 + 1), aturanId, 1, firstHasTitlePage),
+            CreateAturanSection((uint)(aturanId * 10 + 2), aturanId, 2, secondHasTitlePage));
+    }
+
+    private static DokumenSection CreateAturanSection(uint sectionId, uint aturanId, uint index, bool hasTitlePage)
+    {
+        return new DokumenSection
+        {
+            DsecId = sectionId,
+            DsecRefTipe = "aturan",
+            DsecRefId = aturanId,
+            DsecIndex = index,
+            DsecHasTitlePage = hasTitlePage,
+            DsecPageWidthTwips = 11907,
+            DsecPageHeightTwips = 16839,
+            DsecOrientation = "portrait",
+            DsecMarginTopTwips = 2268,
+            DsecMarginBottomTwips = 1701,
+            DsecMarginLeftTwips = 2268,
+            DsecMarginRightTwips = 1701,
+            DsecHeaderMarginTwips = 1417,
+            DsecFooterMarginTwips = 850,
+            DsecColumnCount = 1
+        };
     }
 
     private static DokumenElemenVisual CreateVisual(ulong visualId, ulong elementId, string label, uint aturanId = 1)

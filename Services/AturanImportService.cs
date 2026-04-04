@@ -22,6 +22,7 @@ public sealed class AturanImportService : IAturanImportService
     private static readonly Regex TableCaptionRegex = new(@"^\s*Tabel\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex CodeCaptionRegex = new(@"^\s*(Algoritma|Segmen\s+Program)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
+    private static readonly IReadOnlyDictionary<string, DetailSourceMatrix> SourceMatrices = BuildSourceMatrices();
 
     private readonly KorektorBukuDbContext _db;
     private readonly IEmailService _emailService;
@@ -98,20 +99,20 @@ public sealed class AturanImportService : IAturanImportService
         var labelMap = await LoadVisualLabelsAsync(allRows.Select(row => row.ElementId), aturanId, cancellationToken);
         var samples = await BuildSamplesAsync(allRows, labelMap, cancellationToken);
 
-        ApplyPageSettings(detailDrafts["page_settings"].Json, sections);
+        ApplyPageSettings(detailDrafts["page_settings"], sections);
         ApplyPageNumbering(
-            detailDrafts["nomor_halaman"].Json,
+            detailDrafts["nomor_halaman"],
             sections,
             samples.Where(sample => !string.Equals(sample.Row.PartType, "body", StringComparison.OrdinalIgnoreCase)).ToList());
-        ApplyTitleRule(detailDrafts["judul_bab"].Json, FilterSamples(samples, "judul_bab"), ChapterTitleRegex, includeHanging: false, useCenterFallback: true, normalizeNumberingIndent: false);
-        ApplyTitleRule(detailDrafts["judul_subbab"].Json, FilterSamples(samples, "judul_subbab"), SubchapterTitleRegex, includeHanging: true, useCenterFallback: false, normalizeNumberingIndent: true);
-        ApplyParagraphRule(detailDrafts["paragraf"].Json, FilterSamples(samples, "paragraf"), includeFirstLineIndent: true, includeHanging: false, normalizeNumberingIndent: true);
-        ApplyParagraphRule(detailDrafts["item_daftar"].Json, FilterListItemSamples(samples), includeFirstLineIndent: false, includeHanging: true, normalizeNumberingIndent: false);
-        ApplyImageRule(detailDrafts["gambar"].Json, samples, ImageCaptionRegex);
-        ApplyTableRule(detailDrafts["tabel"].Json, samples, TableCaptionRegex);
-        ApplyCodeRule(detailDrafts["kode"].Json, samples, CodeCaptionRegex);
-        ApplyFormulaRule(detailDrafts["rumus"].Json, FilterSamples(samples, "rumus", "formula", "equation"));
-        ApplyFootnoteRule(detailDrafts["footnote"].Json, FilterSamples(samples, "footnote"));
+        ApplyTitleRule(detailDrafts["judul_bab"], FilterSamples(samples, "judul_bab"), ChapterTitleRegex, useCenterFallback: false, normalizeNumberingIndent: false, useHangingRange: false);
+        ApplyTitleRule(detailDrafts["judul_subbab"], FilterSamples(samples, "judul_subbab"), SubchapterTitleRegex, useCenterFallback: false, normalizeNumberingIndent: true, useHangingRange: true);
+        ApplyParagraphRule(detailDrafts["paragraf"], FilterSamples(samples, "paragraf"), includeFirstLineIndent: true, includeHanging: false, normalizeNumberingIndent: true);
+        ApplyParagraphRule(detailDrafts["item_daftar"], FilterListItemSamples(samples), includeFirstLineIndent: false, includeHanging: true, normalizeNumberingIndent: false);
+        ApplyImageRule(detailDrafts["gambar"], samples, ImageCaptionRegex);
+        ApplyTableRule(detailDrafts["tabel"], samples, TableCaptionRegex);
+        ApplyCodeRule(detailDrafts["kode"], samples, CodeCaptionRegex);
+        ApplyFormulaRule(detailDrafts["rumus"], FilterSamples(samples, "rumus", "formula", "equation"));
+        ApplyFootnoteRule(detailDrafts["footnote"], FilterSamples(samples, "footnote"));
 
         var normalizedDetails = new List<AturanDetail>();
         foreach (var draft in detailDrafts.Values)
@@ -124,7 +125,7 @@ public sealed class AturanImportService : IAturanImportService
                 throw new InvalidOperationException($"Draft aturan {draft.Detail.AturanDetailKey} tidak sesuai shape: {shapeError}");
 
             draft.Detail.AturanDetailJsonValue = normalizedJson;
-            draft.Detail.AturanDetailCatatan = null;
+            draft.Detail.AturanDetailCatatan = draft.BuildCatatan();
             normalizedDetails.Add(draft.Detail);
         }
 
@@ -316,41 +317,58 @@ public sealed class AturanImportService : IAturanImportService
         return map;
     }
 
-    private static void ApplyPageSettings(JsonObject root, List<DokumenSection> sections)
+    private static void ApplyPageSettings(DraftDetail draft, List<DokumenSection> sections)
     {
-        if (sections.Count == 0)
+        var root = draft.Json;
+        var section = SelectFirstDocumentSection(sections);
+        if (section == null)
             return;
 
-        var section = sections
-            .OrderBy(item => item.DsecIndex ?? uint.MaxValue)
-            .ThenBy(item => item.DsecId)
-            .First();
+        if (TrySetWrappedValue(root, InferPaperSize(section), "paper", "size") |
+            TrySetWrappedValue(root, (section.DsecOrientation ?? "portrait").ToUpperInvariant(), "paper", "orientation"))
+        {
+            draft.MarkTemplateExtracted("paper");
+        }
 
-        TrySetWrappedValue(root, InferPaperSize(section), "paper", "size");
-        TrySetWrappedValue(root, (section.DsecOrientation ?? "portrait").ToUpperInvariant(), "paper", "orientation");
-        TrySetWrappedValue(root, TwipsToCm(section.DsecMarginTopTwips), "margin", "top");
-        TrySetWrappedValue(root, TwipsToCm(section.DsecMarginBottomTwips), "margin", "bottom");
-        TrySetWrappedValue(root, TwipsToCm(section.DsecMarginLeftTwips), "margin", "left");
-        TrySetWrappedValue(root, TwipsToCm(section.DsecMarginRightTwips), "margin", "right");
-        TrySetWrappedValue(root, TwipsToCm(section.DsecHeaderMarginTwips), "header_footer", "header_from_top");
-        TrySetWrappedValue(root, TwipsToCm(section.DsecFooterMarginTwips), "header_footer", "footer_from_bottom");
-        TrySetWrappedValue(root, TwipsToCm(section.DsecGutterTwips), "gutter", "size");
-        TrySetWrappedValue(root, NormalizeGutterPosition(section.DsecGutterPosition), "gutter", "position");
-        TrySetWrappedValue(root, section.DsecColumnCount.HasValue ? (int)section.DsecColumnCount.Value : 1, "column");
+        if (TrySetWrappedValue(root, TwipsToCm(section.DsecMarginTopTwips), "margin", "top") |
+            TrySetWrappedValue(root, TwipsToCm(section.DsecMarginBottomTwips), "margin", "bottom") |
+            TrySetWrappedValue(root, TwipsToCm(section.DsecMarginLeftTwips), "margin", "left") |
+            TrySetWrappedValue(root, TwipsToCm(section.DsecMarginRightTwips), "margin", "right"))
+        {
+            draft.MarkTemplateExtracted("margin");
+        }
+
+        if (TrySetWrappedValue(root, TwipsToCm(section.DsecHeaderMarginTwips), "header_footer", "header_from_top") |
+            TrySetWrappedValue(root, TwipsToCm(section.DsecFooterMarginTwips), "header_footer", "footer_from_bottom"))
+        {
+            draft.MarkTemplateExtracted("header_footer");
+        }
+
+        if (TrySetWrappedValue(root, TwipsToCm(section.DsecGutterTwips), "gutter", "size") |
+            TrySetWrappedValue(root, NormalizeGutterPosition(section.DsecGutterPosition), "gutter", "position"))
+        {
+            draft.MarkTemplateExtracted("gutter");
+        }
+
+        if (section.DsecColumnCount.HasValue &&
+            TrySetWrappedValue(root, (int)section.DsecColumnCount.Value, "column"))
+        {
+            draft.MarkTemplateExtracted("column");
+        }
     }
 
-    private static void ApplyPageNumbering(JsonObject root, List<DokumenSection> sections, List<ElementSample> headerFooterSamples)
+    private static void ApplyPageNumbering(DraftDetail draft, List<DokumenSection> sections, List<ElementSample> headerFooterSamples)
     {
-        if (sections.Count > 0)
+        var root = draft.Json;
+        var firstPageSection = SelectFirstDocumentSection(sections);
+        if (firstPageSection != null)
         {
-            var section = sections
-                .OrderBy(item => item.DsecIndex ?? uint.MaxValue)
-                .ThenBy(item => item.DsecId)
-                .First();
-
-            TrySetWrappedValue(root, NormalizeWordPageNumberFormat(section.DsecPageNumFormat), "numbering", "number_format");
-            TrySetWrappedValue(root, sections.Any(item => item.DsecHasTitlePage), "variation", "different_first_page", "enabled");
-            TrySetWrappedValue(root, sections.Any(item => item.DsecDifferentOddEven), "variation", "different_odd_even", "enabled");
+            if (TrySetWrappedValue(root, NormalizeWordPageNumberFormat(firstPageSection.DsecPageNumFormat), "numbering", "number_format"))
+                draft.MarkTemplateExtracted("num.format");
+            if (TrySetWrappedValue(root, firstPageSection.DsecHasTitlePage, "variation", "different_first_page", "enabled"))
+                draft.MarkTemplateExtracted("dfp.enabled");
+            if (TrySetWrappedValue(root, sections.Any(item => item.DsecDifferentOddEven), "variation", "different_odd_even", "enabled"))
+                draft.MarkTemplateExtracted("doe.enabled");
         }
 
         var pageFieldSamples = headerFooterSamples
@@ -359,20 +377,48 @@ public sealed class AturanImportService : IAturanImportService
         if (pageFieldSamples.Count == 0)
             return;
 
-        ApplyDominantTextStyle(root, pageFieldSamples.SelectMany(sample => sample.TextFormats).ToList(), "font");
+        if (ApplyDominantTextStyle(root, pageFieldSamples.SelectMany(sample => sample.TextFormats).ToList(), "font"))
+            draft.MarkTemplateExtracted("font");
 
         var dominantParagraph = SelectDominantParagraphFormat(pageFieldSamples
             .Select(sample => sample.ParagraphFormat)
             .Where(format => format != null)!);
         if (dominantParagraph != null)
-            ApplyParagraphFormat(root, dominantParagraph, includeFirstLineIndent: true, includeHanging: false, "paragraph");
+        {
+            if (ApplyParagraphFormat(root, dominantParagraph, includeFirstLineIndent: true, includeHanging: false, "paragraph"))
+                draft.MarkTemplateExtracted("par");
+        }
 
-        ApplyPageNumberSlot(root, pageFieldSamples, "default", "variation", "default");
-        ApplyPageNumberSlot(root, pageFieldSamples, "first", "variation", "different_first_page", "first");
-        ApplyPageNumberSlot(root, pageFieldSamples, "even", "variation", "different_odd_even", "even");
+        if (ApplyPageNumberSlot(root, pageFieldSamples, "default", "variation", "default"))
+            draft.MarkTemplateExtracted("default.pos");
+        if (firstPageSection != null)
+        {
+            if (ApplyPageNumberSlot(
+                root,
+                pageFieldSamples
+                    .Where(sample => sample.Row.DsecId == firstPageSection.DsecId)
+                    .ToList(),
+                "first",
+                "variation",
+                "different_first_page",
+                "first"))
+            {
+                draft.MarkTemplateExtracted("first.pos");
+            }
+        }
+        if (ApplyPageNumberSlot(root, pageFieldSamples, "even", "variation", "different_odd_even", "even"))
+            draft.MarkTemplateExtracted("even.pos");
     }
 
-    private static void ApplyPageNumberSlot(
+    private static DokumenSection? SelectFirstDocumentSection(IEnumerable<DokumenSection> sections)
+    {
+        return sections?
+            .OrderBy(item => item.DsecIndex ?? uint.MaxValue)
+            .ThenBy(item => item.DsecId)
+            .FirstOrDefault();
+    }
+
+    private static bool ApplyPageNumberSlot(
         JsonObject root,
         IReadOnlyList<ElementSample> samples,
         string partPosition,
@@ -382,49 +428,63 @@ public sealed class AturanImportService : IAturanImportService
             .Where(sample => string.Equals(NormalizePartPosition(sample.Row.PartPosition), partPosition, StringComparison.OrdinalIgnoreCase))
             .ToList();
         if (slotSamples.Count == 0)
-            return;
+            return false;
 
         var preferredSample = slotSamples
             .OrderBy(sample => string.Equals(sample.Row.PartType, "footer", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
             .First();
 
-        TrySetWrappedValue(root, NormalizePartType(preferredSample.Row.PartType), prefix.Concat(["position", "location"]).ToArray());
-        TrySetWrappedValue(
-            root,
-            NormalizeAlignmentValue(preferredSample.ParagraphFormat?.DfpJc) switch
-            {
-                "left" => "left",
-                "right" => "right",
-                "center" => "center",
-                _ => "center"
-            },
-            prefix.Concat(["position", "alignment"]).ToArray());
+        var applied = TrySetWrappedValue(root, NormalizePartType(preferredSample.Row.PartType), prefix.Concat(["position", "location"]).ToArray());
+        var alignment = NormalizeAlignmentValue(preferredSample.ParagraphFormat?.DfpJc);
+        if (!string.IsNullOrWhiteSpace(alignment))
+            applied |= TrySetWrappedValue(root, alignment, prefix.Concat(["position", "alignment"]).ToArray());
+        return applied;
     }
 
     private static void ApplyTitleRule(
-        JsonObject root,
+        DraftDetail draft,
         List<ElementSample> samples,
         Regex numberingRegex,
-        bool includeHanging,
         bool useCenterFallback,
-        bool normalizeNumberingIndent)
+        bool normalizeNumberingIndent,
+        bool useHangingRange)
     {
+        var root = draft.Json;
         if (samples.Count == 0)
             return;
 
-        ApplyDominantTextStyle(root, samples.SelectMany(sample => sample.TextFormats).ToList(), "font");
+        if (ApplyDominantTextStyle(root, samples.SelectMany(sample => sample.TextFormats).ToList(), "font"))
+            draft.MarkTemplateExtracted("font");
 
         var dominantParagraph = SelectDominantParagraphFormat(
             samples.Select(sample => sample.ParagraphFormat),
             normalizeNumberingIndent);
         if (dominantParagraph != null)
-            ApplyParagraphFormat(
+        {
+            if (useHangingRange)
+            {
+                var (paragraphApplied, hangingRangeApplied) = ApplySubchapterParagraphFormat(
+                    root,
+                    samples,
+                    dominantParagraph,
+                    normalizeNumberingIndent,
+                    "paragraph");
+                if (paragraphApplied)
+                    draft.MarkTemplateExtracted("par");
+                if (hangingRangeApplied)
+                    draft.MarkTemplateExtracted("par.hanging_range");
+            }
+            else if (ApplyParagraphFormat(
                 root,
                 dominantParagraph,
                 includeFirstLineIndent: false,
-                includeHanging: includeHanging,
+                includeHanging: false,
                 normalizeNumberingIndent,
-                "paragraph");
+                "paragraph"))
+            {
+                draft.MarkTemplateExtracted("par");
+            }
+        }
         else if (useCenterFallback)
             TrySetWrappedValue(root, "center", "paragraph", "alignment");
 
@@ -435,22 +495,32 @@ public sealed class AturanImportService : IAturanImportService
 
         var dominantCase = MostCommon(caseCandidates);
         if (!string.IsNullOrWhiteSpace(dominantCase))
-            TrySetWrappedValue(root, dominantCase, "numbering", "case");
+        {
+            if (TrySetWrappedValue(root, dominantCase, "numbering", "case"))
+                draft.MarkTemplateExtracted("num.case");
+        }
 
         var hasEnterAfterNumber = DetermineEnterAfterNumber(samples, numberingRegex);
         if (HasWrappedValue(root, "numbering", "enter_after_number"))
-            TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_number");
+        {
+            if (TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_number"))
+                draft.MarkTemplateExtracted("num.enter");
+        }
         if (HasWrappedValue(root, "numbering", "enter_after_numbering"))
-            TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_numbering");
+        {
+            if (TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_numbering"))
+                draft.MarkTemplateExtracted("num.enter");
+        }
     }
 
     private static void ApplyParagraphRule(
-        JsonObject root,
+        DraftDetail draft,
         List<ElementSample> samples,
         bool includeFirstLineIndent,
         bool includeHanging,
         bool normalizeNumberingIndent)
     {
+        var root = draft.Json;
         if (samples.Count == 0)
             return;
 
@@ -458,23 +528,30 @@ public sealed class AturanImportService : IAturanImportService
             ? SelectPreferredParagraphRuleSamples(samples)
             : samples;
 
-        ApplyDominantTextStyle(root, preferredSamples.SelectMany(sample => sample.TextFormats).ToList(), "font");
+        if (ApplyDominantTextStyle(root, preferredSamples.SelectMany(sample => sample.TextFormats).ToList(), "font"))
+            draft.MarkTemplateExtracted("font");
 
         var dominantParagraph = SelectDominantParagraphFormat(
             preferredSamples.Select(sample => sample.ParagraphFormat),
             normalizeNumberingIndent);
         if (dominantParagraph != null)
-            ApplyParagraphFormat(
+        {
+            if (ApplyParagraphFormat(
                 root,
                 dominantParagraph,
                 includeFirstLineIndent,
                 includeHanging,
                 normalizeNumberingIndent,
-                "paragraph");
+                "paragraph"))
+            {
+                draft.MarkTemplateExtracted("par");
+            }
+        }
     }
 
-    private static void ApplyImageRule(JsonObject root, List<ElementSample> samples, Regex captionRegex)
+    private static void ApplyImageRule(DraftDetail draft, List<ElementSample> samples, Regex captionRegex)
     {
+        var root = draft.Json;
         var imageSamples = samples
             .Where(sample => string.Equals(sample.Row.PartType, "body", StringComparison.OrdinalIgnoreCase))
             .Where(sample =>
@@ -487,9 +564,10 @@ public sealed class AturanImportService : IAturanImportService
         {
             var dominantParagraph = SelectDominantParagraphFormat(imageSamples.Select(sample => sample.ParagraphFormat));
             if (dominantParagraph != null)
-                ApplyParagraphFormat(EnsureObjectAtPath(root, "gambar"), dominantParagraph, includeFirstLineIndent: false, includeHanging: false, "paragraph");
-            else
-                TrySetWrappedValue(root, "center", "gambar", "paragraph", "alignment");
+            {
+                if (ApplyParagraphFormat(EnsureObjectAtPath(root, "gambar"), dominantParagraph, includeFirstLineIndent: false, includeHanging: false, "paragraph"))
+                    draft.MarkTemplateExtracted("img.par");
+            }
         }
 
         var captionSamples = FilterSamples(samples, "caption_gambar");
@@ -501,11 +579,13 @@ public sealed class AturanImportService : IAturanImportService
                 .ToList();
         }
 
-        ApplyCaptionRule(EnsureObjectAtPath(root, "caption_gambar"), captionSamples, imageSamples, captionRegex, "after");
+        var captionChanges = ApplyCaptionRule(EnsureObjectAtPath(root, "caption_gambar"), captionSamples, imageSamples, captionRegex, "after");
+        captionChanges.Apply(draft, "cap");
     }
 
-    private static void ApplyTableRule(JsonObject root, List<ElementSample> samples, Regex captionRegex)
+    private static void ApplyTableRule(DraftDetail draft, List<ElementSample> samples, Regex captionRegex)
     {
+        var root = draft.Json;
         var tableSamples = samples
             .Where(sample => string.Equals(sample.Row.PartType, "body", StringComparison.OrdinalIgnoreCase))
             .Where(sample =>
@@ -522,23 +602,33 @@ public sealed class AturanImportService : IAturanImportService
                 .Where(value => !string.IsNullOrWhiteSpace(value))
                 .ToList());
             if (!string.IsNullOrWhiteSpace(alignment))
-                TrySetWrappedValue(root, alignment, "tabel", "position", "alignment");
+            {
+                if (TrySetWrappedValue(root, alignment, "tabel", "position", "alignment"))
+                    draft.MarkTemplateExtracted("tbl.pos");
+            }
 
             var indentValues = tableSamples
                 .Where(sample => sample.TableFormat?.DftTblIndTwips.HasValue == true)
                 .Select(sample => Math.Round(sample.TableFormat!.DftTblIndTwips!.Value / 1440.0m * 2.54m, 2))
                 .ToList();
             if (indentValues.Count > 0)
-                TrySetWrappedValue(root, MostCommon(indentValues), "tabel", "position", "indent_from_left");
+            {
+                if (TrySetWrappedValue(root, MostCommon(indentValues), "tabel", "position", "indent_from_left"))
+                    draft.MarkTemplateExtracted("tbl.pos");
+            }
 
             var tableTextFormats = tableSamples
                 .SelectMany(sample => sample.TableTextFormats)
                 .ToList();
-            ApplyDominantTextStyle(EnsureObjectAtPath(root, "tabel", "konten_tabel"), tableTextFormats, "font");
+            if (ApplyDominantTextStyle(EnsureObjectAtPath(root, "tabel", "konten_tabel"), tableTextFormats, "font"))
+                draft.MarkTemplateExtracted("tbl.font");
 
             var tableParagraphFormat = SelectDominantParagraphFormat(tableSamples.SelectMany(sample => sample.TableParagraphFormats));
             if (tableParagraphFormat != null)
-                ApplyParagraphFormat(EnsureObjectAtPath(root, "tabel", "konten_tabel"), tableParagraphFormat, includeFirstLineIndent: false, includeHanging: false, "paragraph");
+            {
+                if (ApplyParagraphFormat(EnsureObjectAtPath(root, "tabel", "konten_tabel"), tableParagraphFormat, includeFirstLineIndent: false, includeHanging: false, "paragraph"))
+                    draft.MarkTemplateExtracted("tbl.par");
+            }
         }
 
         var captionSamples = FilterSamples(samples, "caption_tabel");
@@ -550,11 +640,14 @@ public sealed class AturanImportService : IAturanImportService
                 .ToList();
         }
 
-        ApplyCaptionRule(EnsureObjectAtPath(root, "caption_tabel"), captionSamples, tableSamples, captionRegex, "before");
+        var captionRoot = EnsureObjectAtPath(root, "caption_tabel");
+        var captionChanges = ApplyCaptionRule(captionRoot, captionSamples, tableSamples, captionRegex, "before");
+        captionChanges.Apply(draft, "cap");
     }
 
-    private static void ApplyCodeRule(JsonObject root, List<ElementSample> samples, Regex captionRegex)
+    private static void ApplyCodeRule(DraftDetail draft, List<ElementSample> samples, Regex captionRegex)
     {
+        var root = draft.Json;
         var codeSamples = samples
             .Where(sample => string.Equals(sample.Row.PartType, "body", StringComparison.OrdinalIgnoreCase))
             .Where(sample => string.Equals(sample.Label, "kode", StringComparison.OrdinalIgnoreCase))
@@ -565,20 +658,26 @@ public sealed class AturanImportService : IAturanImportService
             var codeTextFormats = codeSamples
                 .SelectMany(sample => sample.TextFormats.Concat(sample.TableTextFormats))
                 .ToList();
-            ApplyDominantTextStyle(EnsureObjectAtPath(root, "kode"), codeTextFormats, "font");
+            if (ApplyDominantTextStyle(EnsureObjectAtPath(root, "kode"), codeTextFormats, "font"))
+                draft.MarkTemplateExtracted("code.font");
 
             var codeParagraph = SelectDominantParagraphFormat(codeSamples
                 .Select(sample => sample.ParagraphFormat)
                 .Concat(codeSamples.SelectMany(sample => sample.TableParagraphFormats)),
                 normalizeNumberingIndent: true);
             if (codeParagraph != null)
-                ApplyParagraphFormat(
+            {
+                if (ApplyParagraphFormat(
                     EnsureObjectAtPath(root, "kode"),
                     codeParagraph,
                     includeFirstLineIndent: false,
                     includeHanging: true,
                     normalizeNumberingIndent: true,
-                    "paragraph");
+                    "paragraph"))
+                {
+                    draft.MarkTemplateExtracted("code.par");
+                }
+            }
         }
 
         var titleSamples = FilterSamples(samples, "judul_kode");
@@ -590,78 +689,90 @@ public sealed class AturanImportService : IAturanImportService
                 .ToList();
         }
 
-        if (titleSamples.Count > 0)
-            TrySetWrappedValue(root, true, "kode", "numbering", "use_numbering");
-
-        ApplyCaptionRule(EnsureObjectAtPath(root, "judul_kode"), titleSamples, codeSamples, captionRegex, "before");
+        var titleRoot = EnsureObjectAtPath(root, "judul_kode");
+        var titleChanges = ApplyCaptionRule(titleRoot, titleSamples, codeSamples, captionRegex, "before");
+        titleChanges.Apply(draft, "title");
     }
 
-    private static void ApplyFormulaRule(JsonObject root, List<ElementSample> samples)
+    private static void ApplyFormulaRule(DraftDetail draft, List<ElementSample> samples)
     {
+        var root = draft.Json;
         if (samples.Count == 0)
             return;
 
-        ApplyDominantTextStyle(root, samples.SelectMany(sample => sample.TextFormats).ToList(), "font");
+        if (ApplyDominantTextStyle(root, samples.SelectMany(sample => sample.TextFormats).ToList(), "font"))
+            draft.MarkTemplateExtracted("font");
 
         var paragraph = SelectDominantParagraphFormat(samples.Select(sample => sample.ParagraphFormat));
         if (paragraph != null)
         {
-            ApplyParagraphFormat(root, paragraph, includeFirstLineIndent: true, includeHanging: false, "paragraph");
-            TrySetWrappedValue(root, GetLeftIndentCm(paragraph), "position", "overall_indent_cm");
+            if (ApplyParagraphFormat(root, paragraph, includeFirstLineIndent: true, includeHanging: false, "paragraph"))
+                draft.MarkTemplateExtracted("par");
+            if (TrySetWrappedValue(root, GetLeftIndentCm(paragraph), "position", "overall_indent_cm"))
+                draft.MarkTemplateExtracted("pos.overall_indent");
         }
     }
 
-    private static void ApplyFootnoteRule(JsonObject root, List<ElementSample> samples)
+    private static void ApplyFootnoteRule(DraftDetail draft, List<ElementSample> samples)
     {
+        var root = draft.Json;
         if (samples.Count == 0)
             return;
 
-        ApplyDominantTextStyle(EnsureObjectAtPath(root, "footnote_text"), samples.SelectMany(sample => sample.TextFormats).ToList(), "font");
+        if (ApplyDominantTextStyle(EnsureObjectAtPath(root, "footnote_text"), samples.SelectMany(sample => sample.TextFormats).ToList(), "font"))
+            draft.MarkTemplateExtracted("text.font");
 
         var paragraph = SelectDominantParagraphFormat(samples.Select(sample => sample.ParagraphFormat));
         if (paragraph != null)
-            ApplyParagraphFormat(EnsureObjectAtPath(root, "footnote_text"), paragraph, includeFirstLineIndent: false, includeHanging: false, "paragraph");
+        {
+            if (ApplyParagraphFormat(EnsureObjectAtPath(root, "footnote_text"), paragraph, includeFirstLineIndent: false, includeHanging: false, "paragraph"))
+                draft.MarkTemplateExtracted("text.par");
+        }
     }
 
-    private static void ApplyCaptionRule(
+    private static CaptionImportChanges ApplyCaptionRule(
         JsonObject root,
         IReadOnlyList<ElementSample> captionSamples,
         IReadOnlyList<ElementSample> anchorSamples,
         Regex captionPrefixRegex,
         string defaultPosition)
     {
+        var changes = new CaptionImportChanges();
         if (captionSamples.Count == 0)
-            return;
+            return changes;
 
-        ApplyDominantTextStyle(root, captionSamples.SelectMany(sample => sample.TextFormats).ToList(), "font");
+        changes.FontApplied = ApplyDominantTextStyle(root, captionSamples.SelectMany(sample => sample.TextFormats).ToList(), "font");
 
         var paragraph = SelectDominantParagraphFormat(captionSamples.Select(sample => sample.ParagraphFormat));
         if (paragraph != null)
-            ApplyParagraphFormat(root, paragraph, includeFirstLineIndent: false, includeHanging: false, "paragraph");
+            changes.ParagraphApplied = ApplyParagraphFormat(root, paragraph, includeFirstLineIndent: false, includeHanging: false, "paragraph");
 
         var dominantCase = MostCommon(ExtractCaseCandidateTexts(captionSamples, captionPrefixRegex)
             .Select(InferCase)
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .ToList());
         if (!string.IsNullOrWhiteSpace(dominantCase))
-            TrySetWrappedValue(root, dominantCase, "numbering", "case");
+            changes.CaseApplied = TrySetWrappedValue(root, dominantCase, "numbering", "case");
 
         var hasEnterAfterNumber = DetermineEnterAfterNumber(captionSamples, captionPrefixRegex);
         if (HasWrappedValue(root, "numbering", "enter_after_number"))
-            TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_number");
+            changes.EnterAfterApplied |= TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_number");
         if (HasWrappedValue(root, "numbering", "enter_after_numbering"))
-            TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_numbering");
+            changes.EnterAfterApplied |= TrySetWrappedValue(root, hasEnterAfterNumber, "numbering", "enter_after_numbering");
 
-        TrySetWrappedValue(root, DetermineCaptionPosition(captionSamples, anchorSamples, defaultPosition), "position");
+        var (position, inferred) = DetermineCaptionPosition(captionSamples, anchorSamples, defaultPosition);
+        if (TrySetWrappedValue(root, position, "position") && inferred)
+            changes.PositionApplied = true;
+        return changes;
     }
 
-    private static string DetermineCaptionPosition(
+    private static (string Position, bool Inferred) DetermineCaptionPosition(
         IReadOnlyList<ElementSample> captionSamples,
         IReadOnlyList<ElementSample> anchorSamples,
         string defaultPosition)
     {
         if (captionSamples.Count == 0 || anchorSamples.Count == 0)
-            return defaultPosition;
+            return (defaultPosition, false);
 
         var beforeCount = 0;
         var afterCount = 0;
@@ -683,20 +794,21 @@ public sealed class AturanImportService : IAturanImportService
         }
 
         if (beforeCount == afterCount)
-            return defaultPosition;
+            return (defaultPosition, false);
 
-        return beforeCount > afterCount ? "before" : "after";
+        return (beforeCount > afterCount ? "before" : "after", true);
     }
 
-    private static void ApplyDominantTextStyle(
+    private static bool ApplyDominantTextStyle(
         JsonObject root,
         IReadOnlyList<DokumenFormatText> formats,
         params string[] prefix)
     {
         if (formats.Count == 0)
-            return;
+            return false;
 
         var target = EnsureObjectAtPath(root, prefix);
+        var applied = false;
         var fontName = MostCommon(formats
             .Select(format => NormalizeWhitespace(format.DftxFontAscii ?? string.Empty))
             .Where(value => !string.IsNullOrWhiteSpace(value))
@@ -716,25 +828,26 @@ public sealed class AturanImportService : IAturanImportService
         var underline = MostCommonBool(formats.Select(HasUnderline).ToList());
 
         if (!string.IsNullOrWhiteSpace(fontName))
-            TrySetWrappedValue(target, fontName, "font_name");
+            applied |= TrySetWrappedValue(target, fontName, "font_name");
         if (fontSizes.Count > 0)
-            TrySetWrappedValue(target, MostCommon(fontSizes), "font_size");
+            applied |= TrySetWrappedValue(target, MostCommon(fontSizes), "font_size");
         if (bold.HasValue)
-            TrySetWrappedValue(target, bold.Value, "font_style", "bold");
+            applied |= TrySetWrappedValue(target, bold.Value, "font_style", "bold");
         if (italic.HasValue)
-            TrySetWrappedValue(target, italic.Value, "font_style", "italic");
+            applied |= TrySetWrappedValue(target, italic.Value, "font_style", "italic");
         if (underline.HasValue)
-            TrySetWrappedValue(target, underline.Value, "font_style", "underline");
+            applied |= TrySetWrappedValue(target, underline.Value, "font_style", "underline");
+        return applied;
     }
 
-    private static void ApplyParagraphFormat(
+    private static bool ApplyParagraphFormat(
         JsonObject root,
         DokumenFormatParagraf format,
         bool includeFirstLineIndent,
         bool includeHanging,
         params string[] prefix)
     {
-        ApplyParagraphFormat(
+        return ApplyParagraphFormat(
             root,
             format,
             includeFirstLineIndent,
@@ -743,7 +856,7 @@ public sealed class AturanImportService : IAturanImportService
             prefix);
     }
 
-    private static void ApplyParagraphFormat(
+    private static bool ApplyParagraphFormat(
         JsonObject root,
         DokumenFormatParagraf format,
         bool includeFirstLineIndent,
@@ -752,33 +865,73 @@ public sealed class AturanImportService : IAturanImportService
         params string[] prefix)
     {
         var target = EnsureObjectAtPath(root, prefix);
+        var applied = false;
         var alignment = NormalizeAlignmentValue(format.DfpJc);
         if (!string.IsNullOrWhiteSpace(alignment))
-            TrySetWrappedValue(target, alignment, "alignment");
+            applied |= TrySetWrappedValue(target, alignment, "alignment");
 
-        TrySetWrappedValue(target, GetLeftIndentCm(format, normalizeNumberingIndent), "indentation", "left_indent");
-        TrySetWrappedValue(target, GetRightIndentCm(format), "indentation", "right_indent");
+        applied |= TrySetWrappedValue(target, GetLeftIndentCm(format, normalizeNumberingIndent), "indentation", "left_indent");
+        applied |= TrySetWrappedValue(target, GetRightIndentCm(format), "indentation", "right_indent");
         if (includeFirstLineIndent)
-            TrySetWrappedValue(target, GetFirstLineIndentCm(format), "indentation", "first_line_indent");
+            applied |= TrySetWrappedValue(target, GetFirstLineIndentCm(format), "indentation", "first_line_indent");
         if (includeHanging)
-            TrySetWrappedValue(target, GetHangingIndentCm(format), "indentation", "hanging");
+            applied |= TrySetWrappedValue(target, GetHangingIndentCm(format), "indentation", "hanging");
 
-        ApplyParagraphSpacing(target, format);
+        applied |= ApplyParagraphSpacing(target, format);
+        return applied;
     }
 
-    private static void ApplyParagraphSpacing(JsonObject root, DokumenFormatParagraf format)
+    private static bool ApplyParagraphSpacing(JsonObject root, DokumenFormatParagraf format)
     {
+        var applied = false;
         var lineSpacing = GetLineSpacing(format);
         if (lineSpacing.HasValue)
-            TrySetWrappedValue(root, lineSpacing.Value, "spacing", "line_spacing");
+            applied |= TrySetWrappedValue(root, lineSpacing.Value, "spacing", "line_spacing");
 
         var spacingBefore = TwipsToPoints(format.DfpSpacingBeforeTwips);
         if (spacingBefore.HasValue)
-            TrySetWrappedValue(root, spacingBefore.Value, "spacing", "before");
+            applied |= TrySetWrappedValue(root, spacingBefore.Value, "spacing", "before");
 
         var spacingAfter = TwipsToPoints(format.DfpSpacingAfterTwips);
         if (spacingAfter.HasValue)
-            TrySetWrappedValue(root, spacingAfter.Value, "spacing", "after");
+            applied |= TrySetWrappedValue(root, spacingAfter.Value, "spacing", "after");
+        return applied;
+    }
+
+    private static (bool ParagraphApplied, bool HangingRangeApplied) ApplySubchapterParagraphFormat(
+        JsonObject root,
+        IReadOnlyList<ElementSample> samples,
+        DokumenFormatParagraf format,
+        bool normalizeNumberingIndent,
+        params string[] prefix)
+    {
+        var paragraphApplied = ApplyParagraphFormat(
+            root,
+            format,
+            includeFirstLineIndent: false,
+            includeHanging: false,
+            normalizeNumberingIndent,
+            prefix);
+
+        var hangingValues = samples
+            .Select(sample => sample.ParagraphFormat)
+            .Where(sampleFormat => sampleFormat != null)
+            .Select(sampleFormat => GetHangingIndentCm(sampleFormat!))
+            .Where(value => value > 0m)
+            .Select(value => Math.Round(value, 2))
+            .Distinct()
+            .OrderBy(value => value)
+            .ToList();
+
+        var hangingApplied = false;
+        if (hangingValues.Count > 0)
+        {
+            var target = EnsureObjectAtPath(root, prefix);
+            hangingApplied |= TrySetWrappedValue(target, hangingValues.First(), "hanging_min_cm");
+            hangingApplied |= TrySetWrappedValue(target, hangingValues.Last(), "hanging_max_cm");
+        }
+
+        return (paragraphApplied, hangingApplied);
     }
 
     private static DokumenFormatParagraf? SelectDominantParagraphFormat(
@@ -822,6 +975,14 @@ public sealed class AturanImportService : IAturanImportService
         if (path.Length == 0)
             return false;
 
+        return SetWrappedValue(root, value, isEditable: false, path);
+    }
+
+    private static bool SetWrappedValue(JsonObject root, object? value, bool isEditable, params string[] path)
+    {
+        if (path.Length == 0)
+            return false;
+
         var parent = EnsureObjectAtPath(root, path[..^1]);
         var key = path[^1];
         if (parent.TryGetPropertyValue(key, out var existingNode) &&
@@ -829,13 +990,15 @@ public sealed class AturanImportService : IAturanImportService
             existingObject.ContainsKey("value"))
         {
             existingObject["value"] = ToJsonNode(value);
+            existingObject["is_editable"] = isEditable;
+            existingObject["is_hard_constraint"] ??= false;
             return true;
         }
 
         parent[key] = new JsonObject
         {
             ["value"] = ToJsonNode(value),
-            ["is_editable"] = false,
+            ["is_editable"] = isEditable,
             ["is_hard_constraint"] = false
         };
         return true;
@@ -1595,16 +1758,142 @@ public sealed class AturanImportService : IAturanImportService
             .ToList();
     }
 
+    private static IReadOnlyDictionary<string, DetailSourceMatrix> BuildSourceMatrices()
+    {
+        return new Dictionary<string, DetailSourceMatrix>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["page_settings"] = new(
+                ["paper", "margin", "header_footer", "gutter", "column"],
+                ["akhir_halaman"]),
+            ["nomor_halaman"] = new(
+                ["num.format", "font", "par", "default.pos", "dfp.enabled", "first.pos", "doe.enabled", "even.pos"],
+                ["struct"]),
+            ["judul_bab"] = new(
+                ["font", "par", "num.case", "num.enter"],
+                ["num.format", "struct"]),
+            ["judul_subbab"] = new(
+                ["font", "par", "par.hanging_range", "num.case"],
+                ["num.format", "struct"]),
+            ["paragraf"] = new(
+                ["font", "par"],
+                ["struct"]),
+            ["item_daftar"] = new(
+                ["font", "par"],
+                ["struct"]),
+            ["gambar"] = new(
+                ["img.par", "cap.font", "cap.par", "cap.case", "cap.enter", "cap.pos"],
+                ["img.pos", "img.struct", "cap.num_fmt"]),
+            ["tabel"] = new(
+                ["tbl.pos", "tbl.font", "tbl.par", "cap.font", "cap.par", "cap.case", "cap.enter", "cap.pos"],
+                ["tbl.constraints", "tbl.no_image", "tbl.struct", "cap.num_fmt", "cap.cont"]),
+            ["kode"] = new(
+                ["code.font", "code.par", "title.font", "title.par", "title.case", "title.enter", "title.pos"],
+                ["code.num", "code.media_constraints", "code.struct", "title.num_fmt", "title.cont"]),
+            ["rumus"] = new(
+                ["font", "par", "pos.overall_indent"],
+                ["tabs", "num.format", "pos.page_guard", "page.struct"]),
+            ["footnote"] = new(
+                ["text.font", "text.par"],
+                ["num", "separator", "text.struct", "source"])
+        };
+    }
+
+    private static string BuildCatatan(DetailSourceMatrix matrix, IReadOnlySet<string> extractedGroups)
+    {
+        var templateExtracted = matrix.TemplateExtractableGroups
+            .Where(extractedGroups.Contains)
+            .ToList();
+        var manualDefault = matrix.FixedManualDefaultGroups
+            .Concat(matrix.TemplateExtractableGroups.Where(group => !extractedGroups.Contains(group)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var note = $"template_extracted={JoinCatatanGroups(templateExtracted)}; manual_default={JoinCatatanGroups(manualDefault)}";
+        if (note.Length <= 255)
+            return note;
+
+        var compactExtracted = templateExtracted.Select(CompactCatatanGroup).ToList();
+        var compactManual = manualDefault.Select(CompactCatatanGroup).ToList();
+        note = $"template_extracted={JoinCatatanGroups(compactExtracted)}; manual_default={JoinCatatanGroups(compactManual)}";
+        return note.Length <= 255 ? note : note[..252] + "...";
+    }
+
+    private static string JoinCatatanGroups(IReadOnlyCollection<string> groups)
+    {
+        return groups.Count == 0 ? "-" : string.Join("|", groups);
+    }
+
+    private static string CompactCatatanGroup(string group)
+    {
+        return group
+            .Replace("paragraph", "par", StringComparison.OrdinalIgnoreCase)
+            .Replace("position", "pos", StringComparison.OrdinalIgnoreCase)
+            .Replace("numbering", "num", StringComparison.OrdinalIgnoreCase)
+            .Replace("number_format", "num_fmt", StringComparison.OrdinalIgnoreCase)
+            .Replace("structure", "struct", StringComparison.OrdinalIgnoreCase)
+            .Replace("continuation", "cont", StringComparison.OrdinalIgnoreCase)
+            .Replace("constraints", "cons", StringComparison.OrdinalIgnoreCase)
+            .Replace("different_first_page", "dfp", StringComparison.OrdinalIgnoreCase)
+            .Replace("different_odd_even", "doe", StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class DraftDetail
     {
         public DraftDetail(AturanDetail detail, JsonObject json)
         {
             Detail = detail;
             Json = json;
+            var key = NormalizeLabel(detail.AturanDetailKey);
+            Matrix = SourceMatrices.TryGetValue(key, out var found)
+                ? found
+                : DetailSourceMatrix.Empty;
         }
 
         public AturanDetail Detail { get; }
         public JsonObject Json { get; }
+        private DetailSourceMatrix Matrix { get; }
+        private HashSet<string> ExtractedGroups { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public void MarkTemplateExtracted(string group)
+        {
+            if (!string.IsNullOrWhiteSpace(group))
+                ExtractedGroups.Add(group.Trim());
+        }
+
+        public string BuildCatatan()
+        {
+            return AturanImportService.BuildCatatan(Matrix, ExtractedGroups);
+        }
+    }
+
+    private sealed record DetailSourceMatrix(
+        IReadOnlyList<string> TemplateExtractableGroups,
+        IReadOnlyList<string> FixedManualDefaultGroups)
+    {
+        public static DetailSourceMatrix Empty { get; } = new([], []);
+    }
+
+    private sealed class CaptionImportChanges
+    {
+        public bool FontApplied { get; set; }
+        public bool ParagraphApplied { get; set; }
+        public bool CaseApplied { get; set; }
+        public bool EnterAfterApplied { get; set; }
+        public bool PositionApplied { get; set; }
+
+        public void Apply(DraftDetail draft, string prefix)
+        {
+            if (FontApplied)
+                draft.MarkTemplateExtracted($"{prefix}.font");
+            if (ParagraphApplied)
+                draft.MarkTemplateExtracted($"{prefix}.par");
+            if (CaseApplied)
+                draft.MarkTemplateExtracted($"{prefix}.case");
+            if (EnterAfterApplied)
+                draft.MarkTemplateExtracted($"{prefix}.enter");
+            if (PositionApplied)
+                draft.MarkTemplateExtracted($"{prefix}.pos");
+        }
     }
 
     private sealed class ElementRow

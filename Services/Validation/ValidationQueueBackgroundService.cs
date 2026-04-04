@@ -1006,7 +1006,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         var pageErrorIndices = new List<int>();
         for (var i = 0; i < errors.Count; i++)
         {
-            if (IsPageSettingsError(errors[i]))
+            if (ShouldAggregatePageSettingsError(errors[i]))
                 pageErrorIndices.Add(i);
         }
 
@@ -1032,7 +1032,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         for (var i = 0; i < errors.Count; i++)
         {
             var error = errors[i];
-            if (!IsPageSettingsError(error))
+            if (!IsPageSettingsError(error) || !ShouldAggregatePageSettingsError(error))
             {
                 llmErrors.Add(error);
                 continue;
@@ -1050,7 +1050,85 @@ public class ValidationQueueBackgroundService : BackgroundService
             llmErrors.Add(aggregated);
         }
 
+        await EnrichMissingLocationsAsync(
+            db,
+            sectionRefType,
+            sectionRefId,
+            llmErrors,
+            cancellationToken);
+
         return llmErrors;
+    }
+
+    private async Task EnrichMissingLocationsAsync(
+        KorektorBukuDbContext db,
+        string refType,
+        uint refId,
+        IReadOnlyList<ValidationError> errors,
+        CancellationToken cancellationToken)
+    {
+        var targetElementIds = errors
+            .Where(error => error.DokumenElemenId.HasValue)
+            .Where(error => !error.Locations.Any(loc => loc != null && loc.HalamanKe > 0))
+            .Select(error => error.DokumenElemenId!.Value)
+            .Distinct()
+            .ToList();
+
+        if (targetElementIds.Count == 0)
+            return;
+
+        var fallbackLocationsByElementId = await LoadPrimaryLocationsByElementIdAsync(
+            db,
+            refType,
+            refId,
+            targetElementIds,
+            cancellationToken);
+
+        foreach (var error in errors)
+        {
+            if (!error.DokumenElemenId.HasValue)
+                continue;
+
+            if (error.Locations.Any(loc => loc != null && loc.HalamanKe > 0))
+                continue;
+
+            if (!fallbackLocationsByElementId.TryGetValue(error.DokumenElemenId.Value, out var location))
+                continue;
+
+            error.Locations =
+            [
+                new ErrorLocation
+                {
+                    HalamanKe = location.HalamanKe,
+                    Bbox = location.Bbox != null
+                        ? new ErrorBbox
+                        {
+                            X0 = location.Bbox.X0,
+                            Y0 = location.Bbox.Y0,
+                            X1 = location.Bbox.X1,
+                            Y1 = location.Bbox.Y1
+                        }
+                        : null
+                }
+            ];
+        }
+    }
+
+    private static bool ShouldAggregatePageSettingsError(ValidationError error)
+    {
+        if (!IsPageSettingsError(error))
+            return false;
+
+        // Page-end blank-line errors are page-specific. Aggregating them across a section
+        // adds anchor pages that do not actually contain the empty-space issue.
+        return !string.Equals(
+            error.Field,
+            "max_baris_kosong_akhir_halaman",
+            StringComparison.OrdinalIgnoreCase) &&
+               !string.Equals(
+                   error.Field,
+                   "cegah_halaman_kosong",
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsPageSettingsError(ValidationError error)
@@ -1132,6 +1210,8 @@ public class ValidationQueueBackgroundService : BackgroundService
             "gutter" => "Gutter",
             "gutter_position" => "Posisi gutter",
             "column_count" => "Jumlah kolom",
+            "max_baris_kosong_akhir_halaman" => "Maksimal baris kosong pada akhir halaman",
+            "cegah_halaman_kosong" => "Cegah halaman kosong",
             "page_number_format" => "Format nomor halaman",
             "page_number_location" => "Letak nomor halaman",
             "page_number_alignment" => "Alignment nomor halaman",
@@ -1420,6 +1500,112 @@ public class ValidationQueueBackgroundService : BackgroundService
         }
 
         return pageNumbers;
+    }
+
+    private async Task<Dictionary<ulong, ErrorLocation>> LoadPrimaryLocationsByElementIdAsync(
+        KorektorBukuDbContext db,
+        string refType,
+        uint refId,
+        IEnumerable<ulong> elementIds,
+        CancellationToken cancellationToken)
+    {
+        var ids = elementIds.Distinct().ToList();
+        var locations = new Dictionary<ulong, ErrorLocation>();
+
+        if (ids.Count == 0)
+            return locations;
+
+        var idColumn = await ResolveVisualIdColumnAsync(db, cancellationToken);
+        if (string.IsNullOrWhiteSpace(idColumn))
+            return locations;
+        var (refTypeColumn, refIdColumn) = await ResolveVisualRefColumnsAsync(db, cancellationToken);
+        var refFilter = BuildVisualRefFilterClause(refTypeColumn, refIdColumn, refType, refId);
+
+        var connection = db.Database.GetDbConnection();
+        var shouldClose = connection.State != ConnectionState.Open;
+        if (shouldClose)
+            await connection.OpenAsync(cancellationToken);
+
+        try
+        {
+            foreach (var chunk in ids.Chunk(500))
+            {
+                var idList = string.Join(",", chunk);
+                var sql = $"SELECT `{idColumn}` AS delemen_id, `dev_page`, `dev_bbox_x0`, `dev_bbox_y0`, `dev_bbox_x1`, `dev_bbox_y1` " +
+                          $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList}) {refFilter}AND `dev_page` IS NOT NULL";
+
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = sql;
+                using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                {
+                    if (reader["delemen_id"] == DBNull.Value || reader["dev_page"] == DBNull.Value)
+                        continue;
+
+                    var elementId = Convert.ToUInt64(reader["delemen_id"]);
+                    var page = Convert.ToInt32(reader["dev_page"]);
+
+                    var bbox = reader["dev_bbox_x0"] != DBNull.Value &&
+                               reader["dev_bbox_y0"] != DBNull.Value &&
+                               reader["dev_bbox_x1"] != DBNull.Value &&
+                               reader["dev_bbox_y1"] != DBNull.Value
+                        ? new ErrorBbox
+                        {
+                            X0 = Convert.ToDecimal(reader["dev_bbox_x0"]),
+                            Y0 = Convert.ToDecimal(reader["dev_bbox_y0"]),
+                            X1 = Convert.ToDecimal(reader["dev_bbox_x1"]),
+                            Y1 = Convert.ToDecimal(reader["dev_bbox_y1"])
+                        }
+                        : null;
+
+                    if (!locations.TryGetValue(elementId, out var existing))
+                    {
+                        locations[elementId] = new ErrorLocation
+                        {
+                            HalamanKe = page,
+                            Bbox = bbox
+                        };
+                        continue;
+                    }
+
+                    if (page < existing.HalamanKe)
+                    {
+                        existing.HalamanKe = page;
+                        existing.Bbox = bbox;
+                        continue;
+                    }
+
+                    if (page == existing.HalamanKe)
+                    {
+                        if (existing.Bbox == null)
+                        {
+                            existing.Bbox = bbox;
+                        }
+                        else if (bbox != null)
+                        {
+                            existing.Bbox = new ErrorBbox
+                            {
+                                X0 = Math.Min(existing.Bbox.X0, bbox.X0),
+                                Y0 = Math.Min(existing.Bbox.Y0, bbox.Y0),
+                                X1 = Math.Max(existing.Bbox.X1, bbox.X1),
+                                Y1 = Math.Max(existing.Bbox.Y1, bbox.Y1)
+                            };
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to load fallback locations from dokumen_elemen_visual");
+        }
+        finally
+        {
+            if (shouldClose && connection.State == ConnectionState.Open)
+                await connection.CloseAsync();
+        }
+
+        return locations;
     }
 
     private async Task<string?> ResolveVisualIdColumnAsync(
@@ -1791,6 +1977,8 @@ public class ValidationQueueBackgroundService : BackgroundService
                field.Equals("gutter", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("gutter_position", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("column_count", StringComparison.OrdinalIgnoreCase) ||
+               field.Equals("max_baris_kosong_akhir_halaman", StringComparison.OrdinalIgnoreCase) ||
+               field.Equals("cegah_halaman_kosong", StringComparison.OrdinalIgnoreCase) ||
                field.StartsWith("page_number", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("page_numbering", StringComparison.OrdinalIgnoreCase) ||
                field.Equals("section", StringComparison.OrdinalIgnoreCase);

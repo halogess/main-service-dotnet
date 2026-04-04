@@ -9,6 +9,7 @@ using Xunit;
 
 namespace Tests;
 
+[Collection("storage-path")]
 public class PreviewMetadataAndKesalahanAuthorizationTests
 {
     [Fact]

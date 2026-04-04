@@ -15,6 +15,7 @@ public partial class ValidationService
         public ElementContentInfo Content { get; init; } = new();
         public DokumenFormatParagraf? ParagraphFormat { get; init; }
         public IReadOnlyList<DokumenFormatText> TextFormats { get; init; } = Array.Empty<DokumenFormatText>();
+        public IReadOnlyList<int> VisualPages { get; init; } = Array.Empty<int>();
 
         public bool IsMeaningful =>
             Content.HasPageField ||
@@ -34,6 +35,7 @@ public partial class ValidationService
         public uint DsecId { get; init; }
         public string PartType { get; init; } = "footer";
         public string PartPosition { get; init; } = "default";
+        public uint? Sequence { get; init; }
         public ulong ElementId { get; init; }
         public string? DelemenJsonTree { get; init; }
     }
@@ -119,27 +121,37 @@ public partial class ValidationService
     }
 
     private async Task<Dictionary<uint, IReadOnlyList<PageNumberParagraphInfo>>> LoadPageNumberParagraphsBySectionAsync(
-        IEnumerable<uint> sectionIds,
+        IReadOnlyList<DokumenSection> sections,
         CancellationToken cancellationToken)
     {
-        var ids = sectionIds.Distinct().ToList();
+        var ids = sections
+            .Select(section => section.DsecId)
+            .Distinct()
+            .ToList();
+
         if (ids.Count == 0)
             return new Dictionary<uint, IReadOnlyList<PageNumberParagraphInfo>>();
 
-        var paragraphRows = await (from part in _db.DokumenParts
+        var paragraphRows = (await (from part in _db.DokumenParts
             join element in _db.DokumenElemens on part.DpartId equals element.DpartId
             where ids.Contains(part.DsecId)
                   && (part.DpartType == "header" || part.DpartType == "footer")
                   && element.DelemenType == "paragraph"
-            orderby part.DsecId, part.DpartPosition, part.DpartType, element.DelemenSequence, element.DelemenId
             select new PageNumberElementRow
             {
                 DsecId = part.DsecId,
                 PartType = part.DpartType,
                 PartPosition = part.DpartPosition ?? "default",
+                Sequence = element.DelemenSequence,
                 ElementId = element.DelemenId,
                 DelemenJsonTree = element.DelemenJsonTree
-            }).ToListAsync(cancellationToken);
+            }).ToListAsync(cancellationToken))
+            .OrderBy(row => row.DsecId)
+            .ThenBy(row => row.PartPosition)
+            .ThenBy(row => row.PartType)
+            .ThenBy(row => row.Sequence ?? uint.MaxValue)
+            .ThenBy(row => row.ElementId)
+            .ToList();
 
         if (paragraphRows.Count == 0)
             return new Dictionary<uint, IReadOnlyList<PageNumberParagraphInfo>>();
@@ -179,7 +191,34 @@ public partial class ValidationService
                 .Where(format => textFormatIds.Contains(format.DftxId))
                 .ToDictionaryAsync(format => format.DftxId, cancellationToken);
 
-        return parsedRows
+        var elementIds = parsedRows
+            .Select(row => row.ElementId)
+            .Distinct()
+            .ToList();
+
+        var visualPagesByElement = elementIds.Count == 0
+            ? new Dictionary<ulong, IReadOnlyList<int>>()
+            : (await _db.DokumenElemenVisuals
+                    .Where(visual =>
+                        visual.DokumenElemenId.HasValue &&
+                        visual.DevPage.HasValue &&
+                        elementIds.Contains(visual.DokumenElemenId.Value))
+                    .Select(visual => new
+                    {
+                        ElementId = visual.DokumenElemenId!.Value,
+                        Page = (int)visual.DevPage!.Value
+                    })
+                    .ToListAsync(cancellationToken))
+                .GroupBy(row => row.ElementId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => (IReadOnlyList<int>)group
+                        .Select(row => row.Page)
+                        .Distinct()
+                        .OrderBy(page => page)
+                        .ToList());
+
+        var directParagraphsBySection = parsedRows
             .GroupBy(row => row.DsecId)
             .ToDictionary(
                 group => group.Key,
@@ -202,10 +241,15 @@ public partial class ValidationService
                             ElementId = row.ElementId,
                             Content = row.Content,
                             ParagraphFormat = paragraphFormat,
-                            TextFormats = relevantTextFormats
+                            TextFormats = relevantTextFormats,
+                            VisualPages = visualPagesByElement.TryGetValue(row.ElementId, out var visualPages)
+                                ? visualPages
+                                : Array.Empty<int>()
                         };
                     })
                     .ToList());
+
+        return BuildEffectivePageNumberParagraphsBySection(sections, directParagraphsBySection);
     }
 
     private async Task ValidateNomorHalamanRuleAsync(
@@ -213,6 +257,10 @@ public partial class ValidationService
         DokumenSection section,
         NomorHalamanRule rule,
         IReadOnlyList<PageNumberParagraphInfo> sectionParagraphs,
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, int> renderedPageNumberStartsBySection,
+        bool isFirstPhysicalPageSection,
+        bool allowManualFirstPageFallback,
         int sectionNumber,
         Dictionary<uint, int> sectionPageMap,
         CancellationToken cancellationToken)
@@ -239,23 +287,32 @@ public partial class ValidationService
         }
 
         var expectedDifferentFirstPage = rule.Variation?.DifferentFirstPage?.Enabled?.Value ?? false;
-        result.IncrementTotalChecks();
-        if (section.DsecHasTitlePage == expectedDifferentFirstPage)
+        var useManualFirstPageFallback =
+            isFirstPhysicalPageSection &&
+            expectedDifferentFirstPage &&
+            allowManualFirstPageFallback &&
+            !section.DsecHasTitlePage;
+
+        if (isFirstPhysicalPageSection)
         {
-            result.IncrementPassedChecks();
-        }
-        else
-        {
-            result.Errors.Add(new ValidationError
+            result.IncrementTotalChecks();
+            if (section.DsecHasTitlePage == expectedDifferentFirstPage || useManualFirstPageFallback)
             {
-                Category = "Nomor Halaman",
-                Field = "different_first_page",
-                Message = $"Pengaturan different first page section {sectionNumber} (bagian isi) tidak sesuai",
-                Expected = expectedDifferentFirstPage ? "true" : "false",
-                Actual = section.DsecHasTitlePage ? "true" : "false",
-                SectionIndex = sectionNumber,
-                Locations = BuildPageSettingsLocations("page_numbering", section, sectionPageMap)
-            });
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Nomor Halaman",
+                    Field = "different_first_page",
+                    Message = $"Pengaturan different first page section {sectionNumber} (bagian isi) tidak sesuai",
+                    Expected = expectedDifferentFirstPage ? "true" : "false",
+                    Actual = section.DsecHasTitlePage ? "true" : "false",
+                    SectionIndex = sectionNumber,
+                    Locations = BuildPageSettingsLocations("page_numbering", section, sectionPageMap)
+                });
+            }
         }
 
         var expectedDifferentOddEven = rule.Variation?.DifferentOddEven?.Enabled?.Value ?? false;
@@ -278,7 +335,18 @@ public partial class ValidationService
             });
         }
 
-        foreach (var slot in BuildExpectedPageNumberSlots(rule))
+        var expectedSlots = BuildExpectedPageNumberSlots(rule, isFirstPhysicalPageSection);
+        if (useManualFirstPageFallback)
+        {
+            expectedSlots = expectedSlots
+                .Where(slot => !string.Equals(slot.Key, "default", StringComparison.OrdinalIgnoreCase))
+                .Select(slot => string.Equals(slot.Key, "first", StringComparison.OrdinalIgnoreCase)
+                    ? slot with { PartPosition = "default" }
+                    : slot)
+                .ToList();
+        }
+
+        foreach (var slot in expectedSlots)
         {
             await ValidatePageNumberSlotAsync(
                 result,
@@ -286,6 +354,8 @@ public partial class ValidationService
                 rule,
                 slot,
                 sectionParagraphs,
+                sections,
+                renderedPageNumberStartsBySection,
                 sectionNumber,
                 sectionPageMap,
                 cancellationToken);
@@ -298,6 +368,8 @@ public partial class ValidationService
         NomorHalamanRule rule,
         ExpectedPageNumberSlot slot,
         IReadOnlyList<PageNumberParagraphInfo> sectionParagraphs,
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, int> renderedPageNumberStartsBySection,
         int sectionNumber,
         Dictionary<uint, int> sectionPageMap,
         CancellationToken cancellationToken)
@@ -311,29 +383,42 @@ public partial class ValidationService
             .ToList();
 
         var pageParagraphsInSlot = slotParagraphs
-            .Where(paragraph => paragraph.Content.HasPageField)
+            .Where(paragraph => IsPageNumberParagraphCandidate(
+                paragraph,
+                section,
+                sections,
+                renderedPageNumberStartsBySection,
+                sectionPageMap))
             .ToList();
 
         var pageParagraphsInPosition = samePositionParagraphs
-            .Where(paragraph => paragraph.Content.HasPageField)
+            .Where(paragraph => IsPageNumberParagraphCandidate(
+                paragraph,
+                section,
+                sections,
+                renderedPageNumberStartsBySection,
+                sectionPageMap))
             .ToList();
 
+        var activeParagraphsInSlot = pageParagraphsInSlot;
+        var activeParagraphsInPosition = pageParagraphsInPosition;
+
         result.IncrementTotalChecks();
-        if (pageParagraphsInSlot.Count == 1)
+        if (activeParagraphsInSlot.Count == 1)
         {
             result.IncrementPassedChecks();
         }
         else
         {
-            var actualLocation = pageParagraphsInPosition.Count > 0
-                ? pageParagraphsInPosition
+            var actualLocation = activeParagraphsInPosition.Count > 0
+                ? activeParagraphsInPosition
                     .Select(paragraph => paragraph.PartType)
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .First()
                 : "tidak ditemukan";
 
-            var locations = pageParagraphsInPosition.Count > 0
-                ? await BuildElementLocationsAsync(pageParagraphsInPosition.Select(paragraph => paragraph.ElementId), cancellationToken)
+            var locations = activeParagraphsInPosition.Count > 0
+                ? await BuildElementLocationsAsync(activeParagraphsInPosition.Select(paragraph => paragraph.ElementId), cancellationToken)
                 : BuildPageSettingsLocations("page_numbering", section, sectionPageMap);
 
             result.Errors.Add(new ValidationError
@@ -348,18 +433,18 @@ public partial class ValidationService
             });
         }
 
-        if (pageParagraphsInSlot.Count == 0)
+        if (activeParagraphsInSlot.Count == 0)
             return;
 
         var activeParagraphLocations = await BuildElementLocationsAsync(
-            pageParagraphsInSlot.Select(paragraph => paragraph.ElementId),
+            activeParagraphsInSlot.Select(paragraph => paragraph.ElementId),
             cancellationToken);
 
         var expectedAlignment = NormalizeAlignmentValue(slot.Alignment);
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
             result.IncrementTotalChecks();
-            var alignments = pageParagraphsInSlot
+            var alignments = activeParagraphsInSlot
                 .Select(paragraph => NormalizeAlignmentValue(paragraph.ParagraphFormat?.DfpJc))
                 .Where(alignment => !string.IsNullOrWhiteSpace(alignment))
                 .ToList();
@@ -384,15 +469,15 @@ public partial class ValidationService
             }
         }
 
-        ValidatePageNumberFontRules(result, pageParagraphsInSlot, rule.Font, slot.Label, sectionNumber, activeParagraphLocations);
-        ValidatePageNumberParagraphRules(result, pageParagraphsInSlot, rule.Paragraph, slot.Label, sectionNumber, activeParagraphLocations);
+        ValidatePageNumberFontRules(result, activeParagraphsInSlot, rule.Font, slot.Label, sectionNumber, activeParagraphLocations);
+        ValidatePageNumberParagraphRules(result, activeParagraphsInSlot, rule.Paragraph, slot.Label, sectionNumber, activeParagraphLocations);
 
         var expectedNoExtraParagraphs = rule.StrukturKonten?.CegahBarisTambahan?.Value ?? false;
         if (expectedNoExtraParagraphs)
         {
             result.IncrementTotalChecks();
             var meaningfulParagraphCount = slotParagraphs.Count(paragraph => paragraph.IsMeaningful);
-            if (pageParagraphsInSlot.Count == 1 && meaningfulParagraphCount == 1)
+            if (activeParagraphsInSlot.Count == 1 && meaningfulParagraphCount == 1)
             {
                 result.IncrementPassedChecks();
             }
@@ -408,12 +493,200 @@ public partial class ValidationService
                     Field = "page_number_structure",
                     Message = $"Slot nomor halaman {slot.Label} section {sectionNumber} (bagian isi) tidak boleh memiliki baris tambahan",
                     Expected = "1 paragraf nomor halaman",
-                    Actual = $"{meaningfulParagraphCount} paragraf bermakna / {pageParagraphsInSlot.Count} field PAGE",
+                    Actual = $"{meaningfulParagraphCount} paragraf bermakna / {activeParagraphsInSlot.Count} kandidat nomor halaman",
                     SectionIndex = sectionNumber,
                     Locations = structureLocations
                 });
             }
         }
+    }
+
+    private bool IsPageNumberParagraphCandidate(
+        PageNumberParagraphInfo paragraph,
+        DokumenSection section,
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, int> renderedPageNumberStartsBySection,
+        Dictionary<uint, int> sectionPageMap)
+    {
+        if (paragraph.Content.HasPageField)
+            return true;
+
+        return IsManualPageNumberParagraph(
+            paragraph,
+            section,
+            sections,
+            renderedPageNumberStartsBySection,
+            sectionPageMap);
+    }
+
+    private bool IsManualPageNumberParagraph(
+        PageNumberParagraphInfo paragraph,
+        DokumenSection section,
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, int> renderedPageNumberStartsBySection,
+        Dictionary<uint, int> sectionPageMap)
+    {
+        var possibleValues = GetPossibleManualPageNumberValues(paragraph.Content.PlainText);
+        if (possibleValues.Count == 0)
+            return false;
+
+        var relevantPages = ResolveParagraphPagesForSection(paragraph, section, sections, sectionPageMap);
+        if (relevantPages.Count == 0)
+            return false;
+
+        foreach (var page in relevantPages)
+        {
+            var expectedValue = GetExpectedRenderedPageNumberValue(
+                section,
+                page,
+                renderedPageNumberStartsBySection,
+                sectionPageMap);
+
+            if (!possibleValues.Contains(expectedValue))
+                return false;
+        }
+
+        return true;
+    }
+
+    private IReadOnlyList<int> ResolveParagraphPagesForSection(
+        PageNumberParagraphInfo paragraph,
+        DokumenSection section,
+        IReadOnlyList<DokumenSection> sections,
+        Dictionary<uint, int> sectionPageMap)
+    {
+        if (paragraph.VisualPages.Count == 0)
+            return Array.Empty<int>();
+
+        var matchingPages = paragraph.VisualPages
+            .Where(page =>
+            {
+                var resolvedSection = ResolveSectionForPage(
+                    sections,
+                    sectionPageMap,
+                    page,
+                    Array.Empty<uint?>());
+
+                return resolvedSection?.DsecId == section.DsecId;
+            })
+            .Distinct()
+            .OrderBy(page => page)
+            .ToList();
+
+        if (matchingPages.Count > 0)
+            return matchingPages;
+
+        if (paragraph.SectionId != section.DsecId)
+            return Array.Empty<int>();
+
+        return paragraph.VisualPages
+            .Distinct()
+            .OrderBy(page => page)
+            .ToList();
+    }
+
+    private static HashSet<int> GetPossibleManualPageNumberValues(string? value)
+    {
+        var normalized = NormalizeWhitespace(value ?? string.Empty).Trim();
+        var results = new HashSet<int>();
+
+        if (string.IsNullOrWhiteSpace(normalized))
+            return results;
+
+        if (int.TryParse(normalized, NumberStyles.Integer, CultureInfo.InvariantCulture, out var numeric) &&
+            numeric > 0)
+        {
+            results.Add(numeric);
+        }
+
+        var roman = TryParseRomanNumeral(normalized);
+        if (roman.HasValue)
+            results.Add(roman.Value);
+
+        var alphabetic = TryParseAlphabeticPageNumber(normalized);
+        if (alphabetic.HasValue)
+            results.Add(alphabetic.Value);
+
+        return results;
+    }
+
+    private static int? TryParseAlphabeticPageNumber(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return null;
+
+        var normalized = token.Trim().ToUpperInvariant();
+        if (normalized.Length == 0 || normalized.Any(ch => ch < 'A' || ch > 'Z'))
+            return null;
+
+        var value = 0;
+        foreach (var ch in normalized)
+        {
+            checked
+            {
+                value = (value * 26) + (ch - 'A' + 1);
+            }
+        }
+
+        return value > 0 ? value : null;
+    }
+
+    private static int GetExpectedRenderedPageNumberValue(
+        DokumenSection section,
+        int page,
+        IReadOnlyDictionary<uint, int> renderedPageNumberStartsBySection,
+        IReadOnlyDictionary<uint, int> sectionPageMap)
+    {
+        renderedPageNumberStartsBySection.TryGetValue(section.DsecId, out var renderedStart);
+        if (renderedStart <= 0)
+        {
+            renderedStart = section.DsecPageNumStart.HasValue && section.DsecPageNumStart.Value > 0
+                ? (int)section.DsecPageNumStart.Value
+                : 1;
+        }
+
+        sectionPageMap.TryGetValue(section.DsecId, out var physicalStartPage);
+        if (physicalStartPage <= 0)
+            physicalStartPage = page;
+
+        var offset = Math.Max(0, page - physicalStartPage);
+        return renderedStart + offset;
+    }
+
+    private static Dictionary<uint, int> BuildRenderedPageNumberStartsBySection(
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, int> sectionPageMap)
+    {
+        var result = new Dictionary<uint, int>();
+        var orderedSections = sections
+            .Where(section => sectionPageMap.TryGetValue(section.DsecId, out var startPage) && startPage > 0)
+            .OrderBy(section => sectionPageMap[section.DsecId])
+            .ThenBy(section => section.DsecIndex ?? uint.MaxValue)
+            .ThenBy(section => section.DsecId)
+            .ToList();
+
+        var nextImplicitStart = 1;
+
+        for (var i = 0; i < orderedSections.Count; i++)
+        {
+            var section = orderedSections[i];
+            var hasExplicitRestart = section.DsecPageNumStart.HasValue && section.DsecPageNumStart.Value > 0;
+            var renderedStart = hasExplicitRestart
+                ? (int)section.DsecPageNumStart!.Value
+                : nextImplicitStart;
+
+            result[section.DsecId] = renderedStart;
+
+            if (i == orderedSections.Count - 1)
+                continue;
+
+            var currentStartPage = sectionPageMap[section.DsecId];
+            var nextStartPage = sectionPageMap[orderedSections[i + 1].DsecId];
+            var sectionPageCount = Math.Max(1, nextStartPage - currentStartPage);
+            nextImplicitStart = renderedStart + sectionPageCount;
+        }
+
+        return result;
     }
 
     private void ValidatePageNumberFontRules(
@@ -638,13 +911,12 @@ public partial class ValidationService
             GetRightIndentCm,
             locations);
 
-        ValidatePageNumberIndentationComponent(
+        ValidatePageNumberFirstLineIndentationComponent(
             result,
             "page_number_first_line_indent",
             $"First line indent nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
-            paragraphFormats,
+            paragraphs,
             paragraphRule.Indentation?.FirstLineIndent?.Value,
-            GetFirstLineIndentCm,
             locations);
 
         ValidatePageNumberSpacingComponent(
@@ -709,6 +981,49 @@ public partial class ValidationService
         });
     }
 
+    private void ValidatePageNumberFirstLineIndentationComponent(
+        ValidationResult result,
+        string field,
+        string message,
+        IReadOnlyList<PageNumberParagraphInfo> paragraphs,
+        decimal? expected,
+        IReadOnlyList<ErrorLocation> locations)
+    {
+        if (!expected.HasValue || paragraphs.Count == 0)
+            return;
+
+        var observations = paragraphs
+            .Where(paragraph => paragraph.ParagraphFormat != null)
+            .Select(paragraph => ObserveFirstLineIndent(paragraph.ParagraphFormat!, paragraph.Content.PlainText))
+            .ToList();
+
+        if (observations.Count == 0)
+            return;
+
+        result.IncrementTotalChecks();
+        if (observations.All(observation =>
+                IsWithinTolerance(observation.ActualCm, expected.Value, 0.05m) &&
+                !observation.HasLeadingManualIndent))
+        {
+            result.IncrementPassedChecks();
+            return;
+        }
+
+        var messageSuffix = observations.Any(observation => observation.HasLeadingManualIndent)
+            ? " karena diawali spasi/tab"
+            : string.Empty;
+
+        result.Errors.Add(new ValidationError
+        {
+            Category = "Nomor Halaman",
+            Field = field,
+            Message = message + messageSuffix,
+            Expected = expected.Value.ToString(CultureInfo.InvariantCulture) + " cm",
+            Actual = string.Join(", ", observations.Select(observation => observation.DisplayActual).Distinct()),
+            Locations = locations.ToList()
+        });
+    }
+
     private void ValidatePageNumberSpacingComponent(
         ValidationResult result,
         string field,
@@ -741,7 +1056,32 @@ public partial class ValidationService
         });
     }
 
-    private static IReadOnlyList<ExpectedPageNumberSlot> BuildExpectedPageNumberSlots(NomorHalamanRule rule)
+    private static uint ResolveFirstPhysicalPageSectionId(
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, int> sectionPageMap)
+    {
+        if (sections == null || sections.Count == 0)
+            return 0;
+
+        var firstPageSection = sections
+            .Where(section => sectionPageMap.TryGetValue(section.DsecId, out var page) && page == 1)
+            .OrderBy(section => section.DsecIndex ?? uint.MaxValue)
+            .ThenBy(section => section.DsecId)
+            .FirstOrDefault();
+
+        if (firstPageSection != null)
+            return firstPageSection.DsecId;
+
+        return sections
+            .OrderBy(section => section.DsecIndex ?? uint.MaxValue)
+            .ThenBy(section => section.DsecId)
+            .Select(section => section.DsecId)
+            .First();
+    }
+
+    private static IReadOnlyList<ExpectedPageNumberSlot> BuildExpectedPageNumberSlots(
+        NomorHalamanRule rule,
+        bool includeFirstSlot)
     {
         var slots = new List<ExpectedPageNumberSlot>();
         var oddEvenEnabled = rule.Variation?.DifferentOddEven?.Enabled?.Value ?? false;
@@ -754,7 +1094,7 @@ public partial class ValidationService
             Location: NormalizePageNumberPartType(rule.Variation?.Default?.Position?.Location?.Value),
             Alignment: NormalizeAlignmentValue(rule.Variation?.Default?.Position?.Alignment?.Value)));
 
-        if (rule.Variation?.DifferentFirstPage?.Enabled?.Value ?? false)
+        if (includeFirstSlot && (rule.Variation?.DifferentFirstPage?.Enabled?.Value ?? false))
         {
             slots.Insert(0, new ExpectedPageNumberSlot(
                 Key: "first",
@@ -798,5 +1138,74 @@ public partial class ValidationService
     {
         var normalized = (value ?? "default").Trim().ToLowerInvariant();
         return normalized is "default" or "first" or "even" ? normalized : "default";
+    }
+
+    private static bool CanUseManualFirstPageFallback(
+        DokumenSection section,
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, int> sectionPageMap)
+    {
+        if (!sectionPageMap.TryGetValue(section.DsecId, out var startPage) || startPage != 1)
+            return false;
+
+        var orderedSections = sections
+            .OrderBy(item => item.DsecIndex ?? uint.MaxValue)
+            .ThenBy(item => item.DsecId)
+            .ToList();
+
+        var currentIndex = orderedSections.FindIndex(item => item.DsecId == section.DsecId);
+        if (currentIndex < 0)
+            return false;
+
+        for (var i = currentIndex + 1; i < orderedSections.Count; i++)
+        {
+            if (!sectionPageMap.TryGetValue(orderedSections[i].DsecId, out var nextStartPage) || nextStartPage <= 0)
+                continue;
+
+            return nextStartPage == 2;
+        }
+
+        return false;
+    }
+
+    private static Dictionary<uint, IReadOnlyList<PageNumberParagraphInfo>> BuildEffectivePageNumberParagraphsBySection(
+        IReadOnlyList<DokumenSection> sections,
+        IReadOnlyDictionary<uint, IReadOnlyList<PageNumberParagraphInfo>> directParagraphsBySection)
+    {
+        var result = new Dictionary<uint, IReadOnlyList<PageNumberParagraphInfo>>();
+        var effectiveSlots = new Dictionary<(string PartPosition, string PartType), List<PageNumberParagraphInfo>>();
+
+        foreach (var section in sections
+                     .OrderBy(item => item.DsecIndex ?? uint.MaxValue)
+                     .ThenBy(item => item.DsecId))
+        {
+            directParagraphsBySection.TryGetValue(section.DsecId, out var directParagraphs);
+            directParagraphs ??= Array.Empty<PageNumberParagraphInfo>();
+
+            var directSlots = directParagraphs
+                .GroupBy(paragraph => (
+                    NormalizePageNumberPartPosition(paragraph.PartPosition),
+                    NormalizePageNumberPartType(paragraph.PartType)))
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.ToList());
+
+            foreach (var (slotKey, inheritedParagraphs) in effectiveSlots.ToList())
+            {
+                if (!directSlots.ContainsKey(slotKey))
+                    directSlots[slotKey] = inheritedParagraphs;
+            }
+
+            effectiveSlots = directSlots;
+
+            result[section.DsecId] = effectiveSlots
+                .Values
+                .SelectMany(items => items)
+                .GroupBy(item => item.ElementId)
+                .Select(group => group.First())
+                .ToList();
+        }
+
+        return result;
     }
 }

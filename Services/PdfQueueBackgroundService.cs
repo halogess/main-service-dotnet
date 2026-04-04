@@ -132,7 +132,13 @@ public class PdfQueueBackgroundService : BackgroundService
 
                         _logger.LogInformation("Using credential ID: {CredentialId}, Quota: {Used}/{Limit}", credential.AdobeCredentialsId, credential.AdobeCredentialsQuotaUsed, credential.AdobeCredentialsQuotaLimit);
 
-                        var pdfBytes = await pdfService.ConvertDocxToPdfWithCredential(fullFilePath, credential.AdobeClientId, credential.AdobeClientSecret, credential.AdobeCredentialsId, queue.AntrianId);
+                        var pdfBytes = await pdfService.ConvertDocxToPdfWithCredential(
+                            fullFilePath,
+                            credential.AdobeClientId,
+                            credential.AdobeClientSecret,
+                            credential.AdobeCredentialsId,
+                            queue.AntrianId,
+                            stoppingToken);
 
                         credential.AdobeCredentialsQuotaUsed++;
                         credential.AdobeCredentialsUpdatedAt = DateTime.Now;
@@ -241,11 +247,16 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianErrorMessage = null;
                         _logger.LogInformation("Completed antrian ID: {AntrianId}, PDF: {PdfPath}", queue.AntrianId, pdfPath);
                     }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        _logger.LogInformation("Pembatalan diterima saat memproses antrian ID: {AntrianId}", queue.AntrianId);
+                        throw;
+                    }
                     catch (FileNotFoundException ex)
                     {
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = $"File tidak ditemukan: {ex.Message}";
+                        queue.AntrianErrorMessage = BuildQueueErrorMessage("File tidak ditemukan: ", ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
@@ -253,7 +264,15 @@ public class PdfQueueBackgroundService : BackgroundService
                     {
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = $"Adobe API error: {ex.Message}";
+                        queue.AntrianErrorMessage = BuildQueueErrorMessage("Adobe API error: ", ex.Message);
+                        await MarkAturanFailedAsync(db, queue, stoppingToken);
+                        _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
+                    }
+                    catch (TimeoutException ex)
+                    {
+                        queue.AntrianExtractionStatus = "failed";
+                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianErrorMessage = BuildQueueErrorMessage("Konversi gagal: ", ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
@@ -261,7 +280,7 @@ public class PdfQueueBackgroundService : BackgroundService
                     {
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = $"Konversi gagal: {ex.Message}";
+                        queue.AntrianErrorMessage = BuildQueueErrorMessage("Konversi gagal: ", ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
@@ -269,7 +288,7 @@ public class PdfQueueBackgroundService : BackgroundService
                     {
                         queue.AntrianExtractionStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = ex.Message.Length > 255 ? ex.Message[..252] + "..." : ex.Message;
+                        queue.AntrianErrorMessage = BuildQueueErrorMessage(string.Empty, ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
@@ -388,5 +407,19 @@ public class PdfQueueBackgroundService : BackgroundService
 
         aturan.AturanStatus = AturanStatusValues.Gagal;
         aturan.AturanUpdatedAt = DateTime.Now;
+    }
+
+    private static string BuildQueueErrorMessage(string prefix, string? detail)
+    {
+        var message = string.IsNullOrWhiteSpace(prefix)
+            ? detail ?? string.Empty
+            : prefix + (detail ?? string.Empty);
+
+        if (message.Length <= 255)
+        {
+            return message;
+        }
+
+        return message[..252] + "...";
     }
 }

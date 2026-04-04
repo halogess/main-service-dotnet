@@ -463,22 +463,25 @@ public partial class ValidationService
         if (expectedFirstLineIndent.HasValue)
         {
             result.IncrementTotalChecks();
-            var firstLineTwips = format.DfpIndFirstLineTwips ?? 0;
-            var firstLineCm = firstLineTwips / 1440.0m * 2.54m;
+            var firstLineObservation = ObserveFirstLineIndent(format, formulaText);
 
-            if (Math.Abs(firstLineCm - expectedFirstLineIndent.Value) <= 0.05m)
+            if (Math.Abs(firstLineObservation.ActualCm - expectedFirstLineIndent.Value) <= 0.05m &&
+                !firstLineObservation.HasLeadingManualIndent)
             {
                 result.IncrementPassedChecks();
             }
             else
             {
+                var message = "First line indent rumus tidak sesuai";
+                if (firstLineObservation.HasLeadingManualIndent)
+                    message += " karena diawali spasi/tab";
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
                     Field = "rumus",
-                    Message = "First line indent rumus tidak sesuai",
+                    Message = message,
                     Expected = expectedFirstLineIndent.Value.ToString(CultureInfo.InvariantCulture) + " cm",
-                    Actual = firstLineCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                    Actual = firstLineObservation.DisplayActual,
                     Evidence = evidence,
                     Locations = locations
                 });

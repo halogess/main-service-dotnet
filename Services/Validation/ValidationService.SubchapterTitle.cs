@@ -89,6 +89,11 @@ public partial class ValidationService
             return result;
         }
 
+        var paragraphRule = await LoadParagraphRuleAsync(
+            aturan.AturanId,
+            "blank subchapter paragraph validation",
+            cancellationToken);
+
         var (sectionRefType, sectionRefId) = ResolveSectionRefForValidation(dokumenId);
         // Get all body elements
         var bodyElements = await (from e in _db.DokumenElemens
@@ -190,6 +195,28 @@ public partial class ValidationService
                 neighborContexts,
                 expectedParagraphAfterCount,
                 preventBottomPosition,
+                cancellationToken);
+        }
+
+        // --- Validate blank paragraph before subchapter (based on struktur_konten rule) ---
+        var expectedBlankParagraphCount = rule?.StrukturKonten?.JumlahBarisKosongSebelum?.Value is { } configuredBlankParagraphCount
+            ? Math.Max(0, (int)Math.Round(configuredBlankParagraphCount, MidpointRounding.AwayFromZero))
+            : 0;
+        var ignoreBlankParagraphAtPageTop = rule?.StrukturKonten?.AbaikanJikaDiAwalHalaman?.Value ?? true;
+
+        if (expectedBlankParagraphCount > 0)
+        {
+            await ValidateBlankParagraphBeforeSubchapterAsync(
+                result,
+                bodyElements,
+                elementContentById,
+                elementJsonById,
+                subchapterElements,
+                visualSummaryById,
+                neighborContexts,
+                paragraphRule,
+                expectedBlankParagraphCount,
+                ignoreBlankParagraphAtPageTop,
                 cancellationToken);
         }
 
@@ -845,6 +872,7 @@ public partial class ValidationService
 
     private static bool IsTitleCase(string text)
     {
+        text = RemoveIgnoredQuotedTitleCaseSegments(text);
         if (string.IsNullOrWhiteSpace(text))
             return true;
 
@@ -1183,6 +1211,228 @@ public partial class ValidationService
                 await ValidateSubchapterPositionAsync(result, subchapterId, plainText, locations, context, cancellationToken);
             }
         }
+    }
+
+    private async Task ValidateBlankParagraphBeforeSubchapterAsync(
+        ValidationResult result,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById,
+        IReadOnlyDictionary<ulong, string?> elementJsonById,
+        List<(ulong Id, ElementContentInfo Content)> subchapterElements,
+        IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById,
+        Dictionary<ulong, ElementNeighborContext> contextById,
+        ParagraphRule? paragraphRule,
+        int expectedBlankParagraphCount,
+        bool ignoreBlankParagraphAtPageTop,
+        CancellationToken cancellationToken)
+    {
+        var elementIndexMap = new Dictionary<ulong, int>();
+        for (var i = 0; i < bodyElements.Count; i++)
+            elementIndexMap[bodyElements[i].DelemenId] = i;
+
+        var formatTargets = new List<BlankParagraphFormatValidationTarget>();
+
+        foreach (var (subchapterId, content) in subchapterElements)
+        {
+            if (!elementIndexMap.TryGetValue(subchapterId, out var subchapterIndex))
+                continue;
+
+            var evidence = content.PlainText?.Trim() ?? string.Empty;
+            var context = contextById.TryGetValue(subchapterId, out var found) ? found : null;
+
+            var pageNumbers = await LoadPageNumbersAsync(new[] { subchapterId }, cancellationToken);
+            var pageBboxMap = await LoadPageBboxMapAsync(new[] { subchapterId }, cancellationToken);
+            var locations = CreateLocations(pageNumbers.Values, pageBboxMap);
+
+            if (ignoreBlankParagraphAtPageTop &&
+                IsSubchapterAtTopOfPage(
+                    subchapterIndex,
+                    subchapterId,
+                    bodyElements,
+                    visualSummaryById))
+            {
+                continue;
+            }
+
+            var blankElementIds = CollectBlankParagraphsBeforeSubchapter(
+                subchapterIndex,
+                subchapterId,
+                bodyElements,
+                elementContentById,
+                visualSummaryById);
+
+            result.IncrementTotalChecks();
+            if (blankElementIds.Count == expectedBlankParagraphCount)
+            {
+                result.IncrementPassedChecks();
+
+                if (paragraphRule != null && blankElementIds.Count > 0)
+                {
+                    formatTargets.Add(new BlankParagraphFormatValidationTarget
+                    {
+                        Field = "judul_subbab",
+                        SubjectLabel = "baris kosong sebelum judul subbab",
+                        Evidence = evidence,
+                        Context = context,
+                        BlankElementIds = blankElementIds
+                    });
+                }
+
+                continue;
+            }
+
+            var error = new ValidationError
+            {
+                Category = "Isi Buku",
+                Field = "judul_subbab",
+                Message = "Jumlah baris kosong sebelum judul subbab tidak sesuai",
+                Expected = $"Tepat {expectedBlankParagraphCount} baris kosong",
+                Actual = $"{blankElementIds.Count} baris kosong",
+                Evidence = evidence,
+                Locations = locations,
+                DokumenElemenId = subchapterId
+            };
+            if (context != null)
+                ApplyContext(error, context);
+            result.Errors.Add(error);
+        }
+
+        if (paragraphRule == null || formatTargets.Count == 0)
+            return;
+
+        await ValidateBlankParagraphBeforeSubchapterFormatsAsync(
+            result,
+            formatTargets,
+            elementContentById,
+            elementJsonById,
+            paragraphRule,
+            cancellationToken);
+    }
+
+    private async Task ValidateBlankParagraphBeforeSubchapterFormatsAsync(
+        ValidationResult result,
+        IReadOnlyList<BlankParagraphFormatValidationTarget> targets,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById,
+        IReadOnlyDictionary<ulong, string?> elementJsonById,
+        ParagraphRule paragraphRule,
+        CancellationToken cancellationToken)
+    {
+        await ValidateBlankParagraphFormatTargetsAsync(
+            result,
+            targets,
+            elementContentById,
+            elementJsonById,
+            paragraphRule,
+            cancellationToken);
+    }
+
+    private static bool IsSubchapterAtTopOfPage(
+        int subchapterIndex,
+        ulong subchapterId,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById)
+    {
+        if (!TryGetFirstVisualPosition(visualSummaryById, subchapterId, out var anchorPage, out var anchorTop))
+            return false;
+
+        const double visualTolerance = 0.5d;
+        for (var cursor = subchapterIndex - 1; cursor >= 0; cursor--)
+        {
+            if (!visualSummaryById.TryGetValue(bodyElements[cursor].DelemenId, out var previousVisual))
+                continue;
+
+            if (previousVisual.Bounds.Any(bounds =>
+                    bounds.Page == anchorPage &&
+                    bounds.Y0 < anchorTop + visualTolerance))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static List<ulong> CollectBlankParagraphsBeforeSubchapter(
+        int subchapterIndex,
+        ulong subchapterId,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById,
+        IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById)
+    {
+        if (!TryGetFirstVisualPosition(visualSummaryById, subchapterId, out var anchorPage, out var anchorTop))
+            return [];
+
+        const double visualTolerance = 0.5d;
+        var blankElementIds = new List<ulong>();
+        var currentTop = anchorTop;
+
+        for (var cursor = subchapterIndex - 1; cursor >= 0; cursor--)
+        {
+            var candidateId = bodyElements[cursor].DelemenId;
+            if (!elementContentById.TryGetValue(candidateId, out var candidateContent) ||
+                !IsEmptyElement(candidateContent))
+            {
+                break;
+            }
+
+            if (!TryGetVisualBoundsOnPage(visualSummaryById, candidateId, anchorPage, out var candidateTop, out var candidateBottom))
+                break;
+
+            if (candidateBottom > currentTop + visualTolerance)
+                break;
+
+            blankElementIds.Insert(0, candidateId);
+            currentTop = candidateTop;
+        }
+
+        return blankElementIds;
+    }
+
+    private static bool TryGetFirstVisualPosition(
+        IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById,
+        ulong elementId,
+        out int page,
+        out double y0)
+    {
+        page = default;
+        y0 = default;
+
+        if (!visualSummaryById.TryGetValue(elementId, out var summary) ||
+            summary.Bounds.Count == 0)
+        {
+            return false;
+        }
+
+        var firstBounds = summary.Bounds[0];
+        page = firstBounds.Page;
+        y0 = firstBounds.Y0;
+        return true;
+    }
+
+    private static bool TryGetVisualBoundsOnPage(
+        IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById,
+        ulong elementId,
+        int page,
+        out double y0,
+        out double y1)
+    {
+        y0 = default;
+        y1 = default;
+
+        if (!visualSummaryById.TryGetValue(elementId, out var summary))
+            return false;
+
+        var bounds = summary.Bounds
+            .Where(item => item.Page == page)
+            .OrderBy(item => item.Y0)
+            .ToList();
+
+        if (bounds.Count == 0)
+            return false;
+
+        y0 = bounds.Min(item => item.Y0);
+        y1 = bounds.Max(item => item.Y1);
+        return true;
     }
 
     private sealed class VisualElementSummary

@@ -74,6 +74,7 @@ public partial class ValidationService
         var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         TableRule? tableRule = null;
         TableCaptionRule? captionRule = null;
+        var paragraphRule = await LoadParagraphRuleAsync(aturan.AturanId, "blank table paragraph validation", cancellationToken);
 
         if (tableDetail != null)
         {
@@ -161,6 +162,13 @@ public partial class ValidationService
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
         var pageNumbersById = await LoadPageNumbersAsync(orderedElementIds, cancellationToken);
+        var visualSummaryById = await LoadVisualElementSummariesAsync(orderedElementIds, cancellationToken);
+        var elementIndexById = bodyElements
+            .Select((element, index) => new { element.DelemenId, Index = index })
+            .ToDictionary(item => item.DelemenId, item => item.Index);
+        var elementContentById = bodyElements.ToDictionary(
+            element => element.DelemenId,
+            element => ParseElementContent(element.DelemenJsonTree));
         var pagesWithParagraph = BuildPagesWithParagraph(bodyElements, labelMap, pageNumbersById);
 
         var captionPrefixes = BuildCaptionPrefixes(captionRule?.Numbering);
@@ -234,7 +242,17 @@ public partial class ValidationService
 
             foreach (var caption in captionCandidates)
             {
-                foreach (var targetIndex in GetAdjacentElementIndices(caption.OrderIndex, bodyElements.Count, normalizedCaptionPosition))
+                var captionAnchorIndex = GetCaptionAnchorOrderIndex(
+                    caption,
+                    bodyElements,
+                    labelMap,
+                    captionPrefixes,
+                    captionRule?.Numbering,
+                    normalizedCaptionPosition,
+                    "caption_tabel",
+                    "caption_gambar");
+
+                foreach (var targetIndex in GetAdjacentElementIndices(captionAnchorIndex, bodyElements.Count, normalizedCaptionPosition))
                 {
                     var targetElement = bodyElements[targetIndex];
                     if (structuralViolationIds.Contains(targetElement.DelemenId) ||
@@ -329,6 +347,9 @@ public partial class ValidationService
                 .Where(p => paragraphFormatIds.Contains(p.DfpId))
                 .ToDictionaryAsync(p => p.DfpId, cancellationToken)
             : new Dictionary<uint, DokumenFormatParagraf>();
+        var tableLocationsById = await BuildElementLocationsMapAsync(
+            tableBlocks.Select(block => block.ElementId),
+            cancellationToken);
 
         var usedCaptionIds = new HashSet<ulong>();
 
@@ -336,7 +357,51 @@ public partial class ValidationService
         {
             var block = tableBlocks[i];
             var errorStart = result.Errors.Count;
-            var locations = await BuildElementLocationsAsync(block.ElementId, cancellationToken);
+            var locations = GetLocationsForElement(block.ElementId, tableLocationsById);
+            CaptionInfo? selectedCaption = null;
+            CaptionInfo? continuationCaption = null;
+            var requiresSplitContinuationCaption = false;
+
+            if (captionRule != null && IsContinuationCaptionRequired(captionRule.WajibCaptionLanjutanJikaLintasHalaman))
+            {
+                result.IncrementTotalChecks();
+                if (SpansMultiplePages(locations))
+                {
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "caption_tabel",
+                        Message = "Tabel lintas halaman harus memiliki caption lanjutan",
+                        Expected = "Tabel yang berlanjut ke halaman berikutnya harus dipecah per halaman dan bagian lanjutan diberi caption '(Lanjutan)'",
+                        Actual = $"Satu blok tabel terdeteksi melintasi halaman {DescribeLocationPages(locations)}",
+                        Evidence = block.Evidence,
+                        Locations = locations
+                    });
+                }
+                else if (IsSplitTableContinuationCandidate(
+                    i,
+                    tableBlocks,
+                    tableLocationsById,
+                    bodyElements,
+                    elementContentById))
+                {
+                    requiresSplitContinuationCaption = true;
+                    result.Errors.Add(new ValidationError
+                    {
+                        Category = "Isi Buku",
+                        Field = "caption_tabel",
+                        Message = "Tabel lintas halaman harus memiliki caption lanjutan",
+                        Expected = "Tabel yang berlanjut ke halaman berikutnya harus dipecah per halaman dan bagian lanjutan diberi caption '(Lanjutan)'",
+                        Actual = $"Blok tabel baru terdeteksi pada halaman {DescribeLocationPages(locations)} setelah tabel di halaman sebelumnya tanpa caption lanjutan",
+                        Evidence = block.Evidence,
+                        Locations = locations
+                    });
+                }
+                else
+                {
+                    result.IncrementPassedChecks();
+                }
+            }
 
             if (tableRule != null)
             {
@@ -521,7 +586,6 @@ public partial class ValidationService
                 CaptionInfo? captionAfter = SelectPreferredCaptionCandidate(captionAfterCandidates, captionPrefixes, preferNearestBefore: false);
                 CaptionInfo? captionBefore = SelectPreferredCaptionCandidate(captionBeforeCandidates, captionPrefixes, preferNearestBefore: true);
 
-                CaptionInfo? selectedCaption = null;
                 var positionRule = captionRule.Position?.Value?.Trim();
                 var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
                     ? normalizedCaptionPosition
@@ -532,6 +596,10 @@ public partial class ValidationService
                     if (captionBefore != null)
                     {
                         selectedCaption = captionBefore;
+                    }
+                    else if (requiresSplitContinuationCaption)
+                    {
+                        // Keep the next numbered caption available for the actual next table block.
                     }
                     else if (captionAfter != null)
                     {
@@ -599,12 +667,14 @@ public partial class ValidationService
                 }
                 else
                 {
-                    selectedCaption = captionAfter ?? captionBefore;
+                    selectedCaption = requiresSplitContinuationCaption && captionBefore == null
+                        ? captionBefore
+                        : captionAfter ?? captionBefore;
                 }
 
                 if (selectedCaption != null)
                 {
-                    var continuationCaption = SelectCaptionContinuationCandidate(
+                    continuationCaption = SelectCaptionContinuationCandidate(
                         selectedCaption,
                         block.OrderIndex,
                         captionBeforeCandidates,
@@ -634,7 +704,7 @@ public partial class ValidationService
                         paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId.Value, out var captionFormat))
                     {
                         pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
-                        ValidateCaptionParagraphFormat(result, captionRule.Paragraph, captionFormat, "caption_tabel", "caption tabel", selectedCaption.NormalizedText, captionLocations, captionPageLayout);
+                        ValidateCaptionParagraphFormat(result, captionRule.Paragraph, captionFormat, "caption_tabel", "caption tabel", selectedCaption.NormalizedText, selectedCaption.Content.PlainText, captionLocations, captionPageLayout);
                     }
 
                     var numberingTextOverride = continuationCaption != null
@@ -648,6 +718,63 @@ public partial class ValidationService
 
                     ApplyElementIdToErrors(result.Errors, captionErrorStart, selectedCaption.ElementId);
                 }
+            }
+
+            var blockLocationIds = new List<ulong> { block.ElementId };
+            var blockStartIndex = block.OrderIndex;
+            var blockEndIndex = block.OrderIndex;
+            var blockStartElementId = block.ElementId;
+            var blockEndElementId = block.ElementId;
+
+            if (selectedCaption != null)
+            {
+                blockLocationIds.Add(selectedCaption.ElementId);
+                if (continuationCaption != null)
+                    blockLocationIds.Add(continuationCaption.ElementId);
+
+                var captionIndices = blockLocationIds
+                    .Where(id => id != block.ElementId && elementIndexById.ContainsKey(id))
+                    .Select(id => elementIndexById[id])
+                    .ToList();
+                if (captionIndices.Count > 0)
+                {
+                    var captionStartIndex = captionIndices.Min();
+                    var captionEndIndex = captionIndices.Max();
+                    if (captionStartIndex < blockStartIndex)
+                    {
+                        blockStartIndex = captionStartIndex;
+                        blockStartElementId = bodyElements[captionStartIndex].DelemenId;
+                    }
+
+                    if (captionEndIndex > blockEndIndex)
+                    {
+                        blockEndIndex = captionEndIndex;
+                        blockEndElementId = bodyElements[captionEndIndex].DelemenId;
+                    }
+                }
+            }
+
+            if (tableRule != null)
+            {
+                await ValidateMediaBlankParagraphStructureAsync(
+                    result,
+                    field: "tabel",
+                    elementLabel: "blok tabel",
+                    evidence: block.Evidence,
+                    startIndex: blockStartIndex,
+                    startElementId: blockStartElementId,
+                    endIndex: blockEndIndex,
+                    endElementId: blockEndElementId,
+                    locationElementIds: blockLocationIds,
+                    primaryElementId: block.ElementId,
+                    bodyElements: bodyElements,
+                    elementContentById: elementContentById,
+                    elementJsonById: elementJsonById,
+                    visualSummaryById: visualSummaryById,
+                    contextById: neighborContexts,
+                    paragraphRule: paragraphRule,
+                    structureRule: tableRule.StrukturKonten,
+                    cancellationToken: cancellationToken);
             }
 
             if (neighborContexts.TryGetValue(block.ElementId, out var context))
@@ -830,10 +957,14 @@ public partial class ValidationService
         if (widthType.Equals("dxa", StringComparison.OrdinalIgnoreCase) && format.DftTblWTwips.HasValue)
             return Math.Round(format.DftTblWTwips.Value / 1440.0m * 2.54m, 2);
 
-        if (widthType.Equals("pct", StringComparison.OrdinalIgnoreCase) && format.DftTblWPct50.HasValue && layout.WidthCm.HasValue)
+        if (widthType.Equals("pct", StringComparison.OrdinalIgnoreCase) && format.DftTblWPct50.HasValue)
         {
+            var referenceWidth = GetAvailableWidthCm(layout) ?? layout.WidthCm;
+            if (!referenceWidth.HasValue || referenceWidth.Value <= 0m)
+                return null;
+
             var fraction = format.DftTblWPct50.Value / 5000m;
-            return Math.Round(layout.WidthCm.Value * fraction, 2);
+            return Math.Round(referenceWidth.Value * fraction, 2);
         }
 
         return null;
@@ -916,8 +1047,7 @@ public partial class ValidationService
         foreach (var format in formats)
         {
             var prefix = ExtractCaptionPrefix(format);
-            if (!string.IsNullOrWhiteSpace(prefix))
-                prefixes.Add(prefix);
+            AppendCaptionPrefix(prefixes, prefix);
         }
 
         return prefixes;
@@ -931,10 +1061,42 @@ public partial class ValidationService
             return prefixes;
 
         var prefix = ExtractCaptionPrefix(format);
-        if (!string.IsNullOrWhiteSpace(prefix))
-            prefixes.Add(prefix);
+        AppendCaptionPrefix(prefixes, prefix);
 
         return prefixes;
+    }
+
+    private static void AppendCaptionPrefix(List<string> prefixes, string? prefix)
+    {
+        if (string.IsNullOrWhiteSpace(prefix))
+            return;
+
+        AddCaptionPrefixCandidate(prefixes, prefix);
+
+        foreach (var alias in GetCaptionPrefixAliases(prefix))
+            AddCaptionPrefixCandidate(prefixes, alias);
+    }
+
+    private static void AddCaptionPrefixCandidate(List<string> prefixes, string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+            return;
+
+        var normalized = NormalizeWhitespace(candidate).Trim().TrimEnd('.', ':', '-', ' ');
+        if (string.IsNullOrWhiteSpace(normalized))
+            return;
+
+        if (!prefixes.Any(existing => existing.Equals(normalized, StringComparison.OrdinalIgnoreCase)))
+            prefixes.Add(normalized);
+    }
+
+    private static IEnumerable<string> GetCaptionPrefixAliases(string prefix)
+    {
+        var normalized = NormalizeWhitespace(prefix).Trim();
+        if (normalized.Equals("Segmen Program", StringComparison.OrdinalIgnoreCase))
+            yield return "Segmen";
+        else if (normalized.Equals("Segmen", StringComparison.OrdinalIgnoreCase))
+            yield return "Segmen Program";
     }
 
     private static string ExtractCaptionPrefix(string format)
@@ -977,7 +1139,7 @@ public partial class ValidationService
         if (normalizedLabel == "judul_kode")
             return true;
 
-        return normalizedLabel == "caption_gambar" &&
+        return (normalizedLabel == "caption_gambar" || normalizedLabel == "caption") &&
                MatchesCaptionNumbering(normalizedText, prefixes);
     }
 
@@ -1093,6 +1255,74 @@ public partial class ValidationService
         return preferNearestBefore ? candidates[^1] : candidates[0];
     }
 
+    private static bool IsSplitTableContinuationCandidate(
+        int blockIndex,
+        IReadOnlyList<TableBlockInfo> tableBlocks,
+        IReadOnlyDictionary<ulong, List<ErrorLocation>> tableLocationsById,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById)
+    {
+        if (blockIndex <= 0 || blockIndex >= tableBlocks.Count)
+            return false;
+
+        var currentBlock = tableBlocks[blockIndex];
+        var previousBlock = tableBlocks[blockIndex - 1];
+
+        if (!tableLocationsById.TryGetValue(currentBlock.ElementId, out var currentLocations) ||
+            !tableLocationsById.TryGetValue(previousBlock.ElementId, out var previousLocations))
+        {
+            return false;
+        }
+
+        var currentPage = TryGetSingleLocationPage(currentLocations);
+        if (!currentPage.HasValue || currentPage.Value <= 1)
+            return false;
+
+        var previousLastPage = GetLastLocationPage(previousLocations);
+        if (!previousLastPage.HasValue || previousLastPage.Value != currentPage.Value - 1)
+            return false;
+
+        return ContainsOnlyEmptyElementsBetween(
+            previousBlock.OrderIndex,
+            currentBlock.OrderIndex,
+            bodyElements,
+            elementContentById);
+    }
+
+    private static int? GetLastLocationPage(IReadOnlyList<ErrorLocation>? locations)
+    {
+        if (locations == null || locations.Count == 0)
+            return null;
+
+        var pages = locations
+            .Select(loc => loc.HalamanKe)
+            .Where(page => page > 0)
+            .Distinct()
+            .OrderBy(page => page)
+            .ToList();
+
+        return pages.Count == 0 ? null : pages[^1];
+    }
+
+    private static bool ContainsOnlyEmptyElementsBetween(
+        int previousIndex,
+        int currentIndex,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById)
+    {
+        for (var index = previousIndex + 1; index < currentIndex; index++)
+        {
+            var elementId = bodyElements[index].DelemenId;
+            if (!elementContentById.TryGetValue(elementId, out var content))
+                return false;
+
+            if (!IsEmptyElement(content))
+                return false;
+        }
+
+        return true;
+    }
+
     private static CaptionInfo? SelectCaptionContinuationCandidate(
         CaptionInfo selectedCaption,
         int tableOrderIndex,
@@ -1132,6 +1362,81 @@ public partial class ValidationService
             return null;
 
         return continuation;
+    }
+
+    private static int GetCaptionAnchorOrderIndex(
+        CaptionInfo caption,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        Dictionary<ulong, string> labelMap,
+        IReadOnlyList<string> prefixes,
+        FlexibleCaptionNumberingRule? numberingRule,
+        string? normalizedPosition,
+        params string[] continuationLabels)
+    {
+        if (!string.Equals(normalizedPosition, "before", StringComparison.OrdinalIgnoreCase))
+            return caption.OrderIndex;
+
+        var continuation = FindImmediateCaptionContinuation(
+            caption,
+            bodyElements,
+            labelMap,
+            prefixes,
+            numberingRule,
+            continuationLabels);
+
+        return continuation?.OrderIndex ?? caption.OrderIndex;
+    }
+
+    private static CaptionInfo? FindImmediateCaptionContinuation(
+        CaptionInfo caption,
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        Dictionary<ulong, string> labelMap,
+        IReadOnlyList<string> prefixes,
+        FlexibleCaptionNumberingRule? numberingRule,
+        params string[] continuationLabels)
+    {
+        if (numberingRule?.EnterAfterNumbering?.Value != true)
+            return null;
+
+        if (!TryParseCaptionNumberingWithPrefixes(caption.NormalizedText, prefixes, out var _parsedNumber, out var titleText))
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(titleText))
+            return null;
+
+        var nextIndex = caption.OrderIndex + 1;
+        if (nextIndex < 0 || nextIndex >= bodyElements.Count)
+            return null;
+
+        var nextElement = bodyElements[nextIndex];
+        if (!IsParagraphElement(nextElement.DelemenType))
+            return null;
+
+        var normalizedLabel = labelMap.TryGetValue(nextElement.DelemenId, out var rawLabel)
+            ? NormalizeLabel(rawLabel)
+            : string.Empty;
+
+        if (continuationLabels.Length > 0 &&
+            !continuationLabels.Any(label => normalizedLabel == NormalizeLabel(label)))
+        {
+            return null;
+        }
+
+        var content = ParseElementContent(nextElement.DelemenJsonTree);
+        var normalizedText = NormalizeWhitespace(content.PlainText);
+        if (string.IsNullOrWhiteSpace(normalizedText) || content.HasNonTextContent)
+            return null;
+
+        if (MatchesCaptionNumbering(normalizedText, prefixes))
+            return null;
+
+        return new CaptionInfo
+        {
+            ElementId = nextElement.DelemenId,
+            OrderIndex = nextIndex,
+            Content = content,
+            NormalizedText = normalizedText
+        };
     }
 
     private static bool MatchesCaptionNumbering(string text, IReadOnlyList<string> prefixes)
@@ -1231,65 +1536,6 @@ public partial class ValidationService
                         Message = "Font konten tabel tidak sesuai",
                         Expected = expectedFontName,
                         Actual = string.Join(", ", actuals),
-                        Evidence = evidence,
-                        Locations = locations
-                    });
-                }
-            }
-        }
-
-        var expectedFontSize = rule?.FontSize?.Value;
-        if (expectedFontSize.HasValue)
-        {
-            result.IncrementTotalChecks();
-            var expectedHalfPt = expectedFontSize.Value * 2m;
-            if (runs.Count > 0)
-            {
-                var mismatches = CollectRunMismatches(
-                    runs,
-                    textFormatById,
-                    tf => !tf.DftxSizeHalfpt.HasValue || Math.Abs(tf.DftxSizeHalfpt.Value - expectedHalfPt) > 0.5m,
-                    tf => tf.DftxSizeHalfpt.HasValue
-                        ? (tf.DftxSizeHalfpt.Value / 2m).ToString(CultureInfo.InvariantCulture) + " pt"
-                        : "unknown");
-
-                if (mismatches.Count == 0)
-                {
-                    result.IncrementPassedChecks();
-                }
-                else
-                {
-                    result.Errors.Add(new ValidationError
-                    {
-                        Category = "Isi Buku",
-                        Field = "tabel",
-                        Message = "Ukuran font konten tabel tidak sesuai",
-                        Expected = expectedFontSize.Value.ToString(CultureInfo.InvariantCulture) + " pt",
-                        Actual = BuildMismatchSummary(mismatches),
-                        Evidence = evidence,
-                        Locations = locations
-                    });
-                }
-            }
-            else
-            {
-                var actuals = textFormats
-                    .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
-                    .ToList();
-
-                if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expectedHalfPt) <= 0.5m))
-                {
-                    result.IncrementPassedChecks();
-                }
-                else
-                {
-                    result.Errors.Add(new ValidationError
-                    {
-                        Category = "Isi Buku",
-                        Field = "tabel",
-                        Message = "Ukuran font konten tabel tidak sesuai",
-                        Expected = expectedFontSize.Value.ToString(CultureInfo.InvariantCulture) + " pt",
-                        Actual = string.Join(", ", actuals.Select(a => a.HasValue ? (a.Value / 2m).ToString(CultureInfo.InvariantCulture) + " pt" : "unknown")),
                         Evidence = evidence,
                         Locations = locations
                     });
@@ -1697,6 +1943,7 @@ public partial class ValidationService
         string field,
         string label,
         string evidenceText,
+        string? rawParagraphText,
         List<ErrorLocation> locations,
         PageLayoutSnapshot? pageLayout = null)
     {
@@ -1735,7 +1982,8 @@ public partial class ValidationService
             field,
             $"paragraf {label}",
             evidenceText,
-            locations);
+            locations,
+            paragraphTexts: new[] { rawParagraphText });
 
         var spacingRule = paragraphRule.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
@@ -1834,10 +2082,9 @@ public partial class ValidationService
             ? caption.NormalizedText
             : NormalizeWhitespace(numberingTextOverride);
 
-        var prefixes = formats
-            .Select(ExtractCaptionPrefix)
-            .Where(p => !string.IsNullOrWhiteSpace(p))
-            .ToList();
+        var prefixes = BuildCaptionPrefixes(numberingRule);
+        if (prefixes.Count == 0)
+            return;
 
         var evidence = textForNumbering.Length > 100
             ? textForNumbering[..100] + "..."

@@ -36,7 +36,8 @@ public class AturanControllerNormalizationTests
                         AturanId = 1,
                         AturanDetailKategori = "Isi Buku",
                         AturanDetailKey = "paragraf",
-                        AturanDetailJsonValue = """{"font":{"font_name":"Times New Roman"}}"""
+                        AturanDetailJsonValue = """{"font":{"font_name":"Times New Roman"}}""",
+                        AturanDetailCatatan = "template_extracted=font|par; manual_default=struct"
                     }
                 ]
             });
@@ -60,7 +61,12 @@ public class AturanControllerNormalizationTests
         Assert.Equal((uint)1, valueType.GetProperty("id")!.GetValue(value));
         Assert.Equal((uint)90, valueType.GetProperty("skor_minimum")!.GetValue(value));
         Assert.Equal("templates/template.dotx", valueType.GetProperty("template_file_path")!.GetValue(value));
-        Assert.NotNull(valueType.GetProperty("aturan_detail")!.GetValue(value));
+        var detailRows = Assert.IsAssignableFrom<System.Collections.IEnumerable>(valueType.GetProperty("aturan_detail")!.GetValue(value));
+        var firstDetail = detailRows.Cast<object>().First();
+        var detailType = firstDetail.GetType();
+
+        Assert.Equal("template_extracted=font|par; manual_default=struct", detailType.GetProperty("catatan")!.GetValue(firstDetail));
+        Assert.Equal("template_extracted=font|par; manual_default=struct", detailType.GetProperty("aturan_detail_catatan")!.GetValue(firstDetail));
     }
 
     [Fact]

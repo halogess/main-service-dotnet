@@ -9,6 +9,8 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public partial class ValidationService
 {
+    private static readonly Regex TitleCaseIgnoredQuotedSegmentPattern = new("\"[^\"]*\"|“[^”]*”", RegexOptions.Compiled);
+
     private sealed class ImageItemInfo
     {
         public string? RelationshipId { get; init; }
@@ -110,6 +112,7 @@ public partial class ValidationService
         CaptionImageRule? captionRule = null;
         TableCaptionRule? tableCaptionRule = null;
         CodeTitleRule? codeTitleRule = null;
+        var paragraphRule = await LoadParagraphRuleAsync(aturan.AturanId, "blank image paragraph validation", cancellationToken);
 
         if (gambarDetail != null)
         {
@@ -244,6 +247,10 @@ public partial class ValidationService
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
         var pageNumbersById = await LoadPageNumbersAsync(orderedElementIds, cancellationToken);
+        var visualSummaryById = await LoadVisualElementSummariesAsync(orderedElementIds, cancellationToken);
+        var elementIndexById = bodyElements
+            .Select((element, index) => new { element.DelemenId, Index = index })
+            .ToDictionary(item => item.DelemenId, item => item.Index);
         var imageCaptionPrefixes = BuildCaptionPrefixes(captionRule?.Numbering);
         if (imageCaptionPrefixes.Count == 0)
             imageCaptionPrefixes.Add("Gambar");
@@ -282,6 +289,10 @@ public partial class ValidationService
             }
             return content;
         }
+
+        var elementContentById = bodyElements.ToDictionary(
+            element => element.DelemenId,
+            element => GetContent(element.DelemenId, element.DelemenJsonTree));
 
         var imageBlocks = new List<ImageBlockInfo>();
         var captionCandidates = new List<CaptionInfo>();
@@ -342,7 +353,17 @@ public partial class ValidationService
 
             foreach (var caption in tableCaptionCandidates)
             {
-                foreach (var targetIndex in GetAdjacentElementIndices(caption.OrderIndex, bodyElements.Count, normalizedTableCaptionPosition))
+                var captionAnchorIndex = GetCaptionAnchorOrderIndex(
+                    caption,
+                    bodyElements,
+                    labelMap,
+                    tableCaptionPrefixes,
+                    tableCaptionRule?.Numbering,
+                    normalizedTableCaptionPosition,
+                    "caption_tabel",
+                    "caption_gambar");
+
+                foreach (var targetIndex in GetAdjacentElementIndices(captionAnchorIndex, bodyElements.Count, normalizedTableCaptionPosition))
                 {
                     var targetElement = bodyElements[targetIndex];
                     var targetLabel = labelMap.TryGetValue(targetElement.DelemenId, out var rawTargetLabel)
@@ -359,7 +380,17 @@ public partial class ValidationService
 
             foreach (var caption in codeCaptionCandidates)
             {
-                foreach (var targetIndex in GetAdjacentElementIndices(caption.OrderIndex, bodyElements.Count, normalizedCodeTitlePosition))
+                var captionAnchorIndex = GetCaptionAnchorOrderIndex(
+                    caption,
+                    bodyElements,
+                    labelMap,
+                    codeTitlePrefixes,
+                    codeTitleRule?.Numbering,
+                    normalizedCodeTitlePosition,
+                    "judul_kode",
+                    "caption_gambar");
+
+                foreach (var targetIndex in GetAdjacentElementIndices(captionAnchorIndex, bodyElements.Count, normalizedCodeTitlePosition))
                 {
                     var targetElement = bodyElements[targetIndex];
                     var targetLabel = labelMap.TryGetValue(targetElement.DelemenId, out var rawTargetLabel)
@@ -604,7 +635,7 @@ public partial class ValidationService
                     pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
 
                     ValidateCaptionFont(result, captionRule, selectedCaption, captionTextFormats, captionLocations);
-                    ValidateCaptionParagraphFormat(result, captionRule, captionFormat, selectedCaption.NormalizedText, captionLocations, captionPageLayout);
+                    ValidateCaptionParagraphFormat(result, captionRule, captionFormat, selectedCaption.NormalizedText, selectedCaption.Content.PlainText, captionLocations, captionPageLayout);
                     ValidateCaptionNumbering(result, captionRule, selectedCaption, captionLocations);
 
                     if (neighborContexts.TryGetValue(selectedCaption.ElementId, out var captionContext))
@@ -612,6 +643,64 @@ public partial class ValidationService
 
                     ApplyElementIdToErrors(result.Errors, captionErrorStart, selectedCaption.ElementId);
                 }
+            }
+
+            var blockLocationIds = new List<ulong> { block.ElementId };
+            var blockStartIndex = block.OrderIndex;
+            var blockEndIndex = block.OrderIndex;
+            var blockStartElementId = block.ElementId;
+            var blockEndElementId = block.ElementId;
+
+            if (selectedCaption != null)
+            {
+                var captionElementIds = captionMergeGroups.TryGetValue(selectedCaption.ElementId, out var mergedIds)
+                    ? mergedIds.Distinct().ToList()
+                    : new List<ulong> { selectedCaption.ElementId };
+                blockLocationIds.AddRange(captionElementIds);
+
+                var captionIndices = captionElementIds
+                    .Where(elementIndexById.ContainsKey)
+                    .Select(id => elementIndexById[id])
+                    .ToList();
+                if (captionIndices.Count > 0)
+                {
+                    var captionStartIndex = captionIndices.Min();
+                    var captionEndIndex = captionIndices.Max();
+                    if (captionStartIndex < blockStartIndex)
+                    {
+                        blockStartIndex = captionStartIndex;
+                        blockStartElementId = bodyElements[captionStartIndex].DelemenId;
+                    }
+
+                    if (captionEndIndex > blockEndIndex)
+                    {
+                        blockEndIndex = captionEndIndex;
+                        blockEndElementId = bodyElements[captionEndIndex].DelemenId;
+                    }
+                }
+            }
+
+            if (imageRule != null)
+            {
+                await ValidateMediaBlankParagraphStructureAsync(
+                    result,
+                    field: "gambar",
+                    elementLabel: "blok gambar",
+                    evidence: block.Evidence,
+                    startIndex: blockStartIndex,
+                    startElementId: blockStartElementId,
+                    endIndex: blockEndIndex,
+                    endElementId: blockEndElementId,
+                    locationElementIds: blockLocationIds,
+                    primaryElementId: block.ElementId,
+                    bodyElements: bodyElements,
+                    elementContentById: elementContentById,
+                    elementJsonById: elementJsonById,
+                    visualSummaryById: visualSummaryById,
+                    contextById: neighborContexts,
+                    paragraphRule: paragraphRule,
+                    structureRule: imageRule.StrukturKonten,
+                    cancellationToken: cancellationToken);
             }
 
             if (neighborContexts.TryGetValue(block.ElementId, out var context))
@@ -1354,6 +1443,7 @@ public partial class ValidationService
         CaptionImageRule rule,
         DokumenFormatParagraf? format,
         string evidence,
+        string? rawParagraphText,
         List<ErrorLocation> locations,
         PageLayoutSnapshot? pageLayout)
     {
@@ -1392,7 +1482,8 @@ public partial class ValidationService
             field: "caption_gambar",
             subjectLabel: "paragraf caption gambar",
             evidence: evidence,
-            locations: locations);
+            locations: locations,
+            paragraphTexts: new[] { rawParagraphText });
 
         var spacingRule = rule.Paragraph.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
@@ -1996,10 +2087,11 @@ public partial class ValidationService
 
     private static bool IsTitleCaseText(string text)
     {
+        text = RemoveIgnoredQuotedTitleCaseSegments(text);
         if (string.IsNullOrWhiteSpace(text))
             return true;
 
-        var matches = Regex.Matches(text, "[A-Za-z]+");
+        var matches = Regex.Matches(text, "[A-Za-z]+(?:-[A-Za-z]+)*-?");
         if (matches.Count == 0)
             return true;
 
@@ -2014,14 +2106,25 @@ public partial class ValidationService
 
         foreach (Match match in matches)
         {
-            var word = match.Value;
+            if (IsStandaloneHyphenFragment(text, match))
+                continue;
+
+            var word = match.Value.TrimEnd('-');
             if (string.IsNullOrWhiteSpace(word))
                 continue;
 
-            if (!word.All(char.IsUpper))
+            var letters = word.Where(char.IsLetter).ToArray();
+            if (letters.Length == 0)
+                continue;
+
+            if (!letters.All(char.IsUpper))
                 allWordsAllCaps = false;
 
-            var isMinorWord = wordIndex > 0 && minorWords.Contains(word);
+            var segments = word.Split('-', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0)
+                continue;
+
+            var isMinorWord = wordIndex > 0 && segments.Length == 1 && minorWords.Contains(word);
             if (isMinorWord)
             {
                 // Minor words may stay lowercase or start with uppercase; reject odd mixed casing.
@@ -2036,14 +2139,47 @@ public partial class ValidationService
             }
             else
             {
-                if (!char.IsUpper(word[0]))
-                    return false;
+                foreach (var segment in segments)
+                {
+                    if (!char.IsUpper(segment[0]))
+                        return false;
+                }
             }
 
             wordIndex++;
         }
 
-        return !allWordsAllCaps;
+        return wordIndex == 0 || !allWordsAllCaps;
+    }
+
+    private static string RemoveIgnoredQuotedTitleCaseSegments(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        return TitleCaseIgnoredQuotedSegmentPattern.Replace(text, " ");
+    }
+
+    private static bool IsStandaloneHyphenFragment(string text, Match match)
+    {
+        var hasLeadingHyphen = match.Index > 0 && text[match.Index - 1] == '-';
+        var hasTrailingHyphen = match.Value.EndsWith("-", StringComparison.Ordinal);
+        if (!hasLeadingHyphen && !hasTrailingHyphen)
+            return false;
+
+        var hasLetterBeforeHyphen =
+            hasLeadingHyphen &&
+            match.Index > 1 &&
+            char.IsLetter(text[match.Index - 2]);
+
+        var nextIndex = match.Index + match.Length;
+        var hasLetterAfterHyphen =
+            hasTrailingHyphen &&
+            nextIndex < text.Length &&
+            char.IsLetter(text[nextIndex]);
+
+        // Ignore affix examples like "te-" or "-an"; keep validating true hyphenated words.
+        return !hasLetterBeforeHyphen && !hasLetterAfterHyphen;
     }
 
     private static string BuildImageEvidence(IReadOnlyList<ImageItemInfo> items)

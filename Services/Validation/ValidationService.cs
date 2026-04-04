@@ -137,6 +137,18 @@ public class PageSettingsRule
 
     [JsonPropertyName("column")]
     public RuleValue<int>? Column { get; set; }
+
+    [JsonPropertyName("akhir_halaman")]
+    public PageEndRule? AkhirHalaman { get; set; }
+}
+
+public class PageEndRule
+{
+    [JsonPropertyName("max_baris_kosong")]
+    public DecimalRuleValue? MaxBarisKosong { get; set; }
+
+    [JsonPropertyName("cegah_halaman_kosong")]
+    public RuleValue<bool>? CegahHalamanKosong { get; set; }
 }
 
 public class PagePaperRule
@@ -384,6 +396,12 @@ public class SubchapterContentStructureRule
 
     [JsonPropertyName("minimal_subbab_level_sama")]
     public DecimalRuleValue? MinimalSubbabLevelSama { get; set; }
+
+    [JsonPropertyName("jumlah_baris_kosong_sebelum")]
+    public DecimalRuleValue? JumlahBarisKosongSebelum { get; set; }
+
+    [JsonPropertyName("abaikan_jika_di_awal_halaman")]
+    public RuleValue<bool>? AbaikanJikaDiAwalHalaman { get; set; }
 }
 
 // Paragraph Rule (paragraf)
@@ -480,6 +498,9 @@ public class ImageRule
 
     [JsonPropertyName("position")]
     public ImagePositionRule? Position { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public MediaContentStructureRule? StrukturKonten { get; set; }
 }
 
 public class ImagePositionRule
@@ -558,6 +579,9 @@ public class TableRule
 
     [JsonPropertyName("cegah_gambar_tabel")]
     public RuleValue<bool>? CegahGambarTabel { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public MediaContentStructureRule? StrukturKonten { get; set; }
 }
 
 public class TablePositionRule
@@ -603,6 +627,9 @@ public class TableCaptionRule
 
     [JsonPropertyName("position")]
     public RuleValue<string>? Position { get; set; }
+
+    [JsonPropertyName("wajib_caption_lanjutan_jika_lintas_halaman")]
+    public RuleValue<bool>? WajibCaptionLanjutanJikaLintasHalaman { get; set; }
 }
 
 // Code Rule (kode)
@@ -622,6 +649,21 @@ public class CodeRule
 
     [JsonPropertyName("cegah_tabel_kode")]
     public RuleValue<bool>? CegahTabelKode { get; set; }
+
+    [JsonPropertyName("struktur_konten")]
+    public MediaContentStructureRule? StrukturKonten { get; set; }
+}
+
+public class MediaContentStructureRule
+{
+    [JsonPropertyName("jumlah_baris_kosong_sebelum")]
+    public DecimalRuleValue? JumlahBarisKosongSebelum { get; set; }
+
+    [JsonPropertyName("jumlah_baris_kosong_setelah")]
+    public DecimalRuleValue? JumlahBarisKosongSetelah { get; set; }
+
+    [JsonPropertyName("abaikan_jika_di_awal_halaman")]
+    public RuleValue<bool>? AbaikanJikaDiAwalHalaman { get; set; }
 }
 
 public class CodeParagraphRule
@@ -658,6 +700,9 @@ public class CodeTitleRule
 
     [JsonPropertyName("position")]
     public RuleValue<string>? Position { get; set; }
+
+    [JsonPropertyName("wajib_caption_lanjutan_jika_lintas_halaman")]
+    public RuleValue<bool>? WajibCaptionLanjutanJikaLintasHalaman { get; set; }
 }
 
 // Formula Rule (rumus)
@@ -2165,6 +2210,11 @@ public partial class ValidationService : IValidationService
         if (ratio > 1.5m)
             return 1.5m;
         return ratio;
+    }
+
+    private static bool IsContinuationCaptionRequired(RuleValue<bool>? rule)
+    {
+        return rule?.Value ?? true;
     }
 
     private static decimal CmToPoints(decimal cm)

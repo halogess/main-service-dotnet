@@ -144,7 +144,7 @@ public static class AturanExcelExportBuilder
 
         if (rootNode is not JsonObject rootObject)
         {
-            rows.Add(CreateRow(detailKey, [], rootNode, false));
+            AddRowIfVisible(rows, detailKey, [], rootNode, false);
             return;
         }
 
@@ -194,7 +194,7 @@ public static class AturanExcelExportBuilder
     {
         if (node == null)
         {
-            rows.Add(CreateRow(elementKey, path, null, hardConstraint ?? false));
+            AddRowIfVisible(rows, elementKey, path, null, hardConstraint ?? false);
             return;
         }
 
@@ -207,7 +207,7 @@ public static class AturanExcelExportBuilder
                 FlattenArray(rows, elementKey, jsonArray, path, hardConstraint);
                 return;
             default:
-                rows.Add(CreateRow(elementKey, path, node, hardConstraint ?? false));
+                AddRowIfVisible(rows, elementKey, path, node, hardConstraint ?? false);
                 return;
         }
     }
@@ -228,7 +228,7 @@ public static class AturanExcelExportBuilder
             }
             else
             {
-                rows.Add(CreateRow(elementKey, path, valueNode, wrapperHardConstraint));
+                AddRowIfVisible(rows, elementKey, path, valueNode, wrapperHardConstraint);
             }
 
             foreach (var property in jsonObject)
@@ -257,7 +257,7 @@ public static class AturanExcelExportBuilder
     {
         if (jsonArray.Count == 0)
         {
-            rows.Add(CreateRow(elementKey, path, null, hardConstraint ?? false));
+            AddRowIfVisible(rows, elementKey, path, null, hardConstraint ?? false);
             return;
         }
 
@@ -265,6 +265,19 @@ public static class AturanExcelExportBuilder
         {
             FlattenNode(rows, elementKey, jsonArray[index], [.. path, $"[{index + 1}]"], hardConstraint);
         }
+    }
+
+    private static void AddRowIfVisible(
+        List<AturanExcelExportRow> rows,
+        string elementKey,
+        IReadOnlyList<string> path,
+        JsonNode? valueNode,
+        bool hardConstraint)
+    {
+        if (ShouldSkipExportRow(elementKey, path))
+            return;
+
+        rows.Add(CreateRow(elementKey, path, valueNode, hardConstraint));
     }
 
     private static AturanExcelExportRow CreateRow(string elementKey, IReadOnlyList<string> path, JsonNode? valueNode, bool hardConstraint)
@@ -280,6 +293,12 @@ public static class AturanExcelExportBuilder
             GetNumericCellValue(valueNode),
             hardConstraint,
             BuildNote(elementKey, path, valueNode));
+    }
+
+    private static bool ShouldSkipExportRow(string elementKey, IReadOnlyList<string> path)
+    {
+        return elementKey.Equals("tabel", StringComparison.OrdinalIgnoreCase) &&
+               PathEndsWith(path, "konten_tabel", "font", "font_size");
     }
 
     private static string GetEffectiveKey(IReadOnlyList<string> path)
@@ -418,6 +437,9 @@ public static class AturanExcelExportBuilder
         return rawSegment switch
         {
             "font_size" => "Font Size (pt)",
+            "max_baris_kosong" => "Max Baris Kosong (baris)",
+            "jumlah_baris_kosong_sebelum" => "Jumlah Baris Kosong Sebelum (baris)",
+            "jumlah_baris_kosong_setelah" => "Jumlah Baris Kosong Setelah (baris)",
             "left_indent" => "Left Indent (cm)",
             "right_indent" => "Right Indent (cm)",
             "first_line_indent" => "First Line Indent (cm)",
@@ -502,7 +524,22 @@ public static class AturanExcelExportBuilder
             return "Angka desimal dalam cm";
         }
 
+        if (elementKey.Equals("page_settings", StringComparison.OrdinalIgnoreCase) &&
+            path.Count >= 2 &&
+            path[0].Equals("akhir_halaman", StringComparison.OrdinalIgnoreCase) &&
+            effectiveKey.Equals("max_baris_kosong", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Angka bulat jumlah baris kosong di akhir halaman. Default: 3";
+        }
+
+        if (effectiveKey.Equals("jumlah_baris_kosong_sebelum", StringComparison.OrdinalIgnoreCase))
+            return "Angka bulat jumlah baris kosong sebelum blok elemen. Default: 1";
+
+        if (effectiveKey.Equals("jumlah_baris_kosong_setelah", StringComparison.OrdinalIgnoreCase))
+            return "Angka bulat jumlah baris kosong sesudah blok elemen. Default: 1";
+
         if (effectiveKey.StartsWith("cegah_", StringComparison.OrdinalIgnoreCase) ||
+            effectiveKey.StartsWith("abaikan_", StringComparison.OrdinalIgnoreCase) ||
             effectiveKey.StartsWith("minimal_", StringComparison.OrdinalIgnoreCase) ||
             effectiveKey.StartsWith("wajib_", StringComparison.OrdinalIgnoreCase) ||
             effectiveKey.StartsWith("satu_", StringComparison.OrdinalIgnoreCase) ||

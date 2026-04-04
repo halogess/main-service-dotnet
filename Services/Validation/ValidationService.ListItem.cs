@@ -163,7 +163,8 @@ public partial class ValidationService
 
         foreach (var (elementId, elementType, elementLabel, content) in listItemElements)
         {
-            var plainText = content.PlainText?.Trim() ?? string.Empty;
+            var rawText = content.PlainText ?? string.Empty;
+            var plainText = rawText.Trim();
             var evidence = plainText.Length > 100 ? plainText[..100] + "..." : plainText;
             var errorStart = result.Errors.Count;
 
@@ -193,7 +194,7 @@ public partial class ValidationService
             listLevelByElementId[elementId] = mergeSet;
 
             ValidateListItemFont(result, rule, elementTextFormats!, content.TextRuns, evidence, locations);
-            ValidateListItemParagraph(result, rule, paragraphFormat, level, evidence, locations, plainText, pageLayout);
+            ValidateListItemParagraph(result, rule, paragraphFormat, level, evidence, locations, plainText, rawText, pageLayout);
 
             if (neighborContexts.TryGetValue(elementId, out var context))
                 ApplyContextToErrors(result.Errors, errorStart, context);
@@ -500,6 +501,7 @@ public partial class ValidationService
         string evidence,
         List<ErrorLocation> locations,
         string paragraphText,
+        string rawParagraphText,
         PageLayoutSnapshot? pageLayout)
     {
         if (format == null)
@@ -534,13 +536,33 @@ public partial class ValidationService
         var expectedHanging = rule?.Paragraph?.Indentation?.Hanging?.Value;
         var levelValue = level.GetValueOrDefault(0);
 
+        var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
+            ? format.DfpIndLeftTwips.Value
+            : format.DfpIndStartTwips ?? 0;
+        var leftCm = leftTwips / 1440.0m * 2.54m;
+        var firstLineCm = (format.DfpIndFirstLineTwips ?? 0) / 1440.0m * 2.54m;
         var hangingTwips = format.DfpIndHangingTwips ?? 0;
         var hangingCm = hangingTwips / 1440.0m * 2.54m;
+        var normalizedLeftCm = Math.Max(0m, leftCm - hangingCm);
+
+        decimal? expectedNormalizedLeftCm = null;
+        if (expectedLeftIndent.HasValue)
+        {
+            expectedNormalizedLeftCm = expectedLeftIndent.Value;
+            if (expectedHanging.HasValue && levelValue > 0)
+                expectedNormalizedLeftCm += levelValue * expectedHanging.Value;
+        }
+
+        var hasParagraphLikeIndentShape = expectedNormalizedLeftCm.HasValue &&
+                                          expectedHanging.HasValue &&
+                                          Math.Abs(hangingCm) <= 0.05m &&
+                                          Math.Abs(firstLineCm) <= 0.05m &&
+                                          Math.Abs(leftCm - (expectedNormalizedLeftCm.Value + expectedHanging.Value)) <= 0.05m;
 
         if (expectedHanging.HasValue)
         {
             result.IncrementTotalChecks();
-            if (Math.Abs(hangingCm - expectedHanging.Value) <= 0.05m)
+            if (Math.Abs(hangingCm - expectedHanging.Value) <= 0.05m || hasParagraphLikeIndentShape)
             {
                 result.IncrementPassedChecks();
             }
@@ -562,19 +584,9 @@ public partial class ValidationService
         if (expectedLeftIndent.HasValue)
         {
             result.IncrementTotalChecks();
-            var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
-                ? format.DfpIndLeftTwips.Value
-                : format.DfpIndStartTwips ?? 0;
-            var leftCm = leftTwips / 1440.0m * 2.54m;
-            var normalizedLeftCm = Math.Max(0m, leftCm - hangingCm);
+            var expectedLeftCm = expectedNormalizedLeftCm ?? expectedLeftIndent.Value;
 
-            var expectedLeftCm = expectedLeftIndent.Value;
-            if (expectedHanging.HasValue && levelValue > 0)
-            {
-                expectedLeftCm += levelValue * expectedHanging.Value;
-            }
-
-            if (Math.Abs(normalizedLeftCm - expectedLeftCm) <= 0.05m)
+            if (Math.Abs(normalizedLeftCm - expectedLeftCm) <= 0.05m || hasParagraphLikeIndentShape)
             {
                 result.IncrementPassedChecks();
             }
@@ -598,21 +610,24 @@ public partial class ValidationService
         // A non-zero first line indent would conflict with that model and must stay 0.
         var expectedFirstLineIndent = 0m;
         result.IncrementTotalChecks();
-        var firstLineTwips = format.DfpIndFirstLineTwips ?? 0;
-        var firstLineCm = firstLineTwips / 1440.0m * 2.54m;
-        if (Math.Abs(firstLineCm - expectedFirstLineIndent) <= 0.05m)
+        var firstLineObservation = ObserveFirstLineIndent(format, rawParagraphText);
+        if (Math.Abs(firstLineObservation.ActualCm - expectedFirstLineIndent) <= 0.05m &&
+            !firstLineObservation.HasLeadingManualIndent)
         {
             result.IncrementPassedChecks();
         }
         else
         {
+            var message = "First line indent item daftar harus 0";
+            if (firstLineObservation.HasLeadingManualIndent)
+                message += " karena diawali spasi/tab";
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
                 Field = "item_daftar",
-                Message = "First line indent item daftar harus 0",
+                Message = message,
                 Expected = expectedFirstLineIndent.ToString(CultureInfo.InvariantCulture) + " cm",
-                Actual = firstLineCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                Actual = firstLineObservation.DisplayActual,
                 Evidence = evidence,
                 Locations = locations
             });

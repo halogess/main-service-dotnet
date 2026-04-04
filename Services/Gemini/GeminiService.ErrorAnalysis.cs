@@ -521,6 +521,10 @@ public partial class GeminiService
             return "page_settings";
         if (normalized.StartsWith("gutter"))
             return "page_settings";
+        if (normalized.Contains("akhir_halaman") ||
+            normalized.StartsWith("max_baris_kosong") ||
+            normalized == "cegah_halaman_kosong")
+            return "page_settings";
         if (normalized.StartsWith("column"))
             return "page_settings";
         if (normalized == "different_odd_even")
@@ -546,7 +550,7 @@ public partial class GeminiService
         return field.ToLowerInvariant() switch
         {
             "judul_bab" => "Aturan format judul bab (font, spacing, alignment, numbering)",
-            "page_settings" => "Aturan pengaturan halaman (kertas, margin, header/footer, gutter, kolom)",
+            "page_settings" => "Aturan pengaturan halaman (kertas, margin, header/footer, gutter, kolom, akhir halaman)",
             "paper" => "Aturan ukuran kertas dan orientasi",
             "paper_size" => "Aturan ukuran kertas",
             "margin" => "Aturan margin halaman",
@@ -563,6 +567,8 @@ public partial class GeminiService
             "gutter_position" => "Aturan posisi gutter",
             "column" => "Aturan jumlah kolom",
             "column_count" => "Aturan jumlah kolom",
+            "max_baris_kosong_akhir_halaman" => "Aturan maksimal baris kosong pada akhir halaman",
+            "cegah_halaman_kosong" => "Aturan pencegahan halaman kosong",
             "page_numbering" => "Aturan penomoran halaman",
             "page_number_format" => "Aturan format nomor halaman",
             "page_number_location" => "Aturan letak nomor halaman",

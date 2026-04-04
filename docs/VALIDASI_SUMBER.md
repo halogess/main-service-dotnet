@@ -2,6 +2,11 @@
 
 Klasifikasi: "diambil dari aturan.txt" berarti rule dibaca dari Aturan/AturanDetail (DB). "hardcoded/derived" berarti rule berasal dari logika kode atau perhitungan turunan.
 
+Catatan import template admin:
+- `AturanImportService` membangun aturan dari skeleton default lalu hanya menimpa field yang benar-benar bisa diekstrak dari artefak DOCX.
+- Provenance per-detail disimpan di `AturanDetailCatatan` dengan format `template_extracted=...; manual_default=...`.
+- Token ringkas yang dipakai di `AturanDetailCatatan`: `par` = paragraph, `num` = numbering, `pos` = position, `struct` = struktur/default manual, `cap` = caption, `tbl` = tabel.
+
 **Diambil dari DB (Aturan/AturanDetail)**
 | Kategori | SubKategori | Aturan | Sumber |
 | --- | --- | --- | --- |

@@ -349,13 +349,6 @@ public partial class ValidationService
                 if (block.ParagraphsAfter.Count == 0)
                     continue;
 
-                var hasSingleParagraphAfter = block.ParagraphsAfter.Count == 1;
-                if (hasSingleParagraphAfter &&
-                    (!singleParagraphExplanationBySetId.TryGetValue(block.SetId, out var treatAsExplanation) || !treatAsExplanation))
-                {
-                    continue;
-                }
-
                 DokumenFormatParagraf? listFormat = null;
                 if (block.LastFormatId.HasValue)
                     listFormats.TryGetValue(block.LastFormatId.Value, out listFormat);
@@ -374,6 +367,40 @@ public partial class ValidationService
                         ? listFormat.DfpIndLeftTwips.Value
                         : listFormat.DfpIndStartTwips ?? 0;
                     expectedTextStartCm = leftTwips / 1440.0m * 2.54m;
+                }
+
+                if (block.ListItemIds.Count > 1)
+                {
+                    foreach (var paragraphId in block.ParagraphsAfter)
+                    {
+                        if (!contentCache.TryGetValue(paragraphId, out var paragraphContent) ||
+                            !paragraphContent.ParagraphFormatId.HasValue ||
+                            !paragraphFormats.TryGetValue(paragraphContent.ParagraphFormatId.Value, out var paragraphFormat))
+                        {
+                            continue;
+                        }
+
+                        var paragraphLeftTwips = paragraphFormat.DfpIndLeftTwips.HasValue && paragraphFormat.DfpIndLeftTwips.Value != 0
+                            ? paragraphFormat.DfpIndLeftTwips.Value
+                            : paragraphFormat.DfpIndStartTwips ?? 0;
+                        var paragraphLeftCm = paragraphLeftTwips / 1440.0m * 2.54m;
+                        if (paragraphLeftCm <= 0.05m)
+                            continue;
+
+                        if (expectedTextStartCm.HasValue)
+                            listIndentByParagraphId[paragraphId] = expectedTextStartCm.Value;
+                        listFirstLineIndentByParagraphId[paragraphId] = 0m;
+                        listHangingIndentByParagraphId[paragraphId] = 0m;
+                    }
+
+                    continue;
+                }
+
+                var hasSingleParagraphAfter = block.ParagraphsAfter.Count == 1;
+                if (hasSingleParagraphAfter &&
+                    (!singleParagraphExplanationBySetId.TryGetValue(block.SetId, out var treatAsExplanation) || !treatAsExplanation))
+                {
+                    continue;
                 }
 
                 if (expectedTextStartCm.HasValue)
@@ -396,6 +423,9 @@ public partial class ValidationService
         var skipSentenceCountParagraphIds = new HashSet<ulong>();
         foreach (var block in listBlocks)
         {
+            if (block.ListItemIds.Count > 1)
+                continue;
+
             if (block.ParagraphsAfter.Count == 1 &&
                 singleParagraphExplanationBySetId.TryGetValue(block.SetId, out var treatAsExplanation) &&
                 treatAsExplanation)
@@ -420,7 +450,8 @@ public partial class ValidationService
         // Validate each paragraph
         foreach (var (elementId, content) in paragraphElements)
         {
-            var plainText = content.PlainText?.Trim() ?? string.Empty;
+            var rawText = content.PlainText ?? string.Empty;
+            var plainText = rawText.Trim();
             var errorStart = result.Errors.Count;
 
             // Get paragraph format
@@ -470,6 +501,7 @@ public partial class ValidationService
                 listFirstLineOverride,
                 listHangingOverride,
                 plainText,
+                rawText,
                 pageLayout);
 
             // --- Sentence Count Suggestion (non-required) ---
@@ -624,6 +656,7 @@ public partial class ValidationService
         decimal? firstLineIndentOverrideCm,
         decimal? hangingIndentOverrideCm,
         string paragraphText,
+        string rawParagraphText,
         PageLayoutSnapshot? pageLayout)
     {
         if (format == null)
@@ -688,10 +721,9 @@ public partial class ValidationService
         {
             result.IncrementTotalChecks();
 
-            var firstLineTwips = format.DfpIndFirstLineTwips ?? 0;
-            var firstLineCm = firstLineTwips / 1440.0m * 2.54m;
-
-            if (Math.Abs(firstLineCm - expectedFirstLineIndent.Value) <= 0.05m)
+            var firstLineObservation = ObserveFirstLineIndent(format, rawParagraphText);
+            if (Math.Abs(firstLineObservation.ActualCm - expectedFirstLineIndent.Value) <= 0.05m &&
+                !firstLineObservation.HasLeadingManualIndent)
             {
                 result.IncrementPassedChecks();
             }
@@ -700,13 +732,15 @@ public partial class ValidationService
                 var message = firstLineIndentOverrideCm.HasValue
                     ? "First line indent paragraf setelah list tidak sesuai"
                     : "First line indent paragraf tidak sesuai";
+                if (firstLineObservation.HasLeadingManualIndent)
+                    message += " karena diawali spasi/tab";
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
                     Field = "paragraf",
                     Message = message,
                     Expected = expectedFirstLineIndent.Value.ToString(CultureInfo.InvariantCulture) + " cm",
-                    Actual = firstLineCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                    Actual = firstLineObservation.DisplayActual,
                     Evidence = evidence,
                     Locations = locations
                 });

@@ -30,4 +30,8 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="TmpDoc2048ExtractionCheckTests.cs" />
+  </ItemGroup>
 </Project>

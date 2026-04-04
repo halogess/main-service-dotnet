@@ -68,6 +68,7 @@ public partial class ValidationService
         var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         CodeRule? codeRule = null;
         CodeTitleRule? titleRule = null;
+        var paragraphRule = await LoadParagraphRuleAsync(aturan.AturanId, "blank code paragraph validation", cancellationToken);
 
         try
         {
@@ -130,6 +131,13 @@ public partial class ValidationService
         var pageMarginsById = await LoadPageMarginsAsync(orderedElementIds, cancellationToken);
         var neighborContexts = BuildNeighborContexts(orderedElementIds, elementJsonById, labelMap, pageMarginsById);
         var pageLayoutsById = await LoadPageLayoutsAsync(orderedElementIds, cancellationToken);
+        var visualSummaryById = await LoadVisualElementSummariesAsync(orderedElementIds, cancellationToken);
+        var elementIndexById = bodyElements
+            .Select((element, index) => new { element.DelemenId, Index = index })
+            .ToDictionary(item => item.DelemenId, item => item.Index);
+        var elementContentById = bodyElements.ToDictionary(
+            element => element.DelemenId,
+            element => ParseElementContent(element.DelemenJsonTree));
         var titlePrefixes = BuildCaptionPrefixes(titleRule?.Numbering);
         if (titlePrefixes.Count == 0)
         {
@@ -418,136 +426,206 @@ public partial class ValidationService
             codeErrorStart,
             codeMergeSetKeyByElementId);
 
-        if (titleRule == null)
-            return result;
-
         var usedCaptionIds = new HashSet<ulong>();
 
         for (var i = 0; i < codeBlocks.Count; i++)
         {
             var block = codeBlocks[i];
             var blockLocations = await BuildElementLocationsAsync(block.ElementIds, cancellationToken);
-
-            var nextBlockStart = i + 1 < codeBlocks.Count ? codeBlocks[i + 1].StartIndex : int.MaxValue;
-            var prevBlockEnd = i > 0 ? codeBlocks[i - 1].EndIndex : -1;
-
-            CaptionInfo? captionAfter = captionCandidates.FirstOrDefault(c =>
-                !usedCaptionIds.Contains(c.ElementId) &&
-                c.OrderIndex > block.EndIndex &&
-                c.OrderIndex < nextBlockStart);
-
-            CaptionInfo? captionBefore = captionCandidates.LastOrDefault(c =>
-                !usedCaptionIds.Contains(c.ElementId) &&
-                c.OrderIndex < block.StartIndex &&
-                c.OrderIndex > prevBlockEnd);
-
             CaptionInfo? selectedCaption = null;
-            var positionRule = titleRule.Position?.Value?.Trim();
-            var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
-                ? normalizedTitlePosition
-                : positionRule.ToLowerInvariant();
 
-            if (normalizedPosition == "after")
+            if (titleRule != null && IsContinuationCaptionRequired(titleRule.WajibCaptionLanjutanJikaLintasHalaman))
             {
-                if (captionAfter != null)
+                result.IncrementTotalChecks();
+                if (SpansMultiplePages(blockLocations))
                 {
-                    selectedCaption = captionAfter;
-                }
-                else if (captionBefore != null)
-                {
-                    result.IncrementTotalChecks();
                     result.Errors.Add(new ValidationError
                     {
                         Category = "Isi Buku",
                         Field = "judul_kode",
-                        Message = "Posisi judul kode harus setelah kode",
-                        Expected = "after",
-                        Actual = "before",
+                        Message = "Kode lintas halaman harus memiliki caption lanjutan",
+                        Expected = "Kode yang berlanjut ke halaman berikutnya harus dipecah per halaman dan bagian lanjutan diberi judul '(Lanjutan)'",
+                        Actual = $"Satu blok kode terdeteksi melintasi halaman {DescribeLocationPages(blockLocations)}",
                         Evidence = block.Evidence,
                         Locations = blockLocations
                     });
                 }
                 else
                 {
-                    result.IncrementTotalChecks();
-                    result.Errors.Add(new ValidationError
-                    {
-                        Category = "Isi Buku",
-                        Field = "judul_kode",
-                        Message = "Judul kode tidak ditemukan",
-                        Expected = "Judul setelah kode",
-                        Actual = "Tidak ada judul",
-                        Evidence = block.Evidence,
-                        Locations = blockLocations
-                    });
+                    result.IncrementPassedChecks();
                 }
             }
-            else if (normalizedPosition == "before")
+
+            if (titleRule != null)
             {
-                if (captionBefore != null)
+                var nextBlockStart = i + 1 < codeBlocks.Count ? codeBlocks[i + 1].StartIndex : int.MaxValue;
+                var prevBlockEnd = i > 0 ? codeBlocks[i - 1].EndIndex : -1;
+
+                CaptionInfo? captionAfter = captionCandidates.FirstOrDefault(c =>
+                    !usedCaptionIds.Contains(c.ElementId) &&
+                    c.OrderIndex > block.EndIndex &&
+                    c.OrderIndex < nextBlockStart);
+
+                CaptionInfo? captionBefore = captionCandidates.LastOrDefault(c =>
+                    !usedCaptionIds.Contains(c.ElementId) &&
+                    c.OrderIndex < block.StartIndex &&
+                    c.OrderIndex > prevBlockEnd);
+
+                var positionRule = titleRule.Position?.Value?.Trim();
+                var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
+                    ? normalizedTitlePosition
+                    : positionRule.ToLowerInvariant();
+
+                if (normalizedPosition == "after")
                 {
-                    selectedCaption = captionBefore;
-                }
-                else if (captionAfter != null)
-                {
-                    result.IncrementTotalChecks();
-                    result.Errors.Add(new ValidationError
+                    if (captionAfter != null)
                     {
-                        Category = "Isi Buku",
-                        Field = "judul_kode",
-                        Message = "Posisi judul kode harus sebelum kode",
-                        Expected = "before",
-                        Actual = "after",
-                        Evidence = block.Evidence,
-                        Locations = blockLocations
-                    });
+                        selectedCaption = captionAfter;
+                    }
+                    else if (captionBefore != null)
+                    {
+                        result.IncrementTotalChecks();
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_kode",
+                            Message = "Posisi judul kode harus setelah kode",
+                            Expected = "after",
+                            Actual = "before",
+                            Evidence = block.Evidence,
+                            Locations = blockLocations
+                        });
+                    }
+                    else
+                    {
+                        result.IncrementTotalChecks();
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_kode",
+                            Message = "Judul kode tidak ditemukan",
+                            Expected = "Judul setelah kode",
+                            Actual = "Tidak ada judul",
+                            Evidence = block.Evidence,
+                            Locations = blockLocations
+                        });
+                    }
+                }
+                else if (normalizedPosition == "before")
+                {
+                    if (captionBefore != null)
+                    {
+                        selectedCaption = captionBefore;
+                    }
+                    else if (captionAfter != null)
+                    {
+                        result.IncrementTotalChecks();
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_kode",
+                            Message = "Posisi judul kode harus sebelum kode",
+                            Expected = "before",
+                            Actual = "after",
+                            Evidence = block.Evidence,
+                            Locations = blockLocations
+                        });
+                    }
+                    else
+                    {
+                        result.IncrementTotalChecks();
+                        result.Errors.Add(new ValidationError
+                        {
+                            Category = "Isi Buku",
+                            Field = "judul_kode",
+                            Message = "Judul kode tidak ditemukan",
+                            Expected = "Judul sebelum kode",
+                            Actual = "Tidak ada judul",
+                            Evidence = block.Evidence,
+                            Locations = blockLocations
+                        });
+                    }
                 }
                 else
                 {
-                    result.IncrementTotalChecks();
-                    result.Errors.Add(new ValidationError
+                    selectedCaption = captionAfter ?? captionBefore;
+                }
+
+                if (selectedCaption != null)
+                {
+                    usedCaptionIds.Add(selectedCaption.ElementId);
+                    var captionLocations = await BuildElementLocationsAsync(selectedCaption.ElementId, cancellationToken);
+                    var captionErrorStart = result.Errors.Count;
+
+                    var captionTextFormats = selectedCaption.Content.TextFormatIds
+                        .Select(id => textFormats.TryGetValue(id, out var tf) ? tf : null)
+                        .Where(tf => tf != null)
+                        .ToList();
+
+                    ValidateCaptionFont(result, titleRule.Font, selectedCaption, captionTextFormats!, "judul_kode", "judul kode", captionLocations);
+
+                    if (selectedCaption.Content.ParagraphFormatId.HasValue &&
+                        paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId.Value, out var captionFormat))
                     {
-                        Category = "Isi Buku",
-                        Field = "judul_kode",
-                        Message = "Judul kode tidak ditemukan",
-                        Expected = "Judul sebelum kode",
-                        Actual = "Tidak ada judul",
-                        Evidence = block.Evidence,
-                        Locations = blockLocations
-                    });
+                        pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
+                        ValidateCaptionParagraphFormat(result, titleRule.Paragraph, captionFormat, "judul_kode", "judul kode", selectedCaption.NormalizedText, selectedCaption.Content.PlainText, captionLocations, captionPageLayout);
+                    }
+
+                    ValidateCaptionNumbering(result, titleRule.Numbering, selectedCaption, "judul_kode", "judul kode", captionLocations);
+
+                    if (neighborContexts.TryGetValue(selectedCaption.ElementId, out var captionContext))
+                        ApplyContextToErrors(result.Errors, captionErrorStart, captionContext);
+
+                    ApplyElementIdToErrors(result.Errors, captionErrorStart, selectedCaption.ElementId);
                 }
             }
-            else
-            {
-                selectedCaption = captionAfter ?? captionBefore;
-            }
+
+            var blockLocationIds = new List<ulong>(block.ElementIds);
+            var blockStartIndex = block.StartIndex;
+            var blockEndIndex = block.EndIndex;
+            var blockStartElementId = bodyElements[blockStartIndex].DelemenId;
+            var blockEndElementId = bodyElements[blockEndIndex].DelemenId;
 
             if (selectedCaption != null)
             {
-                usedCaptionIds.Add(selectedCaption.ElementId);
-                var captionLocations = await BuildElementLocationsAsync(selectedCaption.ElementId, cancellationToken);
-                var captionErrorStart = result.Errors.Count;
-
-                var captionTextFormats = selectedCaption.Content.TextFormatIds
-                    .Select(id => textFormats.TryGetValue(id, out var tf) ? tf : null)
-                    .Where(tf => tf != null)
-                    .ToList();
-
-                ValidateCaptionFont(result, titleRule.Font, selectedCaption, captionTextFormats!, "judul_kode", "judul kode", captionLocations);
-
-                if (selectedCaption.Content.ParagraphFormatId.HasValue &&
-                    paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId.Value, out var captionFormat))
+                blockLocationIds.Add(selectedCaption.ElementId);
+                if (elementIndexById.TryGetValue(selectedCaption.ElementId, out var captionIndex))
                 {
-                    pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
-                    ValidateCaptionParagraphFormat(result, titleRule.Paragraph, captionFormat, "judul_kode", "judul kode", selectedCaption.NormalizedText, captionLocations, captionPageLayout);
+                    if (captionIndex < blockStartIndex)
+                    {
+                        blockStartIndex = captionIndex;
+                        blockStartElementId = selectedCaption.ElementId;
+                    }
+
+                    if (captionIndex > blockEndIndex)
+                    {
+                        blockEndIndex = captionIndex;
+                        blockEndElementId = selectedCaption.ElementId;
+                    }
                 }
+            }
 
-                ValidateCaptionNumbering(result, titleRule.Numbering, selectedCaption, "judul_kode", "judul kode", captionLocations);
-
-                if (neighborContexts.TryGetValue(selectedCaption.ElementId, out var captionContext))
-                    ApplyContextToErrors(result.Errors, captionErrorStart, captionContext);
-
-                ApplyElementIdToErrors(result.Errors, captionErrorStart, selectedCaption.ElementId);
+            if (codeRule != null)
+            {
+                await ValidateMediaBlankParagraphStructureAsync(
+                    result,
+                    field: "kode",
+                    elementLabel: "blok kode",
+                    evidence: block.Evidence,
+                    startIndex: blockStartIndex,
+                    startElementId: blockStartElementId,
+                    endIndex: blockEndIndex,
+                    endElementId: blockEndElementId,
+                    locationElementIds: blockLocationIds,
+                    primaryElementId: block.ElementIds.First(),
+                    bodyElements: bodyElements,
+                    elementContentById: elementContentById,
+                    elementJsonById: elementJsonById,
+                    visualSummaryById: visualSummaryById,
+                    contextById: neighborContexts,
+                    paragraphRule: paragraphRule,
+                    structureRule: codeRule.StrukturKonten,
+                    cancellationToken: cancellationToken);
             }
         }
 
@@ -794,6 +872,37 @@ public partial class ValidationService
             .ToList();
 
         return pages.Count == 1 ? pages[0] : null;
+    }
+
+    private static bool SpansMultiplePages(IReadOnlyList<ErrorLocation>? locations)
+    {
+        if (locations == null || locations.Count == 0)
+            return false;
+
+        return locations
+            .Select(loc => loc.HalamanKe)
+            .Where(page => page > 0)
+            .Distinct()
+            .Take(2)
+            .Count() > 1;
+    }
+
+    private static string DescribeLocationPages(IReadOnlyList<ErrorLocation>? locations)
+    {
+        if (locations == null || locations.Count == 0)
+            return "yang tidak teridentifikasi";
+
+        var pages = locations
+            .Select(loc => loc.HalamanKe)
+            .Where(page => page > 0)
+            .Distinct()
+            .OrderBy(page => page)
+            .Select(page => page.ToString(CultureInfo.InvariantCulture))
+            .ToList();
+
+        return pages.Count == 0
+            ? "yang tidak teridentifikasi"
+            : string.Join(", ", pages);
     }
 
     private static string BuildActionToken(IReadOnlyList<string>? actions)

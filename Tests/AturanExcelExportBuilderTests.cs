@@ -412,6 +412,10 @@ public class AturanExcelExportBuilderTests
                                         {
                                           "gutter": {
                                             "position": { "value": "left", "is_editable": true, "is_hard_constraint": false }
+                                          },
+                                          "akhir_halaman": {
+                                            "max_baris_kosong": { "value": 3, "is_editable": true, "is_hard_constraint": false },
+                                            "cegah_halaman_kosong": { "value": true, "is_editable": true, "is_hard_constraint": false }
                                           }
                                         }
                                         """
@@ -485,6 +489,18 @@ public class AturanExcelExportBuilderTests
             row.Note == "Nilai yang tersedia: left, top");
 
         Assert.Contains(rows, row =>
+            row.Elemen == "page_settings" &&
+            row.Kategori == "Akhir Halaman" &&
+            row.Kriteria == "Max Baris Kosong (baris)" &&
+            row.Note == "Angka bulat jumlah baris kosong di akhir halaman. Default: 3");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "page_settings" &&
+            row.Kategori == "Akhir Halaman" &&
+            row.Kriteria == "Cegah Halaman Kosong" &&
+            row.Note == "Nilai yang tersedia: true, false");
+
+        Assert.Contains(rows, row =>
             row.Elemen == "kode" &&
             row.Kriteria == "Number Format" &&
             row.Note == "Nilai yang tersedia: none, %1, %01");
@@ -503,5 +519,93 @@ public class AturanExcelExportBuilderTests
             row.Elemen == "rumus" &&
             row.Kriteria == "Leader Style" &&
             row.Note == "Nilai yang tersedia: none, dots, dash, underline");
+    }
+
+    [Fact]
+    public void BuildRows_ShouldDescribeMediaBlankParagraphStructureRulesClearly()
+    {
+        var details = new List<AturanDetail>
+        {
+            new()
+            {
+                AturanDetailId = 60,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "gambar",
+                AturanDetailJsonValue =
+                    """
+                    {
+                      "gambar": {
+                        "struktur_konten": {
+                          "jumlah_baris_kosong_sebelum": { "value": 1, "is_editable": true, "is_hard_constraint": false },
+                          "jumlah_baris_kosong_setelah": { "value": 1, "is_editable": true, "is_hard_constraint": false },
+                          "abaikan_jika_di_awal_halaman": { "value": true, "is_editable": true, "is_hard_constraint": false }
+                        }
+                      }
+                    }
+                    """
+            }
+        };
+
+        var rows = AturanExcelExportBuilder.BuildRows(details);
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "gambar" &&
+            row.Kategori == "Struktur Konten" &&
+            row.Kriteria == "Jumlah Baris Kosong Sebelum (baris)" &&
+            row.Note == "Angka bulat jumlah baris kosong sebelum blok elemen. Default: 1");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "gambar" &&
+            row.Kategori == "Struktur Konten" &&
+            row.Kriteria == "Jumlah Baris Kosong Setelah (baris)" &&
+            row.Note == "Angka bulat jumlah baris kosong sesudah blok elemen. Default: 1");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "gambar" &&
+            row.Kategori == "Struktur Konten" &&
+            row.Kriteria == "Abaikan Jika Di Awal Halaman" &&
+            row.Note == "Nilai yang tersedia: true, false");
+    }
+
+    [Fact]
+    public void BuildRows_ShouldNotEmitFontSizeForTableContentRule()
+    {
+        var details = new List<AturanDetail>
+        {
+            new()
+            {
+                AturanDetailId = 61,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "tabel",
+                AturanDetailJsonValue =
+                    """
+                    {
+                      "tabel": {
+                        "konten_tabel": {
+                          "font": {
+                            "font_name": { "value": "Times New Roman", "is_editable": true, "is_hard_constraint": false },
+                            "font_size": { "value": 12, "is_editable": true, "is_hard_constraint": false }
+                          }
+                        }
+                      }
+                    }
+                    """
+            }
+        };
+
+        var rows = AturanExcelExportBuilder.BuildRows(details);
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "tabel" &&
+            row.Kategori == "Konten Tabel" &&
+            row.SubKategori == "Font" &&
+            row.Kriteria == "Font Name" &&
+            row.ValueText == "Times New Roman");
+
+        Assert.DoesNotContain(rows, row =>
+            row.Elemen == "tabel" &&
+            row.Kategori == "Konten Tabel" &&
+            row.SubKategori == "Font" &&
+            row.Kriteria == "Font Size (pt)");
     }
 }

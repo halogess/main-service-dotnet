@@ -3,6 +3,7 @@ using _.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Controllers
 {
@@ -13,12 +14,18 @@ namespace ValidasiTugasAkhir.MainService.Controllers
         private readonly IMahasiswaService _mahasiswaService;
         private readonly KorektorBukuDbContext _db;
         private readonly SttsDbContext _sttsDb;
+        private readonly IExtractionArtifactCleanupService _cleanupService;
 
-        public MahasiswaController(IMahasiswaService mahasiswaService, KorektorBukuDbContext db, SttsDbContext sttsDb)
+        public MahasiswaController(
+            IMahasiswaService mahasiswaService,
+            KorektorBukuDbContext db,
+            SttsDbContext sttsDb,
+            IExtractionArtifactCleanupService cleanupService)
         {
             _mahasiswaService = mahasiswaService;
             _db = db;
             _sttsDb = sttsDb;
+            _cleanupService = cleanupService;
         }
 
 
@@ -69,29 +76,137 @@ namespace ValidasiTugasAkhir.MainService.Controllers
         }
 
         [HttpDelete("nonaktif/buku")]
-        public async Task<IActionResult> HapusBukuNonaktif([FromBody] HapusBukuRequest request)
+        public async Task<IActionResult> HapusBukuNonaktif([FromBody] HapusBukuRequest? request)
         {
             if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
+            if (request?.mahasiswa == null || request.mahasiswa.Count == 0)
+                return BadRequest(new { message = "Daftar mahasiswa yang akan dihapus tidak boleh kosong" });
+
             var deleted = 0;
             var errors = new List<string>();
             var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
+            var fullStoragePath = Path.GetFullPath(storagePath);
 
             foreach (var mhs in request.mahasiswa)
             {
+                if (string.IsNullOrWhiteSpace(mhs.nrp))
+                {
+                    errors.Add("NRP mahasiswa tidak boleh kosong");
+                    continue;
+                }
+
+                var requestedBukuIds = mhs.buku_ids
+                    .Where(id => id > 0)
+                    .Distinct()
+                    .ToList();
+
+                if (requestedBukuIds.Count == 0)
+                {
+                    errors.Add($"{mhs.nrp}: buku_ids tidak boleh kosong");
+                    continue;
+                }
+
                 try
                 {
-                    var bukus = await _db.Bukus.Where(b => mhs.buku_ids.Contains(b.BukuId)).ToListAsync();
-                    var babs = await _db.Babs.Where(b => mhs.buku_ids.Contains((int)b.BukuId)).ToListAsync();
+                    var mahasiswa = await _sttsDb.Mahasiswas
+                        .AsNoTracking()
+                        .Where(item => item.MhsNrp == mhs.nrp)
+                        .Select(item => new
+                        {
+                            item.MhsNrp,
+                            item.MhsStatus,
+                            item.MhsLulusTahun
+                        })
+                        .FirstOrDefaultAsync();
+
+                    if (mahasiswa == null)
+                    {
+                        errors.Add($"{mhs.nrp}: mahasiswa tidak ditemukan");
+                        continue;
+                    }
+
+                    if (mahasiswa.MhsStatus == 1 && string.IsNullOrWhiteSpace(mahasiswa.MhsLulusTahun))
+                    {
+                        errors.Add($"{mhs.nrp}: mahasiswa masih aktif");
+                        continue;
+                    }
+
+                    await using var transaction = _db.Database.IsRelational()
+                        ? await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted)
+                        : null;
+
+                    var bukus = await _db.Bukus
+                        .Where(b => b.MhsNrp == mhs.nrp && requestedBukuIds.Contains(b.BukuId))
+                        .ToListAsync();
+
+                    if (bukus.Count == 0)
+                    {
+                        errors.Add($"{mhs.nrp}: buku tidak ditemukan");
+                        continue;
+                    }
+
+                    var resolvedBukuIds = bukus
+                        .Select(b => b.BukuId)
+                        .Distinct()
+                        .ToList();
+
+                    var missingBukuIds = requestedBukuIds
+                        .Except(resolvedBukuIds)
+                        .ToList();
+
+                    if (missingBukuIds.Count > 0)
+                    {
+                        errors.Add(
+                            $"{mhs.nrp}: buku {string.Join(", ", missingBukuIds)} tidak ditemukan atau bukan milik mahasiswa");
+                    }
+
+                    var babs = await _db.Babs
+                        .Where(b => resolvedBukuIds.Contains((int)b.BukuId))
+                        .ToListAsync();
+                    var babIds = babs
+                        .Select(b => b.BabId)
+                        .Distinct()
+                        .ToList();
+
+                    foreach (var babId in babIds)
+                        await _cleanupService.ResetAsync("bab", babId, HttpContext.RequestAborted);
+
+                    var kesalahans = babIds.Count == 0
+                        ? new List<Kesalahan>()
+                        : await _db.Kesalahans
+                            .Where(k => k.KesalahanRefTipe == KesalahanRefTipe.bab && babIds.Contains(k.KesalahanRefId))
+                            .ToListAsync();
+
+                    var antrians = await _db.Antrians
+                        .Where(a => a.AntrianTipe == "buku" &&
+                                    ((a.BukuId.HasValue && resolvedBukuIds.Contains((int)a.BukuId.Value)) ||
+                                     (a.BabId.HasValue && babIds.Contains(a.BabId.Value))))
+                        .ToListAsync();
+
+                    if (kesalahans.Count > 0)
+                        _db.Kesalahans.RemoveRange(kesalahans);
+
+                    if (antrians.Count > 0)
+                        _db.Antrians.RemoveRange(antrians);
 
                     _db.Babs.RemoveRange(babs);
                     _db.Bukus.RemoveRange(bukus);
                     await _db.SaveChangesAsync();
 
-                    foreach (var bukuId in mhs.buku_ids)
+                    if (transaction != null)
+                        await transaction.CommitAsync(HttpContext.RequestAborted);
+
+                    foreach (var bukuId in resolvedBukuIds)
                     {
-                        var bukuDir = Path.Combine(storagePath, "buku", mhs.nrp, bukuId.ToString());
+                        var bukuDir = BuildSafeBukuDirectory(fullStoragePath, storagePath, mhs.nrp, bukuId);
+                        if (string.IsNullOrWhiteSpace(bukuDir))
+                        {
+                            errors.Add($"{mhs.nrp}: path storage buku {bukuId} tidak valid");
+                            continue;
+                        }
+
                         if (Directory.Exists(bukuDir))
                             Directory.Delete(bukuDir, true);
                     }
@@ -118,12 +233,14 @@ namespace ValidasiTugasAkhir.MainService.Controllers
 
             var mahasiswaQuery = _sttsDb.Mahasiswas
                 .Where(m => allNrps.Contains(m.MhsNrp) && (!m.MhsStatus.HasValue || m.MhsStatus.Value != 1));
-            
-            if (!string.IsNullOrEmpty(angkatan))
-                mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsAngkatan.ToString() == angkatan);
-            
-            if (!string.IsNullOrEmpty(jurusan))
-                mahasiswaQuery = mahasiswaQuery.Where(m => m.JurKode == jurusan);
+
+            var angkatanFilters = ParseCsvIntValues(angkatan);
+            if (angkatanFilters.Count > 0)
+                mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsAngkatan.HasValue && angkatanFilters.Contains(m.MhsAngkatan.Value));
+
+            var jurusanFilters = ParseCsvValues(jurusan);
+            if (jurusanFilters.Count > 0)
+                mahasiswaQuery = mahasiswaQuery.Where(m => m.JurKode != null && jurusanFilters.Contains(m.JurKode));
             
             if (!string.IsNullOrEmpty(search))
                 mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsNrp.Contains(search) || (m.MhsNama != null && m.MhsNama.Contains(search)));
@@ -201,6 +318,34 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                 7 => "tidak-perwalian",
                 _ => "tidak-aktif"
             };
+        }
+
+        private static HashSet<string> ParseCsvValues(string? rawValue)
+        {
+            return rawValue?
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+                ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        private static HashSet<int> ParseCsvIntValues(string? rawValue)
+        {
+            return rawValue?
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(item => int.TryParse(item, out var value) ? (int?)value : null)
+                .Where(item => item.HasValue)
+                .Select(item => item!.Value)
+                .ToHashSet()
+                ?? new HashSet<int>();
+        }
+
+        private static string? BuildSafeBukuDirectory(string fullStoragePath, string storagePath, string nrp, int bukuId)
+        {
+            var candidate = Path.GetFullPath(Path.Combine(storagePath, "buku", nrp, bukuId.ToString()));
+            return candidate.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase)
+                ? candidate
+                : null;
         }
     }
 }

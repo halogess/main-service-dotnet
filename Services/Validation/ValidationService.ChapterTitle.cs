@@ -51,6 +51,11 @@ public partial class ValidationService
             return result;
         }
 
+        var paragraphRule = await LoadParagraphRuleAsync(
+            aturan.AturanId,
+            "blank chapter title paragraph validation",
+            cancellationToken);
+
         ChapterTitleRule? rule = null;
         try
         {
@@ -231,6 +236,7 @@ public partial class ValidationService
         }
 
         var titleLines = ExtractTitleLines(titleBlock);
+        var trailingEmptyTitleLineCount = CountTrailingEmptyLines(titleLines);
         var numberLine = titleLines.FirstOrDefault() ?? string.Empty;
         var titleLineCandidates = titleLines.Skip(1).ToList();
         var titleLinesNonEmpty = titleLineCandidates.Where(line => !string.IsNullOrWhiteSpace(line)).ToList();
@@ -260,10 +266,11 @@ public partial class ValidationService
         }
 
         var numberFormat = rule?.Numbering?.NumberFormat?.Value;
+        var numberCaseRule = rule?.Numbering?.Case?.Value;
         if (!string.IsNullOrWhiteSpace(numberFormat))
         {
             result.IncrementTotalChecks();
-            if (MatchesNumberFormat(numberLine, numberFormat, rule?.Numbering?.Case?.Value))
+            if (MatchesNumberFormat(numberLine, numberFormat, numberCaseRule))
             {
                 result.IncrementPassedChecks();
             }
@@ -275,6 +282,30 @@ public partial class ValidationService
                     Field = "judul_bab",
                     Message = "Format nomor bab tidak sesuai",
                     Expected = numberFormat,
+                    Actual = numberLine
+                });
+            }
+        }
+
+        var expectedBabOrder = await ResolveExpectedBabOrderAsync(cancellationToken);
+        var actualChapterNumber = expectedBabOrder.HasValue
+            ? TryExtractChapterNumberFromTitle(numberLine)
+            : null;
+        if (expectedBabOrder.HasValue && actualChapterNumber.HasValue)
+        {
+            result.IncrementTotalChecks();
+            if (actualChapterNumber.Value == expectedBabOrder.Value)
+            {
+                result.IncrementPassedChecks();
+            }
+            else
+            {
+                result.Errors.Add(new ValidationError
+                {
+                    Category = "Isi Buku",
+                    Field = "judul_bab",
+                    Message = "Nomor bab tidak sesuai dengan urutan bab",
+                    Expected = BuildExpectedChapterNumberLine(numberFormat, expectedBabOrder.Value, numberCaseRule),
                     Actual = numberLine
                 });
             }
@@ -339,7 +370,8 @@ public partial class ValidationService
 
         if (expectedEmptyLineCount > 0)
         {
-            var emptyLineCount = 0;
+            var emptyLineCount = trailingEmptyTitleLineCount;
+            var blankParagraphElementIds = new List<ulong>();
             var emptyIndex = nextElementIndex;
             while (emptyIndex >= 0 && emptyIndex < bodyElements.Count)
             {
@@ -347,6 +379,8 @@ public partial class ValidationService
                 if (!IsEmptyElement(emptyContent))
                     break;
 
+                contentById[bodyElements[emptyIndex].DelemenId] = emptyContent;
+                blankParagraphElementIds.Add(bodyElements[emptyIndex].DelemenId);
                 emptyLineCount++;
                 emptyIndex++;
             }
@@ -356,11 +390,24 @@ public partial class ValidationService
             {
                 result.IncrementPassedChecks();
 
-                await ValidateEmptyParagraphFontSizeAsync(
-                    result,
-                    rule,
-                    bodyElements[nextElementIndex].DelemenId,
-                    cancellationToken);
+                if (paragraphRule != null && blankParagraphElementIds.Count > 0)
+                {
+                    await ValidateBlankParagraphFormatTargetsAsync(
+                        result,
+                        [
+                            new BlankParagraphFormatValidationTarget
+                            {
+                                Field = "judul_bab",
+                                SubjectLabel = "baris kosong setelah judul bab",
+                                Evidence = titleAlignmentText,
+                                BlankElementIds = blankParagraphElementIds
+                            }
+                        ],
+                        contentById,
+                        elementJsonById,
+                        paragraphRule,
+                        cancellationToken);
+                }
             }
             else
             {
@@ -368,9 +415,9 @@ public partial class ValidationService
                 {
                     Category = "Isi Buku",
                     Field = "judul_bab",
-                    Message = "Jumlah paragraf kosong setelah judul bab tidak sesuai",
-                    Expected = $"Tepat {expectedEmptyLineCount} paragraf kosong",
-                    Actual = $"{emptyLineCount} paragraf kosong"
+                    Message = "Jumlah baris kosong setelah judul bab tidak sesuai",
+                    Expected = $"Tepat {expectedEmptyLineCount} baris kosong",
+                    Actual = $"{emptyLineCount} baris kosong"
                 });
             }
         }
@@ -432,7 +479,8 @@ public partial class ValidationService
             titleParagraphs!,
             rule?.Paragraph?.Indentation,
             field: "judul_bab",
-            subjectLabel: "judul bab");
+            subjectLabel: "judul bab",
+            paragraphTexts: titleBlock.Select(content => content.PlainText).ToList());
 
         var spacingRule = rule?.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true && titleParagraphs.Count > 0)
@@ -962,7 +1010,7 @@ public partial class ValidationService
                     {
                         Category = "Isi Buku",
                         Field = "judul_bab",
-                        Message = "Ukuran font paragraf kosong setelah judul bab tidak sesuai dengan judul",
+                        Message = "Ukuran font baris kosong setelah judul bab tidak sesuai dengan judul",
                         Expected = expectedFontSize.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) + " pt",
                         Actual = string.Join(", ", actuals.Select(a => (a!.Value / 2m).ToString(System.Globalization.CultureInfo.InvariantCulture) + " pt")),
                         IsRequired = false // Non-required check
@@ -1004,84 +1052,7 @@ public partial class ValidationService
         try
         {
             using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("dfp_id", out var dfpEl) && dfpEl.TryGetUInt32(out var dfpId))
-                info.ParagraphFormatId = dfpId;
-
-            if (root.TryGetProperty("text", out var textEl) && textEl.ValueKind == JsonValueKind.String)
-            {
-                info.PlainText = textEl.GetString() ?? string.Empty;
-                info.TextRuns.Add(new TextRunInfo { Text = info.PlainText });
-                return info;
-            }
-
-            if (root.TryGetProperty("content", out var contentEl) && contentEl.ValueKind == JsonValueKind.Array)
-            {
-                var sb = new StringBuilder();
-                foreach (var item in contentEl.EnumerateArray())
-                {
-                    if (item.ValueKind != JsonValueKind.Object)
-                        continue;
-
-                    var type = item.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.String
-                        ? typeEl.GetString()
-                        : null;
-
-                    if (type == "text" || type == "field")
-                    {
-                        if (type == "field" &&
-                            item.TryGetProperty("field_type", out var fieldTypeEl) &&
-                            fieldTypeEl.ValueKind == JsonValueKind.String &&
-                            string.Equals(fieldTypeEl.GetString(), "PAGE", StringComparison.OrdinalIgnoreCase))
-                        {
-                            info.HasPageField = true;
-                        }
-
-                        var value = item.TryGetProperty("value", out var valueEl) && valueEl.ValueKind == JsonValueKind.String
-                            ? valueEl.GetString()
-                            : null;
-
-                        if (!string.IsNullOrEmpty(value))
-                            sb.Append(value);
-
-                        uint? runFormatId = null;
-                        if (type == "field" &&
-                            item.TryGetProperty("result_dftx_id", out var resultEl) &&
-                            resultEl.TryGetUInt32(out var resultId))
-                        {
-                            runFormatId = resultId;
-                        }
-                        else if (item.TryGetProperty("dftx_id", out var dftxEl) && dftxEl.TryGetUInt32(out var dftxId))
-                        {
-                            runFormatId = dftxId;
-                        }
-
-                        if (runFormatId.HasValue)
-                            info.TextFormatIds.Add(runFormatId.Value);
-
-                        if (!string.IsNullOrEmpty(value))
-                        {
-                            info.TextRuns.Add(new TextRunInfo
-                            {
-                                Text = value,
-                                TextFormatId = runFormatId
-                            });
-                        }
-                    }
-                    else if (type == "math")
-                    {
-                        if (item.TryGetProperty("text", out var mathEl) && mathEl.ValueKind == JsonValueKind.String)
-                            sb.Append(mathEl.GetString());
-                    }
-                    else
-                    {
-                        info.HasNonTextContent = true;
-                    }
-                }
-
-                info.PlainText = sb.ToString();
-            }
+            ParseElementContent(doc.RootElement, info);
         }
         catch (JsonException)
         {
@@ -1089,6 +1060,108 @@ public partial class ValidationService
         }
 
         return info;
+    }
+
+    private static void ParseElementContent(JsonElement element, ElementContentInfo info)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return;
+
+        if (!info.ParagraphFormatId.HasValue &&
+            element.TryGetProperty("dfp_id", out var dfpEl) &&
+            dfpEl.TryGetUInt32(out var dfpId))
+        {
+            info.ParagraphFormatId = dfpId;
+        }
+
+        if (element.TryGetProperty("text", out var textEl) &&
+            textEl.ValueKind == JsonValueKind.String &&
+            !element.TryGetProperty("content", out var ignoredContent))
+        {
+            AppendTextRun(info, textEl.GetString(), null);
+            return;
+        }
+
+        if (!element.TryGetProperty("content", out var contentEl) || contentEl.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var item in contentEl.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var type = item.TryGetProperty("type", out var typeEl) && typeEl.ValueKind == JsonValueKind.String
+                ? typeEl.GetString()
+                : null;
+
+            if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(type, "field", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(type, "field", StringComparison.OrdinalIgnoreCase) &&
+                    item.TryGetProperty("field_type", out var fieldTypeEl) &&
+                    fieldTypeEl.ValueKind == JsonValueKind.String &&
+                    string.Equals(fieldTypeEl.GetString(), "PAGE", StringComparison.OrdinalIgnoreCase))
+                {
+                    info.HasPageField = true;
+                }
+
+                var value = item.TryGetProperty("value", out var valueEl) && valueEl.ValueKind == JsonValueKind.String
+                    ? valueEl.GetString()
+                    : item.TryGetProperty("text", out var altTextEl) && altTextEl.ValueKind == JsonValueKind.String
+                        ? altTextEl.GetString()
+                        : null;
+
+                uint? runFormatId = null;
+                if (string.Equals(type, "field", StringComparison.OrdinalIgnoreCase) &&
+                    item.TryGetProperty("result_dftx_id", out var resultEl) &&
+                    resultEl.TryGetUInt32(out var resultId))
+                {
+                    runFormatId = resultId;
+                }
+                else if (item.TryGetProperty("dftx_id", out var dftxEl) && dftxEl.TryGetUInt32(out var dftxId))
+                {
+                    runFormatId = dftxId;
+                }
+
+                AppendTextRun(info, value, runFormatId);
+                continue;
+            }
+
+            if (string.Equals(type, "math", StringComparison.OrdinalIgnoreCase))
+            {
+                var mathText = item.TryGetProperty("text", out var mathEl) && mathEl.ValueKind == JsonValueKind.String
+                    ? mathEl.GetString()
+                    : null;
+                AppendTextRun(info, mathText, null);
+                continue;
+            }
+
+            if (item.TryGetProperty("content", out var nestedContent))
+            {
+                info.HasNonTextContent = true;
+                ParseElementContent(item, info);
+            }
+            else
+            {
+                info.HasNonTextContent = true;
+            }
+        }
+    }
+
+    private static void AppendTextRun(ElementContentInfo info, string? text, uint? formatId)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        info.PlainText += text;
+        if (formatId.HasValue)
+            info.TextFormatIds.Add(formatId.Value);
+
+        info.TextRuns.Add(new TextRunInfo
+        {
+            Text = text,
+            TextFormatId = formatId
+        });
     }
 
     private static Dictionary<uint, DokumenFormatText> BuildTextFormatMap(IEnumerable<DokumenFormatText> textFormats)
@@ -1258,6 +1331,20 @@ public partial class ValidationService
         }
 
         return lines;
+    }
+
+    private static int CountTrailingEmptyLines(IReadOnlyList<string> lines)
+    {
+        var count = 0;
+        for (var index = lines.Count - 1; index >= 0; index--)
+        {
+            if (!string.IsNullOrWhiteSpace(lines[index]))
+                break;
+
+            count++;
+        }
+
+        return count;
     }
 
     private static bool IsEmptyElement(ElementContentInfo content)
@@ -1864,6 +1951,62 @@ public partial class ValidationService
         return false;
     }
 
+    private async Task<int?> ResolveExpectedBabOrderAsync(CancellationToken cancellationToken)
+    {
+        if (!IsBabScopedValidation())
+            return null;
+
+        var babId = _activeValidationTarget?.BabId;
+        if (!babId.HasValue)
+            return null;
+
+        var babOrder = await _db.Babs
+            .AsNoTracking()
+            .Where(b => b.BabId == babId.Value)
+            .Select(b => b.BabOrder)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return babOrder.HasValue ? babOrder.Value : null;
+    }
+
+    private static string BuildExpectedChapterNumberLine(string? template, int chapterNumber, string? caseRule)
+    {
+        if (chapterNumber <= 0)
+            return string.Empty;
+
+        var normalizedTemplate = NormalizeWhitespace(template ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(normalizedTemplate))
+            return ApplyNumberingCaseRule($"BAB {chapterNumber.ToString(CultureInfo.InvariantCulture)}", caseRule);
+
+        var match = Regex.Match(normalizedTemplate, "\\b\\d+\\b|\\b[IVXLCDM]+\\b", RegexOptions.IgnoreCase);
+        if (!match.Success)
+            return ApplyNumberingCaseRule(normalizedTemplate, caseRule);
+
+        var prefix = normalizedTemplate.Substring(0, match.Index);
+        var suffix = normalizedTemplate.Substring(match.Index + match.Length);
+        var replacement = Regex.IsMatch(match.Value, "^\\d+$")
+            ? chapterNumber.ToString(CultureInfo.InvariantCulture)
+            : Regex.IsMatch(match.Value, "^[ivxlcdm]+$")
+                ? ToRoman(chapterNumber).ToLowerInvariant()
+                : ToRoman(chapterNumber);
+
+        return ApplyNumberingCaseRule(prefix + replacement + suffix, caseRule);
+    }
+
+    private static string ApplyNumberingCaseRule(string value, string? caseRule)
+    {
+        if (string.IsNullOrWhiteSpace(caseRule))
+            return value;
+
+        if (caseRule.Equals("UPPERCASE", StringComparison.OrdinalIgnoreCase))
+            return value.ToUpperInvariant();
+
+        if (caseRule.Equals("LOWERCASE", StringComparison.OrdinalIgnoreCase))
+            return value.ToLowerInvariant();
+
+        return value;
+    }
+
     private static bool MatchesNumberFormat(string numberLine, string template, string? caseRule)
     {
         var normalizedLine = NormalizeWhitespace(numberLine);
@@ -1949,7 +2092,8 @@ public partial class ValidationService
         string field,
         string subjectLabel,
         string? evidence = null,
-        IReadOnlyList<ErrorLocation>? locations = null)
+        IReadOnlyList<ErrorLocation>? locations = null,
+        IReadOnlyList<string?>? paragraphTexts = null)
     {
         if (paragraphs == null || paragraphs.Count == 0 || indentationRule == null)
             return;
@@ -2012,11 +2156,11 @@ public partial class ValidationService
             evidence,
             locations);
 
-        ValidateIndentationComponent(
+        ValidateFirstLineIndentationComponent(
             result,
             normalizedParagraphs,
+            paragraphTexts,
             indentationRule.FirstLineIndent?.Value ?? 0m,
-            GetFirstLineIndentCm,
             field,
             $"First line indent {subjectLabel} tidak sesuai",
             evidence,
@@ -2061,6 +2205,52 @@ public partial class ValidationService
             Message = message,
             Expected = expected.Value.ToString(CultureInfo.InvariantCulture) + " cm",
             Actual = string.Join(", ", actuals.Select(actual => actual.ToString("F2", CultureInfo.InvariantCulture) + " cm").Distinct()),
+            Evidence = evidence,
+            Locations = locations?.ToList() ?? new List<ErrorLocation>()
+        });
+    }
+
+    private static void ValidateFirstLineIndentationComponent(
+        ValidationResult result,
+        IReadOnlyList<DokumenFormatParagraf> paragraphs,
+        IReadOnlyList<string?>? paragraphTexts,
+        decimal? expected,
+        string field,
+        string message,
+        string? evidence,
+        IReadOnlyList<ErrorLocation>? locations)
+    {
+        if (!expected.HasValue || paragraphs.Count == 0)
+            return;
+
+        result.IncrementTotalChecks();
+        var observations = paragraphs
+            .Select((paragraph, index) => ObserveFirstLineIndent(
+                paragraph,
+                paragraphTexts != null && index < paragraphTexts.Count
+                    ? paragraphTexts[index]
+                    : null))
+            .ToList();
+
+        if (observations.All(observation =>
+                IsWithinTolerance(observation.ActualCm, expected.Value, 0.05m) &&
+                !observation.HasLeadingManualIndent))
+        {
+            result.IncrementPassedChecks();
+            return;
+        }
+
+        var messageSuffix = observations.Any(observation => observation.HasLeadingManualIndent)
+            ? " karena diawali spasi/tab"
+            : string.Empty;
+
+        result.Errors.Add(new ValidationError
+        {
+            Category = "Isi Buku",
+            Field = field,
+            Message = message + messageSuffix,
+            Expected = expected.Value.ToString(CultureInfo.InvariantCulture) + " cm",
+            Actual = string.Join(", ", observations.Select(observation => observation.DisplayActual).Distinct()),
             Evidence = evidence,
             Locations = locations?.ToList() ?? new List<ErrorLocation>()
         });

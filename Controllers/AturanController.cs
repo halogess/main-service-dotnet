@@ -265,7 +265,12 @@ public class AturanController : ControllerBase
 
                 if (detail.json_value != null)
                 {
-                    if (!AturanDetailJsonNormalizer.TryNormalize(detail.json_value, out var normalizedJson, out var errorMessage))
+                    if (!AturanDetailCanonicalizer.TryCanonicalize(
+                        effectiveKey,
+                        detail.json_value,
+                        out var canonicalJson,
+                        out var canonicalChanged,
+                        out var errorMessage))
                     {
                         return BadRequest(new
                         {
@@ -273,8 +278,8 @@ public class AturanController : ControllerBase
                         });
                     }
 
-                    effectiveJson = normalizedJson;
-                    normalizedJsonByDetailId[detailId] = normalizedJson!;
+                    effectiveJson = canonicalJson;
+                    normalizedJsonByDetailId[detailId] = canonicalJson!;
                 }
 
                 if (!AturanDetailShapeValidator.TryValidate(effectiveKey, effectiveJson, out var shapeErrorMessage))

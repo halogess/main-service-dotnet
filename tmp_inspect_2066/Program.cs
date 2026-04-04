@@ -116,6 +116,22 @@ var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
           AND ad.aturan_detail_key IN ('tabel', 'caption_tabel')
         ORDER BY a.aturan_created_at DESC, ad.aturan_detail_key
         LIMIT 4
+        """),
+    ["active_core_rules"] = await QueryAsync(
+        connection,
+        """
+        SELECT
+            a.aturan_id,
+            a.aturan_versi,
+            a.aturan_status,
+            ad.aturan_detail_key,
+            ad.aturan_detail_json_value
+        FROM aturan a
+        JOIN aturan_detail ad ON ad.aturan_id = a.aturan_id
+        WHERE a.aturan_status = 'aktif'
+          AND ad.aturan_detail_status = 1
+          AND ad.aturan_detail_key IN ('page_settings', 'nomor_halaman', 'judul_bab', 'judul_subbab', 'paragraf', 'gambar', 'tabel', 'kode', 'rumus', 'footnote')
+        ORDER BY ad.aturan_detail_key
         """)
 };
 

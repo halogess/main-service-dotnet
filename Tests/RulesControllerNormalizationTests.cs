@@ -92,7 +92,38 @@ public class RulesControllerNormalizationTests
     }
 
     [Fact]
-    public async Task Create_ShouldRejectLegacyParagrafParagraphShape()
+    public async Task Create_ShouldCanonicalizeLegacyCodeShape()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        var controller = new RulesController(db);
+
+        var request = new RulesCreateRequest
+        {
+            aturan_versi = "v-canonical",
+            details =
+            [
+                new RulesDetailRequest
+                {
+                    aturan_detail_kategori = "Isi Buku",
+                    aturan_detail_key = "kode",
+                    aturan_detail_json_value = """{"judul_kode":{"numbering":{"enter_after_number":true}}}"""
+                }
+            ]
+        };
+
+        var result = await controller.Create(request);
+
+        Assert.IsType<OkObjectResult>(result);
+        var stored = db.AturanDetails.Single();
+        var json = System.Text.Json.Nodes.JsonNode.Parse(stored.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.True(json["judul_kode"]!["numbering"]!["enter_after_numbering"]!["value"]!.GetValue<bool>());
+        Assert.Null(json["judul_kode"]!["numbering"]!["enter_after_number"]);
+        Assert.True(json["judul_kode"]!["wajib_caption_lanjutan_jika_lintas_halaman"]!["value"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task Create_ShouldCanonicalizeLegacyParagrafParagraphShape()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();
         var controller = new RulesController(db);
@@ -113,8 +144,16 @@ public class RulesControllerNormalizationTests
 
         var result = await controller.Create(request);
 
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Contains("paragraph.indentation.left_indent/right_indent/first_line_indent", badRequest.Value!.ToString());
-        Assert.Empty(db.AturanDetails);
+        Assert.IsType<OkObjectResult>(result);
+
+        var stored = db.AturanDetails.Single();
+        var json = System.Text.Json.Nodes.JsonNode.Parse(stored.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.Equal(0m, json["paragraph"]!["indentation"]!["left_indent"]!["value"]!.GetValue<decimal>());
+        Assert.Equal(0m, json["paragraph"]!["indentation"]!["right_indent"]!["value"]!.GetValue<decimal>());
+        Assert.Equal(1.27m, json["paragraph"]!["indentation"]!["first_line_indent"]!["value"]!.GetValue<decimal>());
+        Assert.Null(json["paragraph"]!["left_indent"]);
+        Assert.Null(json["paragraph"]!["right_indent"]);
+        Assert.Null(json["paragraph"]!["first_line_indent"]);
     }
 }

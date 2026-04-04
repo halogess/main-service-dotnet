@@ -113,7 +113,12 @@ public class RulesController : ControllerBase
                 string? normalizedJson = null;
                 if (detail.aturan_detail_json_value != null)
                 {
-                    if (!AturanDetailJsonNormalizer.TryNormalize(detail.aturan_detail_json_value, out normalizedJson, out var errorMessage))
+                    if (!AturanDetailCanonicalizer.TryCanonicalize(
+                        detail.aturan_detail_key,
+                        detail.aturan_detail_json_value,
+                        out normalizedJson,
+                        out var canonicalChanged,
+                        out var errorMessage))
                     {
                         var detailLabel = !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
                             ? detail.aturan_detail_key
@@ -198,7 +203,12 @@ public class RulesController : ControllerBase
                 string? normalizedJson = null;
                 if (detail.aturan_detail_json_value != null)
                 {
-                    if (!AturanDetailJsonNormalizer.TryNormalize(detail.aturan_detail_json_value, out normalizedJson, out var errorMessage))
+                    if (!AturanDetailCanonicalizer.TryCanonicalize(
+                        detail.aturan_detail_key ?? existingDetail?.AturanDetailKey,
+                        detail.aturan_detail_json_value,
+                        out normalizedJson,
+                        out var canonicalChanged,
+                        out var errorMessage))
                     {
                         var detailLabel = detail.aturan_detail_id.HasValue
                             ? $"aturan_detail_id {detail.aturan_detail_id.Value}"

@@ -168,6 +168,58 @@ public class AturanControllerNormalizationTests
     }
 
     [Fact]
+    public async Task PatchAturanDetail_ShouldCanonicalizeLegacyTableShapeBeforeSaving()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        db.Aturans.Add(new Aturan
+        {
+            AturanId = 3,
+            AturanVersi = "v3",
+            AturanStatus = AturanStatusValues.MenungguReview
+        });
+        db.AturanDetails.Add(new AturanDetail
+        {
+            AturanDetailId = 30,
+            AturanId = 3,
+            AturanDetailKey = "tabel",
+            AturanDetailJsonValue = """{"caption_tabel":{"numbering":{"enter_after_numbering":{"value":false,"is_editable":true,"is_hard_constraint":false}}}}"""
+        });
+        await db.SaveChangesAsync();
+
+        var controller = new AturanController(Mock.Of<IAturanService>(), db)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+        controller.HttpContext.Items["Role"] = "admin";
+
+        var request = new AturanDetailPatchRequest
+        {
+            details =
+            [
+                new AturanDetailPatchItem
+                {
+                    aturan_detail_id = 30,
+                    json_value = """{"caption_tabel":{"numbering":{"enter_after_number":true}}}"""
+                }
+            ]
+        };
+
+        var result = await controller.PatchAturanDetail(3, request);
+
+        Assert.IsType<OkObjectResult>(result);
+
+        var updated = await db.AturanDetails.FindAsync((uint)30);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(updated!.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.True(json["caption_tabel"]!["numbering"]!["enter_after_numbering"]!["value"]!.GetValue<bool>());
+        Assert.Null(json["caption_tabel"]!["numbering"]!["enter_after_number"]);
+        Assert.True(json["caption_tabel"]!["wajib_caption_lanjutan_jika_lintas_halaman"]!["value"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task PatchAturanDetail_ShouldRejectInvalidJson()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();
@@ -216,7 +268,7 @@ public class AturanControllerNormalizationTests
     }
 
     [Fact]
-    public async Task PatchAturanDetail_ShouldRejectLegacyJudulSubbabParagraphShape()
+    public async Task PatchAturanDetail_ShouldCanonicalizeLegacyJudulSubbabParagraphShape()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();
         db.Aturans.Add(new Aturan
@@ -256,7 +308,14 @@ public class AturanControllerNormalizationTests
 
         var result = await controller.PatchAturanDetail(1, request);
 
-        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
-        Assert.Contains("paragraph.indentation.left_indent/right_indent", badRequest.Value!.ToString());
+        Assert.IsType<OkObjectResult>(result);
+
+        var updated = await db.AturanDetails.FindAsync((uint)11);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(updated!.AturanDetailJsonValue!)!.AsObject();
+
+        Assert.Equal(0m, json["paragraph"]!["indentation"]!["left_indent"]!["value"]!.GetValue<decimal>());
+        Assert.Equal(0m, json["paragraph"]!["indentation"]!["right_indent"]!["value"]!.GetValue<decimal>());
+        Assert.Null(json["paragraph"]!["left_indent"]);
+        Assert.Null(json["paragraph"]!["right_indent"]);
     }
 }

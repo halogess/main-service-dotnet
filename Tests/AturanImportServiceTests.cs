@@ -206,10 +206,12 @@ public class AturanImportServiceTests
         await service.ImportFromArtifactsAsync(1);
 
         var detail = db.AturanDetails.Single(item => item.AturanId == 1 && item.AturanDetailKey == "tabel");
+        var json = JsonNode.Parse(detail.AturanDetailJsonValue!)!.AsObject();
 
         Assert.Contains("tbl.no_image", detail.AturanDetailCatatan);
         Assert.Contains("cap.cont", detail.AturanDetailCatatan);
         Assert.DoesNotContain("template_extracted=tbl.no_image", detail.AturanDetailCatatan);
+        Assert.True(json["caption_tabel"]!["wajib_caption_lanjutan_jika_lintas_halaman"]!["value"]!.GetValue<bool>());
     }
 
     private static AturanImportService CreateService(KorektorBukuDbContext db)

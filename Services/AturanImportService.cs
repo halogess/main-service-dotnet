@@ -118,13 +118,20 @@ public sealed class AturanImportService : IAturanImportService
         foreach (var draft in detailDrafts.Values)
         {
             var rawJson = draft.Json.ToJsonString(JsonOptions);
-            if (!AturanDetailJsonNormalizer.TryNormalize(rawJson, out var normalizedJson, out var errorMessage))
-                throw new InvalidOperationException($"Gagal menormalkan draft aturan {draft.Detail.AturanDetailKey}: {errorMessage}");
+            if (!AturanDetailCanonicalizer.TryCanonicalize(
+                draft.Detail.AturanDetailKey,
+                rawJson,
+                out var canonicalJson,
+                out var canonicalChanged,
+                out var errorMessage))
+            {
+                throw new InvalidOperationException($"Gagal mengkanonisasi draft aturan {draft.Detail.AturanDetailKey}: {errorMessage}");
+            }
 
-            if (!AturanDetailShapeValidator.TryValidate(draft.Detail.AturanDetailKey, normalizedJson, out var shapeError))
+            if (!AturanDetailShapeValidator.TryValidate(draft.Detail.AturanDetailKey, canonicalJson, out var shapeError))
                 throw new InvalidOperationException($"Draft aturan {draft.Detail.AturanDetailKey} tidak sesuai shape: {shapeError}");
 
-            draft.Detail.AturanDetailJsonValue = normalizedJson;
+            draft.Detail.AturanDetailJsonValue = canonicalJson;
             draft.Detail.AturanDetailCatatan = draft.BuildCatatan();
             normalizedDetails.Add(draft.Detail);
         }

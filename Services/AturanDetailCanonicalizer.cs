@@ -1,0 +1,426 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using ValidasiTugasAkhir.MainService.Models;
+
+namespace ValidasiTugasAkhir.MainService.Services;
+
+public static class AturanDetailCanonicalizer
+{
+    private const string ValueProperty = "value";
+    private const string IsEditableProperty = "is_editable";
+    private const string IsHardConstraintProperty = "is_hard_constraint";
+
+    private static readonly JsonSerializerOptions SerializerOptions = new()
+    {
+        WriteIndented = false
+    };
+
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> TemplateJsonByKey = new(BuildTemplateMap);
+
+    public static bool TryCanonicalize(
+        string? detailKey,
+        string rawJson,
+        out string? canonicalJson,
+        out bool changed,
+        out string? errorMessage)
+    {
+        canonicalJson = null;
+        changed = false;
+        errorMessage = null;
+
+        if (string.IsNullOrWhiteSpace(rawJson))
+        {
+            errorMessage = "json_value tidak boleh kosong";
+            return false;
+        }
+
+        if (!AturanDetailParagraphCutover.TryTransform(detailKey, rawJson, out var normalizedJson, out var paragraphChanged, out errorMessage))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(normalizedJson))
+        {
+            errorMessage = "json_value tidak valid";
+            return false;
+        }
+
+        var key = NormalizeKey(detailKey);
+        if (!TemplateJsonByKey.Value.TryGetValue(key, out var templateJson))
+        {
+            canonicalJson = normalizedJson;
+            changed = !string.Equals(rawJson, canonicalJson, StringComparison.Ordinal);
+            return true;
+        }
+
+        try
+        {
+            if (JsonNode.Parse(normalizedJson) is not JsonObject currentRoot)
+            {
+                errorMessage = "json_value harus berupa object JSON.";
+                return false;
+            }
+
+            if (JsonNode.Parse(templateJson) is not JsonObject templateRoot)
+            {
+                errorMessage = $"Template canonical untuk key `{key}` tidak valid.";
+                return false;
+            }
+
+            ApplyLegacyAliases(key, currentRoot);
+
+            var canonicalRoot = MergeObject(templateRoot, currentRoot, []);
+            canonicalJson = canonicalRoot.ToJsonString(SerializerOptions);
+            changed = paragraphChanged || !string.Equals(normalizedJson, canonicalJson, StringComparison.Ordinal);
+
+            if (!AturanDetailShapeValidator.TryValidate(detailKey, canonicalJson, out errorMessage))
+                return false;
+
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            errorMessage = $"json_value tidak valid: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildTemplateMap()
+    {
+        return AturanExportCatalog
+            .CreateDefaultDetails(0)
+            .ToDictionary(
+                detail => NormalizeKey(detail.AturanDetailKey),
+                detail => detail.AturanDetailJsonValue ?? "{}",
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void ApplyLegacyAliases(string key, JsonObject root)
+    {
+        switch (key)
+        {
+            case "gambar":
+                MovePathValue(root,
+                    ["caption_gambar", "numbering", "enter_after_number"],
+                    ["caption_gambar", "numbering", "enter_after_numbering"]);
+                break;
+            case "tabel":
+                MovePathValue(root,
+                    ["caption_tabel", "numbering", "enter_after_number"],
+                    ["caption_tabel", "numbering", "enter_after_numbering"]);
+                break;
+            case "kode":
+                MovePathValue(root,
+                    ["judul_kode", "numbering", "enter_after_number"],
+                    ["judul_kode", "numbering", "enter_after_numbering"]);
+                break;
+        }
+    }
+
+    private static JsonObject MergeObject(JsonObject templateObject, JsonNode? currentNode, IReadOnlyList<string> path)
+    {
+        var currentObject = UnwrapObjectNode(currentNode);
+        var result = new JsonObject();
+
+        foreach (var property in templateObject)
+        {
+            var childPath = AppendPath(path, property.Key);
+            JsonNode? currentValue = null;
+            currentObject?.TryGetPropertyValue(property.Key, out currentValue);
+            result[property.Key] = MergeNode(property.Value, currentValue, childPath);
+        }
+
+        return result;
+    }
+
+    private static JsonNode? MergeNode(JsonNode? templateNode, JsonNode? currentNode, IReadOnlyList<string> path)
+    {
+        if (templateNode is JsonObject templateObject)
+        {
+            if (IsWrapper(templateObject))
+                return MergeWrapper(templateObject, currentNode, path);
+
+            return MergeObject(templateObject, currentNode, path);
+        }
+
+        if (templateNode is JsonArray templateArray)
+        {
+            return currentNode is JsonArray currentArray
+                ? currentArray.DeepClone()
+                : templateArray.DeepClone();
+        }
+
+        if (currentNode == null)
+            return templateNode?.DeepClone();
+
+        return currentNode.DeepClone();
+    }
+
+    private static JsonObject MergeWrapper(JsonObject templateWrapper, JsonNode? currentNode, IReadOnlyList<string> path)
+    {
+        var templateValue = templateWrapper[ValueProperty];
+        var templateIsEditable = ReadBooleanFlag(templateWrapper, IsEditableProperty, defaultValue: false);
+        var templateIsHardConstraint = ReadBooleanFlag(templateWrapper, IsHardConstraintProperty, defaultValue: false);
+
+        JsonObject? currentWrapper = null;
+        JsonNode? currentValue = null;
+        if (currentNode is JsonObject currentObject && IsWrapper(currentObject))
+        {
+            currentWrapper = currentObject;
+            currentValue = currentObject[ValueProperty];
+        }
+        else
+        {
+            currentValue = currentNode;
+        }
+
+        var mergedValue = MergeWrapperValue(templateValue, currentValue, path);
+        var result = CreateWrapper(
+            mergedValue,
+            currentWrapper != null
+                ? ReadBooleanFlag(currentWrapper, IsEditableProperty, templateIsEditable)
+                : templateIsEditable,
+            currentWrapper != null
+                ? ReadBooleanFlag(currentWrapper, IsHardConstraintProperty, templateIsHardConstraint)
+                : templateIsHardConstraint);
+
+        return result;
+    }
+
+    private static JsonNode? MergeWrapperValue(JsonNode? templateValue, JsonNode? currentValue, IReadOnlyList<string> path)
+    {
+        if (currentValue == null)
+            return templateValue?.DeepClone();
+
+        if (templateValue is JsonObject templateObject && !IsWrapper(templateObject))
+        {
+            var currentObject = UnwrapObjectNode(currentValue);
+            if (currentObject != null)
+                return MergeObject(templateObject, currentObject, path);
+
+            return templateValue.DeepClone();
+        }
+
+        if (templateValue is JsonArray templateArray)
+        {
+            return currentValue is JsonArray currentArray
+                ? currentArray.DeepClone()
+                : templateArray.DeepClone();
+        }
+
+        if (templateValue is JsonValue templateScalar && currentValue is JsonValue currentScalar)
+            return CoerceScalarValue(templateScalar, currentScalar);
+
+        return currentValue.DeepClone();
+    }
+
+    private static JsonNode CoerceScalarValue(JsonValue templateScalar, JsonValue currentScalar)
+    {
+        if (templateScalar.TryGetValue<bool>(out var _))
+            return JsonValue.Create(ReadScalarBoolean(currentScalar));
+
+        if (IsNumericScalar(templateScalar))
+        {
+            if (TryReadDecimal(currentScalar, out var decimalValue))
+                return JsonValue.Create(decimalValue);
+        }
+
+        if (templateScalar.TryGetValue<string>(out var _))
+        {
+            if (currentScalar.TryGetValue<string>(out var stringValue))
+                return JsonValue.Create(stringValue);
+            if (currentScalar.TryGetValue<bool>(out var boolValue))
+                return JsonValue.Create(boolValue ? "true" : "false");
+            if (TryReadDecimal(currentScalar, out var decimalValue))
+                return JsonValue.Create(decimalValue.ToString(CultureInfo.InvariantCulture));
+        }
+
+        return currentScalar.DeepClone();
+    }
+
+    private static JsonObject? UnwrapObjectNode(JsonNode? node)
+    {
+        if (node is JsonObject jsonObject && !IsWrapper(jsonObject))
+            return jsonObject;
+
+        if (node is JsonObject wrapper &&
+            IsWrapper(wrapper) &&
+            wrapper[ValueProperty] is JsonObject wrappedValue &&
+            !IsWrapper(wrappedValue))
+        {
+            return wrappedValue;
+        }
+
+        return null;
+    }
+
+    private static void MovePathValue(JsonObject root, IReadOnlyList<string> sourcePath, IReadOnlyList<string> targetPath)
+    {
+        if (sourcePath.Count == 0 || targetPath.Count == 0)
+            return;
+
+        if (!TryGetParentObject(root, sourcePath, createIfMissing: false, out var sourceParent))
+            return;
+
+        if (!sourceParent!.TryGetPropertyValue(sourcePath[^1], out var sourceValue) || sourceValue == null)
+            return;
+
+        if (!TryGetParentObject(root, targetPath, createIfMissing: true, out var targetParent))
+            return;
+
+        if (targetParent![targetPath[^1]] == null)
+            targetParent[targetPath[^1]] = sourceValue.DeepClone();
+
+        sourceParent.Remove(sourcePath[^1]);
+    }
+
+    private static bool TryGetParentObject(
+        JsonObject root,
+        IReadOnlyList<string> path,
+        bool createIfMissing,
+        out JsonObject? parent)
+    {
+        parent = root;
+        for (var index = 0; index < path.Count - 1; index++)
+        {
+            var segment = path[index];
+            if (parent[segment] is JsonObject nextObject && !IsWrapper(nextObject))
+            {
+                parent = nextObject;
+                continue;
+            }
+
+            if (!createIfMissing)
+            {
+                parent = null;
+                return false;
+            }
+
+            var created = new JsonObject();
+            parent[segment] = created;
+            parent = created;
+        }
+
+        return true;
+    }
+
+    private static JsonObject CreateWrapper(JsonNode? valueNode, bool isEditable, bool isHardConstraint)
+    {
+        return new JsonObject
+        {
+            [ValueProperty] = valueNode?.DeepClone(),
+            [IsEditableProperty] = JsonValue.Create(isEditable),
+            [IsHardConstraintProperty] = JsonValue.Create(isHardConstraint)
+        };
+    }
+
+    private static bool ReadBooleanFlag(JsonObject source, string propertyName, bool defaultValue)
+    {
+        foreach (var property in source)
+        {
+            if (!property.Key.Equals(propertyName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            return ReadScalarBoolean(property.Value, defaultValue);
+        }
+
+        return defaultValue;
+    }
+
+    private static bool ReadScalarBoolean(JsonNode? node, bool defaultValue = false)
+    {
+        if (node is not JsonValue value)
+            return defaultValue;
+
+        if (value.TryGetValue<bool>(out var boolValue))
+            return boolValue;
+
+        if (value.TryGetValue<string>(out var stringValue))
+        {
+            if (bool.TryParse(stringValue, out var parsedBool))
+                return parsedBool;
+            if (int.TryParse(stringValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedInt))
+                return parsedInt != 0;
+            return defaultValue;
+        }
+
+        if (value.TryGetValue<int>(out var intValue))
+            return intValue != 0;
+
+        if (value.TryGetValue<long>(out var longValue))
+            return longValue != 0;
+
+        if (value.TryGetValue<decimal>(out var decimalValue))
+            return decimalValue != 0;
+
+        return defaultValue;
+    }
+
+    private static bool TryReadDecimal(JsonValue value, out decimal result)
+    {
+        if (value.TryGetValue<decimal>(out result))
+            return true;
+
+        if (value.TryGetValue<int>(out var intValue))
+        {
+            result = intValue;
+            return true;
+        }
+
+        if (value.TryGetValue<long>(out var longValue))
+        {
+            result = longValue;
+            return true;
+        }
+
+        if (value.TryGetValue<double>(out var doubleValue))
+        {
+            result = (decimal)doubleValue;
+            return true;
+        }
+
+        if (value.TryGetValue<string>(out var stringValue) &&
+            decimal.TryParse(stringValue, NumberStyles.Number, CultureInfo.InvariantCulture, out result))
+        {
+            return true;
+        }
+
+        result = default;
+        return false;
+    }
+
+    private static bool IsNumericScalar(JsonValue value)
+    {
+        return value.TryGetValue<int>(out var intValue) ||
+               value.TryGetValue<long>(out var longValue) ||
+               value.TryGetValue<decimal>(out var decimalValue) ||
+               value.TryGetValue<double>(out var doubleValue);
+    }
+
+    private static bool IsWrapper(JsonObject node)
+    {
+        foreach (var property in node)
+        {
+            if (property.Key.Equals(ValueProperty, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<string> AppendPath(IReadOnlyList<string> path, string segment)
+    {
+        if (path.Count == 0)
+            return [segment];
+
+        var result = new string[path.Count + 1];
+        for (var index = 0; index < path.Count; index++)
+            result[index] = path[index];
+        result[^1] = segment;
+        return result;
+    }
+
+    private static string NormalizeKey(string? key)
+    {
+        return (key ?? string.Empty).Trim().ToLowerInvariant();
+    }
+}

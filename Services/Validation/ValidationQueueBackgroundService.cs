@@ -460,7 +460,7 @@ public class ValidationQueueBackgroundService : BackgroundService
             var mahasiswa = await sttsDb.Mahasiswas
                 .AsNoTracking()
                 .Where(m => m.MhsNrp == notification.MahasiswaNrp)
-                .Select(m => new { m.MhsNama, m.MhsEmail })
+                .Select(m => new { m.MhsNama, m.MhsEmail, m.JurKode })
                 .FirstOrDefaultAsync(cancellationToken);
 
             if (mahasiswa == null)
@@ -482,6 +482,17 @@ public class ValidationQueueBackgroundService : BackgroundService
             var recipientName = string.IsNullOrWhiteSpace(mahasiswa.MhsNama)
                 ? notification.MahasiswaNrp
                 : mahasiswa.MhsNama;
+            var jurusan = string.IsNullOrWhiteSpace(mahasiswa.JurKode)
+                ? null
+                : await sttsDb.Jurusans
+                    .AsNoTracking()
+                    .Where(j => j.JurKode == mahasiswa.JurKode)
+                    .Select(j => new { j.JurNama, j.JurSingkat })
+                    .FirstOrDefaultAsync(cancellationToken);
+            var academicWorkLabel = DetermineAcademicWorkLabel(
+                mahasiswa.JurKode,
+                jurusan?.JurNama,
+                jurusan?.JurSingkat);
 
             var sent = await emailService.SendValidationCompleteNotificationAsync(
                 mahasiswa.MhsEmail,
@@ -490,7 +501,8 @@ public class ValidationQueueBackgroundService : BackgroundService
                 notification.ResourceId,
                 notification.ResourceTitle,
                 notification.IsLolos,
-                notification.ErrorCount);
+                notification.ErrorCount,
+                academicWorkLabel);
 
             if (!sent)
             {
@@ -535,6 +547,27 @@ public class ValidationQueueBackgroundService : BackgroundService
         return string.IsNullOrWhiteSpace(rawTitle)
             ? $"Buku #{buku.BukuId}"
             : rawTitle;
+    }
+
+    private static string DetermineAcademicWorkLabel(string? jurKode, string? jurNama, string? jurSingkat)
+    {
+        return HasPostgraduateMarker(jurKode) ||
+               HasPostgraduateMarker(jurNama) ||
+               HasPostgraduateMarker(jurSingkat)
+            ? "Tesis"
+            : "Tugas Akhir";
+    }
+
+    private static bool HasPostgraduateMarker(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var normalized = value.Trim().ToUpperInvariant();
+        return normalized.Contains("S2", StringComparison.Ordinal) ||
+               normalized.Contains("MAGISTER", StringComparison.Ordinal) ||
+               normalized.Contains("MASTER", StringComparison.Ordinal) ||
+               normalized.Contains("PASCASARJANA", StringComparison.Ordinal);
     }
 
     private async Task<(bool AllBabsCompleted, List<Bab> Babs)> AreAllBukuBabsValidationCompletedAsync(

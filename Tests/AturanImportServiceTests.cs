@@ -660,7 +660,8 @@ public class AturanImportServiceTests
             int resourceId,
             string resourceTitle,
             bool isLolos,
-            int errorCount)
+            int errorCount,
+            string academicWorkLabel)
             => Task.FromResult(true);
     }
 }

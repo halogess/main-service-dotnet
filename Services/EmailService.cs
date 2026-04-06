@@ -36,7 +36,8 @@ public interface IEmailService
         int resourceId,
         string resourceTitle,
         bool isLolos,
-        int errorCount);
+        int errorCount,
+        string academicWorkLabel);
 }
 
 /// <summary>
@@ -183,8 +184,12 @@ public class EmailService : IEmailService
         int resourceId,
         string resourceTitle,
         bool isLolos,
-        int errorCount)
+        int errorCount,
+        string academicWorkLabel)
     {
+        var normalizedResourceType = NormalizeResourceType(resourceType);
+        var resourceLabel = normalizedResourceType == "buku" ? "Buku" : "Dokumen";
+        var normalizedAcademicWorkLabel = NormalizeAcademicWorkLabel(academicWorkLabel);
         var dokumenTitle = resourceTitle;
         var status = isLolos ? "LOLOS" : "TIDAK LOLOS";
         var statusColor = isLolos ? "#22c55e" : "#ef4444";
@@ -216,7 +221,7 @@ public class EmailService : IEmailService
         </div>
         <div class='content'>
             <p>Halo <strong>{toName}</strong>,</p>
-            <p>Proses validasi dokumen Anda telah selesai. Berikut adalah hasilnya:</p>
+            <p>Proses validasi format {resourceLabel.ToLowerInvariant()} {normalizedAcademicWorkLabel} Anda telah selesai. Berikut adalah hasilnya:</p>
             
             <div class='info-box'>
                 <p style='margin: 0 0 10px 0;'><strong>📁 Dokumen:</strong> {dokumenTitle}</p>
@@ -233,7 +238,7 @@ public class EmailService : IEmailService
             </center>
         </div>
         <div class='footer'>
-            <p>Email ini dikirim secara otomatis oleh Sistem Validasi Tugas Akhir.<br>
+            <p>Email ini dikirim secara otomatis oleh Validasi Format Buku TA/Tesis.<br>
             Jangan membalas email ini.</p>
         </div>
     </div>
@@ -251,6 +256,20 @@ public class EmailService : IEmailService
     private string GetSenderEmail()
     {
         return _smtpSenderEmail!;
+    }
+
+    private static string NormalizeResourceType(string resourceType)
+    {
+        return string.Equals(resourceType, "buku", StringComparison.OrdinalIgnoreCase)
+            ? "buku"
+            : "dokumen";
+    }
+
+    private static string NormalizeAcademicWorkLabel(string academicWorkLabel)
+    {
+        return string.Equals(academicWorkLabel, "Tesis", StringComparison.OrdinalIgnoreCase)
+            ? "Tesis"
+            : "Tugas Akhir";
     }
 
     /// <summary>

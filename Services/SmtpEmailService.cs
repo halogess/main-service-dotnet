@@ -166,16 +166,19 @@ public class SmtpEmailService : IEmailService
         int resourceId,
         string resourceTitle,
         bool isLolos,
-        int errorCount)
+        int errorCount,
+        string academicWorkLabel)
     {
         var normalizedResourceType = NormalizeResourceType(resourceType);
         var resourceLabel = normalizedResourceType == "buku" ? "Buku" : "Dokumen";
+        var normalizedAcademicWorkLabel = NormalizeAcademicWorkLabel(academicWorkLabel);
         var status = isLolos ? "LOLOS" : "TIDAK LOLOS";
         var statusColor = isLolos ? "#22c55e" : "#ef4444";
         var subject = $"Hasil Validasi Format {resourceLabel}: {resourceTitle}";
         var detailUrl = BuildValidationDetailUrl(normalizedResourceType, resourceId);
         var encodedRecipientName = WebUtility.HtmlEncode(toName);
         var encodedResourceTitle = WebUtility.HtmlEncode(resourceTitle);
+        var encodedAcademicWorkLabel = WebUtility.HtmlEncode(normalizedAcademicWorkLabel);
         var encodedDetailUrl = WebUtility.HtmlEncode(detailUrl);
 
         var bodyHtml = $@"
@@ -202,7 +205,7 @@ public class SmtpEmailService : IEmailService
         </div>
         <div class='content'>
             <p>Halo <strong>{encodedRecipientName}</strong>,</p>
-            <p>Proses validasi {resourceLabel.ToLowerInvariant()} Anda telah selesai. Berikut adalah hasilnya:</p>
+            <p>Proses validasi format {resourceLabel.ToLowerInvariant()} {encodedAcademicWorkLabel} Anda telah selesai. Berikut adalah hasilnya:</p>
 
             <div class='info-box'>
                 <p style='margin: 0 0 10px 0;'><strong>{resourceLabel}:</strong> {encodedResourceTitle}</p>
@@ -219,7 +222,7 @@ public class SmtpEmailService : IEmailService
             </center>
         </div>
         <div class='footer'>
-            <p>Email ini dikirim secara otomatis oleh Sistem Validasi Tugas Akhir.<br>
+            <p>Email ini dikirim secara otomatis oleh Validasi Format Buku TA/Tesis.<br>
             Jangan membalas email ini.</p>
         </div>
     </div>
@@ -248,6 +251,13 @@ public class SmtpEmailService : IEmailService
         return string.Equals(resourceType, "buku", StringComparison.OrdinalIgnoreCase)
             ? "buku"
             : "dokumen";
+    }
+
+    private static string NormalizeAcademicWorkLabel(string academicWorkLabel)
+    {
+        return string.Equals(academicWorkLabel, "Tesis", StringComparison.OrdinalIgnoreCase)
+            ? "Tesis"
+            : "Tugas Akhir";
     }
 
     private MimeMessage CreateMimeMessage(List<(string Email, string Name)> recipients, string subject, string bodyHtml)

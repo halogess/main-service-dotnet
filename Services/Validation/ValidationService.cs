@@ -827,9 +827,6 @@ public class FootnoteRule
 
     [JsonPropertyName("footnote_text")]
     public FootnoteTextRule? FootnoteText { get; set; }
-
-    [JsonPropertyName("sumber")]
-    public FootnoteSourceRule? Sumber { get; set; }
 }
 
 public class FootnoteNumberingRule
@@ -896,27 +893,6 @@ public class FootnoteContentStructureRule
 {
     [JsonPropertyName("satu_enter_sebelum")]
     public RuleValue<bool>? SatuEnterSebelum { get; set; }
-}
-
-public class FootnoteSourceRule
-{
-    [JsonPropertyName("wajib_berisi_sumber")]
-    public RuleValue<bool>? WajibBerisiSumber { get; set; }
-
-    [JsonPropertyName("format_penulisan")]
-    public RuleValue<List<FootnoteSourceFormatRule>>? FormatPenulisan { get; set; }
-}
-
-public class FootnoteSourceFormatRule
-{
-    [JsonPropertyName("keterangan")]
-    public string? Keterangan { get; set; }
-
-    [JsonPropertyName("format")]
-    public string? Format { get; set; }
-
-    [JsonPropertyName("contoh")]
-    public string? Contoh { get; set; }
 }
 
 #endregion

@@ -47,6 +47,7 @@ builder.Services.AddScoped<IBukuService, BukuService>();
 builder.Services.AddScoped<IBukuArchiveService, BukuArchiveService>();
 builder.Services.AddScoped<IDocxExtractionService, DocxExtractionService>();
 builder.Services.AddScoped<IAturanService, AturanService>();
+builder.Services.AddScoped<IAturanExcelImportPreviewService, AturanExcelImportPreviewService>();
 builder.Services.AddScoped<IAturanImportService, AturanImportService>();
 builder.Services.AddScoped<IJurusanService, JurusanService>();
 builder.Services.AddScoped<IValidationService, ValidationService>();
@@ -59,6 +60,7 @@ builder.Services.AddScoped<IPdfConversionService, PdfConversionService>();
 builder.Services.AddHostedService<AdobeQuotaResetService>();
 builder.Services.AddHostedService<PdfQueueBackgroundService>();
 builder.Services.AddHostedService<ValidationQueueBackgroundService>();
+builder.Services.AddHostedService<DokumenAutoDeleteService>();
 
 // Register Gemini Service
 builder.Services.AddHttpClient<IGeminiService, GeminiService>();

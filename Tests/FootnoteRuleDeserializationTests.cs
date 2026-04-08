@@ -46,15 +46,6 @@ public class FootnoteRuleDeserializationTests
                        "struktur_konten": {
                          "satu_enter_sebelum": { "value": true, "is_editable": true }
                        }
-                     },
-                     "sumber": {
-                       "wajib_berisi_sumber": { "value": true, "is_editable": false },
-                       "format_penulisan": {
-                         "value": [
-                           { "keterangan": "", "format": "", "contoh": "" }
-                         ],
-                         "is_editable": false
-                       }
                      }
                    }
                    """;
@@ -71,7 +62,5 @@ public class FootnoteRuleDeserializationTests
         Assert.Equal("Times New Roman", rule.FootnoteText?.Font?.FontName?.Value);
         Assert.Equal(10m, rule.FootnoteText?.Font?.FontSize?.Value);
         Assert.True(rule.FootnoteText?.StrukturKonten?.SatuEnterSebelum?.Value);
-        Assert.True(rule.Sumber?.WajibBerisiSumber?.Value);
-        Assert.Single(rule.Sumber?.FormatPenulisan?.Value ?? []);
     }
 }

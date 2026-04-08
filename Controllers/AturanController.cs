@@ -70,6 +70,51 @@ public class AturanController : ControllerBase
         return File(fileBytes, AturanExcelExportBuilder.ContentType, $"{safeVersion}.xlsx");
     }
 
+    [HttpPost("{id}/import-preview")]
+    public async Task<IActionResult> ImportPreviewAturan(
+        uint id,
+        [FromForm] AturanImportPreviewRequest request,
+        [FromServices] IAturanExcelImportPreviewService importPreviewService,
+        CancellationToken cancellationToken)
+    {
+        if (!IsAdmin())
+            return Forbid();
+
+        var aturan = await _aturanService.GetByIdAsync(id);
+        if (aturan == null)
+            return NotFound(new { message = "Aturan tidak ditemukan" });
+
+        try
+        {
+            if (request.file == null)
+                return BadRequest(new { message = "file wajib diisi" });
+
+            var result = await importPreviewService.PreviewAsync(id, request.file, cancellationToken);
+            return Ok(new
+            {
+                message = "File import berhasil diparsing ke draft",
+                total_rows = result.TotalRows,
+                changed_rows = result.ChangedRows,
+                changed_details = result.ChangedDetails,
+                details = result.Details.Select(detail => new
+                {
+                    aturan_detail_id = detail.AturanDetailId,
+                    kategori = detail.Kategori,
+                    key = detail.Key,
+                    json_value = detail.JsonValue
+                }).ToList()
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [HttpGet("{id}/download")]
     public async Task<IActionResult> DownloadTemplate(uint id)
     {
@@ -441,6 +486,11 @@ public class UploadAturanRequest
 {
     public string versi { get; set; } = string.Empty;
     public uint? skor_minimum { get; set; }
+    public IFormFile? file { get; set; }
+}
+
+public class AturanImportPreviewRequest
+{
     public IFormFile? file { get; set; }
 }
 

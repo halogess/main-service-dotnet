@@ -182,7 +182,6 @@ public partial class ValidationService
             ValidateFootnoteTextFont(result, rule.FootnoteText?.Font, footnote, textFormatById, evidence, locations);
             ValidateFootnoteTextParagraph(result, rule.FootnoteText?.Paragraph, footnote, evidence, locations);
             ValidateFootnoteTextStructure(result, rule.FootnoteText?.StrukturKonten, footnote, evidence, locations);
-            ValidateFootnoteSource(result, rule.Sumber, footnote, evidence, locations);
 
             if (footnote.ElementId.HasValue)
                 ApplyElementIdToErrors(result.Errors, errorStart, footnote.ElementId.Value);
@@ -685,100 +684,6 @@ public partial class ValidationService
                 Locations = locations
             });
         }
-    }
-
-    private void ValidateFootnoteSource(
-        ValidationResult result,
-        FootnoteSourceRule? sourceRule,
-        FootnoteEntryInfo footnote,
-        string evidence,
-        List<ErrorLocation> locations)
-    {
-        if (sourceRule == null)
-            return;
-
-        var normalizedText = NormalizeWhitespace(footnote.Content.PlainText);
-
-        if (sourceRule.WajibBerisiSumber?.Value == true)
-        {
-            result.IncrementTotalChecks();
-            if (HasMeaningfulSourceText(normalizedText))
-            {
-                result.IncrementPassedChecks();
-            }
-            else
-            {
-                result.Errors.Add(new ValidationError
-                {
-                    Category = FootnoteCategory,
-                    Field = "footnote_sumber",
-                    Message = "Footnote wajib berisi sumber",
-                    Expected = "Sumber terisi",
-                    Actual = "Kosong/tidak terdeteksi",
-                    Evidence = evidence,
-                    Locations = locations
-                });
-            }
-        }
-
-        var expectedFormats = sourceRule.FormatPenulisan?.Value?
-            .Select(f => NormalizeWhitespace(f.Format ?? string.Empty))
-            .Where(f => !string.IsNullOrWhiteSpace(f))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        if (expectedFormats == null || expectedFormats.Count == 0)
-            return;
-
-        result.IncrementTotalChecks();
-        if (expectedFormats.Any(format => SourceTextMatchesFormat(normalizedText, format)))
-        {
-            result.IncrementPassedChecks();
-        }
-        else
-        {
-            result.Errors.Add(new ValidationError
-            {
-                Category = FootnoteCategory,
-                Field = "footnote_sumber_format",
-                Message = "Format penulisan sumber footnote tidak sesuai",
-                Expected = string.Join(" | ", expectedFormats),
-                Actual = string.IsNullOrWhiteSpace(normalizedText) ? "kosong" : normalizedText,
-                Evidence = evidence,
-                Locations = locations,
-                IsRequired = false
-            });
-        }
-    }
-
-    private static bool HasMeaningfulSourceText(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return false;
-
-        var compact = Regex.Replace(text, "\\s+", "");
-        if (compact.Length < 3)
-            return false;
-
-        return compact.Any(char.IsLetterOrDigit);
-    }
-
-    private static bool SourceTextMatchesFormat(string text, string format)
-    {
-        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(format))
-            return false;
-
-        try
-        {
-            if (Regex.IsMatch(text, format, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
-                return true;
-        }
-        catch (ArgumentException)
-        {
-            // Fall back to plain containment when format is not a valid regex.
-        }
-
-        return text.Contains(format, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string BuildFootnoteEvidence(FootnoteEntryInfo footnote)

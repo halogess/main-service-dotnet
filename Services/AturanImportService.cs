@@ -1801,7 +1801,7 @@ public sealed class AturanImportService : IAturanImportService
                 ["tabs", "num.format", "pos.page_guard", "page.struct"]),
             ["footnote"] = new(
                 ["text.font", "text.par"],
-                ["num", "separator", "text.struct", "source"])
+                ["num", "separator", "text.struct"])
         };
     }
 

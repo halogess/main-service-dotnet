@@ -1,7 +1,7 @@
 services:
   main-service:
-    container_name: main-service-dotnet
     build: .
+    container_name: main-service-dotnet
     ports:
       - "5062:5062"
     environment:
@@ -35,24 +35,20 @@ services:
       - Email__SenderPassword=${Email__SenderPassword}
       - Email__OverrideRecipientsEnabled=${Email__OverrideRecipientsEnabled}
       - Email__OverrideRecipientEmail=${Email__OverrideRecipientEmail}
-      - AllowedHosts=${AllowedHosts}
+      - AllowedHosts=*
     volumes:
-      - "${VOLUME_BASE_PATH}:/app/storage"
-      - "${DOKUMEN_IMPORT_SOURCE_HOST_PATH}:/app/import-source:ro"
+      - ${STORAGE_HOST_PATH:-/srv/cekta/storage}:/app/storage
+      - ${DOKUMEN_IMPORT_SOURCE_HOST_PATH}:/app/import-source:ro
     networks:
-      - validasi-ta-network
+      - cekta-db-network
+      - cekta-storage-network
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  # AI Service (uncomment when ready)
-  # ai-service:
-  #   container_name: ai-service
-  #   image: ai-service:latest
-  #   volumes:
-  #     - ${VOLUME_BASE_PATH}:/app/storage
-  #   networks:
-  #     - validasi-ta-network
-
 networks:
-  validasi-ta-network:
+  cekta-db-network:
+    name: cekta-db-network
+    external: true
+  cekta-storage-network:
+    name: cekta-storage-network
     driver: bridge

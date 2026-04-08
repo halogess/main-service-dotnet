@@ -10,6 +10,18 @@ namespace ValidasiTugasAkhir.MainService.Services;
 public static class AturanExcelExportBuilder
 {
     public const string ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    public const string WorksheetName = "Aturan";
+    public static readonly string[] Headers =
+    [
+        "Elemen",
+        "Kategori",
+        "Sub Kategori",
+        "Kriteria",
+        "Value",
+        "Hard Constraint",
+        "Note"
+    ];
+
     private const double ValueColumnWidth = 14d;
 
     private static readonly IReadOnlyDictionary<string, string[]> SplitElementKeys =
@@ -32,23 +44,12 @@ public static class AturanExcelExportBuilder
         var rows = BuildExportRows(details);
 
         using var workbook = new XLWorkbook();
-        var worksheet = workbook.Worksheets.Add("Aturan");
+        var worksheet = workbook.Worksheets.Add(WorksheetName);
 
-        var headers = new[]
-        {
-            "Elemen",
-            "Kategori",
-            "Sub Kategori",
-            "Kriteria",
-            "Value",
-            "Hard Constraint",
-            "Note"
-        };
-
-        for (var column = 0; column < headers.Length; column++)
+        for (var column = 0; column < Headers.Length; column++)
         {
             var cell = worksheet.Cell(1, column + 1);
-            cell.Value = headers[column];
+            cell.Value = Headers[column];
             cell.Style.Font.Bold = true;
             cell.Style.Fill.BackgroundColor = XLColor.LightGray;
         }
@@ -63,18 +64,23 @@ public static class AturanExcelExportBuilder
             worksheet.Cell(excelRow, 4).Value = row.Kriteria;
             var valueCell = worksheet.Cell(excelRow, 5);
             if (row.NumericValue.HasValue)
+            {
                 valueCell.Value = row.NumericValue.Value;
+            }
             else
+            {
+                valueCell.Style.NumberFormat.Format = "@";
                 valueCell.Value = row.ValueText;
+            }
             worksheet.Cell(excelRow, 6).Value = row.HardConstraint;
             worksheet.Cell(excelRow, 7).Value = row.Note;
         }
 
-        var usedRange = worksheet.Range(1, 1, Math.Max(rows.Count + 1, 2), headers.Length);
+        var usedRange = worksheet.Range(1, 1, Math.Max(rows.Count + 1, 2), Headers.Length);
         usedRange.Style.Alignment.Vertical = XLAlignmentVerticalValues.Top;
         usedRange.Style.Alignment.WrapText = true;
         worksheet.SheetView.FreezeRows(1);
-        worksheet.Range(1, 1, 1, headers.Length).SetAutoFilter();
+        worksheet.Range(1, 1, 1, Headers.Length).SetAutoFilter();
         worksheet.Columns().AdjustToContents();
         worksheet.Column(5).Width = ValueColumnWidth;
         worksheet.Column(5).Style.Alignment.WrapText = true;
@@ -646,7 +652,7 @@ public static class AturanExcelExportBuilder
         return true;
     }
 
-    private static string FormatElementLabel(string rawElement)
+    public static string FormatElementLabel(string rawElement)
     {
         if (string.IsNullOrWhiteSpace(rawElement))
             return string.Empty;

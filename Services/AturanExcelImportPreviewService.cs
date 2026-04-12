@@ -273,9 +273,16 @@ public sealed partial class AturanExcelImportPreviewService : IAturanExcelImport
         if (string.IsNullOrWhiteSpace(rawJson))
             return new JsonObject();
 
+        var jsonToParse = rawJson;
+        if (AturanDetailCanonicalizer.TryCanonicalize(detailKey, rawJson, out var canonicalJson, out var canonicalChanged, out var errorMessage) &&
+            !string.IsNullOrWhiteSpace(canonicalJson))
+        {
+            jsonToParse = canonicalJson!;
+        }
+
         try
         {
-            return JsonNode.Parse(rawJson) as JsonObject
+            return JsonNode.Parse(jsonToParse) as JsonObject
                 ?? throw new InvalidOperationException(
                     $"json_value untuk aturan `{detailKey}` harus berupa object JSON.");
         }
@@ -364,22 +371,7 @@ public sealed partial class AturanExcelImportPreviewService : IAturanExcelImport
             return;
         }
 
-        JsonNode? rootNode;
-        try
-        {
-            rootNode = JsonNode.Parse(detail.AturanDetailJsonValue);
-        }
-        catch (JsonException ex)
-        {
-            throw new InvalidOperationException(
-                $"json_value untuk aturan `{detailKey}` tidak valid: {ex.Message}");
-        }
-
-        if (rootNode is not JsonObject rootObject)
-        {
-            throw new InvalidOperationException(
-                $"json_value untuk aturan `{detailKey}` harus berupa object JSON.");
-        }
+        var rootObject = ParseJsonObject(detail.AturanDetailJsonValue, detail.AturanDetailKey);
 
         foreach (var expandedNode in ExpandElementNodes(detailKey, rootObject, existingDetailKeys))
         {

@@ -150,6 +150,53 @@ public class AturanExcelImportPreviewServiceTests
         Assert.Contains("Jumlah row workbook tidak cocok", error.Message);
     }
 
+    [Fact]
+    public async Task PreviewAsync_ShouldUseCanonicalSchemaForLegacyChapterStructureFields()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        db.Aturans.Add(new Aturan
+        {
+            AturanId = 4,
+            AturanVersi = "template-legacy-chapter",
+            AturanStatus = AturanStatusValues.TidakAktif
+        });
+        db.AturanDetails.Add(new AturanDetail
+        {
+            AturanDetailId = 40,
+            AturanId = 4,
+            AturanDetailKategori = "Isi Buku",
+            AturanDetailKey = "judul_bab",
+            AturanDetailJsonValue = """
+                                    {
+                                      "struktur_konten": {
+                                        "satu_baris_kosong_setelah": { "value": true, "is_editable": true, "is_hard_constraint": false },
+                                        "min_satu_paragraf_sebelum_subbab": { "value": true, "is_editable": true, "is_hard_constraint": false }
+                                      }
+                                    }
+                                    """
+        });
+        await db.SaveChangesAsync();
+
+        var service = new AturanExcelImportPreviewService(
+            db,
+            Mock.Of<ILogger<AturanExcelImportPreviewService>>());
+
+        var file = CreateWorkbookFile(await db.AturanDetails.Where(detail => detail.AturanId == 4).ToListAsync(), worksheet =>
+        {
+            var row = FindRow(worksheet, "Judul Bab", "Struktur Konten", string.Empty, "Jumlah Baris Kosong Setelah (baris)");
+            row.Cell(5).Value = 2;
+        });
+
+        var result = await service.PreviewAsync(4, file);
+
+        var changedDetail = Assert.Single(result.Details);
+        var root = JsonNode.Parse(changedDetail.JsonValue)!.AsObject();
+        Assert.Equal(2m, root["struktur_konten"]?["jumlah_baris_kosong_setelah"]?["value"]?.GetValue<decimal>());
+        Assert.Null(root["struktur_konten"]?["satu_baris_kosong_setelah"]);
+        Assert.Equal(1, result.ChangedRows);
+        Assert.Equal(1, result.ChangedDetails);
+    }
+
     private static IFormFile CreateWorkbookFile(
         IReadOnlyList<AturanDetail> details,
         Action<IXLWorksheet>? mutate = null)

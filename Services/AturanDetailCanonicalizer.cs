@@ -98,6 +98,30 @@ public static class AturanDetailCanonicalizer
     {
         switch (key)
         {
+            case "judul_bab":
+                MoveLegacyCountValue(root,
+                    ["struktur_konten", "satu_baris_kosong_setelah"],
+                    ["struktur_konten", "jumlah_baris_kosong_setelah"],
+                    enabledValue: 1,
+                    disabledValue: 0);
+                MoveLegacyCountValue(root,
+                    ["struktur_konten", "min_satu_paragraf_sebelum_subbab"],
+                    ["struktur_konten", "minimal_paragraf_sebelum_subbab"],
+                    enabledValue: 1,
+                    disabledValue: 0);
+                break;
+            case "judul_subbab":
+                MoveLegacyCountValue(root,
+                    ["struktur_konten", "minimal_satu_paragraf_setelah"],
+                    ["struktur_konten", "minimal_paragraf_setelah"],
+                    enabledValue: 1,
+                    disabledValue: 0);
+                MoveLegacyCountValue(root,
+                    ["struktur_konten", "cegah_subbab_tunggal"],
+                    ["struktur_konten", "minimal_subbab_level_sama"],
+                    enabledValue: 2,
+                    disabledValue: 1);
+                break;
             case "gambar":
                 MovePathValue(root,
                     ["caption_gambar", "numbering", "enter_after_number"],
@@ -114,6 +138,20 @@ public static class AturanDetailCanonicalizer
                     ["judul_kode", "numbering", "enter_after_numbering"]);
                 break;
         }
+    }
+
+    private static void MoveLegacyCountValue(
+        JsonObject root,
+        IReadOnlyList<string> sourcePath,
+        IReadOnlyList<string> targetPath,
+        decimal enabledValue,
+        decimal disabledValue)
+    {
+        MovePathValue(
+            root,
+            sourcePath,
+            targetPath,
+            sourceValue => ConvertLegacyCountNode(sourceValue, enabledValue, disabledValue));
     }
 
     private static JsonObject MergeObject(JsonObject templateObject, JsonNode? currentNode, IReadOnlyList<string> path)
@@ -255,6 +293,15 @@ public static class AturanDetailCanonicalizer
 
     private static void MovePathValue(JsonObject root, IReadOnlyList<string> sourcePath, IReadOnlyList<string> targetPath)
     {
+        MovePathValue(root, sourcePath, targetPath, null);
+    }
+
+    private static void MovePathValue(
+        JsonObject root,
+        IReadOnlyList<string> sourcePath,
+        IReadOnlyList<string> targetPath,
+        Func<JsonNode, JsonNode?>? transform)
+    {
         if (sourcePath.Count == 0 || targetPath.Count == 0)
             return;
 
@@ -268,9 +315,38 @@ public static class AturanDetailCanonicalizer
             return;
 
         if (targetParent![targetPath[^1]] == null)
-            targetParent[targetPath[^1]] = sourceValue.DeepClone();
+            targetParent[targetPath[^1]] = transform?.Invoke(sourceValue) ?? sourceValue.DeepClone();
 
         sourceParent.Remove(sourcePath[^1]);
+    }
+
+    private static JsonNode? ConvertLegacyCountNode(JsonNode sourceValue, decimal enabledValue, decimal disabledValue)
+    {
+        if (sourceValue is JsonObject sourceObject && IsWrapper(sourceObject))
+        {
+            var convertedWrapper = new JsonObject();
+            foreach (var property in sourceObject)
+            {
+                convertedWrapper[property.Key] = property.Key.Equals(ValueProperty, StringComparison.OrdinalIgnoreCase)
+                    ? ConvertLegacyCountScalar(property.Value, enabledValue, disabledValue)
+                    : property.Value?.DeepClone();
+            }
+
+            return convertedWrapper;
+        }
+
+        return ConvertLegacyCountScalar(sourceValue, enabledValue, disabledValue);
+    }
+
+    private static JsonNode? ConvertLegacyCountScalar(JsonNode? sourceValue, decimal enabledValue, decimal disabledValue)
+    {
+        if (sourceValue is not JsonValue scalarValue)
+            return sourceValue?.DeepClone();
+
+        if (TryReadDecimal(scalarValue, out var decimalValue))
+            return JsonValue.Create(decimalValue);
+
+        return JsonValue.Create(ReadScalarBoolean(scalarValue) ? enabledValue : disabledValue);
     }
 
     private static bool TryGetParentObject(

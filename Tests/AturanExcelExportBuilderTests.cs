@@ -608,4 +608,79 @@ public class AturanExcelExportBuilderTests
             row.SubKategori == "Font" &&
             row.Kriteria == "Font Size (pt)");
     }
+
+    [Fact]
+    public void BuildRows_ShouldCanonicalizeLegacyChapterAndSubchapterStructureFields()
+    {
+        var details = new List<AturanDetail>
+        {
+            new()
+            {
+                AturanDetailId = 70,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "judul_bab",
+                AturanDetailJsonValue =
+                    """
+                    {
+                      "struktur_konten": {
+                        "satu_baris_kosong_setelah": { "value": true, "is_editable": true, "is_hard_constraint": false },
+                        "min_satu_paragraf_sebelum_subbab": { "value": false, "is_editable": true, "is_hard_constraint": false }
+                      }
+                    }
+                    """
+            },
+            new()
+            {
+                AturanDetailId = 71,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "judul_subbab",
+                AturanDetailJsonValue =
+                    """
+                    {
+                      "paragraph": {
+                        "indentation": {
+                          "left_indent": { "value": 0, "is_editable": true, "is_hard_constraint": false },
+                          "right_indent": { "value": 0, "is_editable": true, "is_hard_constraint": false }
+                        }
+                      },
+                      "struktur_konten": {
+                        "minimal_satu_paragraf_setelah": { "value": true, "is_editable": true, "is_hard_constraint": false },
+                        "cegah_subbab_tunggal": { "value": true, "is_editable": true, "is_hard_constraint": false }
+                      }
+                    }
+                    """
+            }
+        };
+
+        var rows = AturanExcelExportBuilder.BuildRows(details);
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "judul_bab" &&
+            row.Kategori == "Struktur Konten" &&
+            row.Kriteria == "Jumlah Baris Kosong Setelah (baris)" &&
+            row.ValueText == "1");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "judul_bab" &&
+            row.Kategori == "Struktur Konten" &&
+            row.Kriteria == "Minimal Paragraf Sebelum Subbab" &&
+            row.ValueText == "0");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "judul_subbab" &&
+            row.Kategori == "Struktur Konten" &&
+            row.Kriteria == "Minimal Paragraf Setelah" &&
+            row.ValueText == "1");
+
+        Assert.Contains(rows, row =>
+            row.Elemen == "judul_subbab" &&
+            row.Kategori == "Struktur Konten" &&
+            row.Kriteria == "Minimal Subbab Level Sama" &&
+            row.ValueText == "2");
+
+        Assert.DoesNotContain(rows, row => row.Kriteria == "Satu Baris Kosong Setelah");
+        Assert.DoesNotContain(rows, row => row.Kriteria == "Min Satu Paragraf Sebelum Subbab");
+        Assert.DoesNotContain(rows, row => row.Kriteria == "Minimal Satu Paragraf Setelah");
+        Assert.DoesNotContain(rows, row => row.Kriteria == "Cegah Subbab Tunggal");
+    }
 }

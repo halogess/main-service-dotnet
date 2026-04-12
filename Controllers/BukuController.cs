@@ -203,6 +203,20 @@ public class BukuController : ControllerBase
         var isFinalStatus =
             string.Equals(buku.BukuStatus, "lolos", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(buku.BukuStatus, "tidak_lolos", StringComparison.OrdinalIgnoreCase);
+        var antrianList = await _db.Antrians
+            .Where(a => a.AntrianTipe == "buku" && a.BukuId == bukuId)
+            .OrderByDescending(a => a.AntrianCreatedAt)
+            .ThenByDescending(a => a.AntrianId)
+            .ToListAsync();
+        var hasFailedBabQueue = antrianList.Any(a =>
+            a.BabId.HasValue &&
+            (string.Equals(a.AntrianExtractionStatus, "failed", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(a.AntrianLabelingStatus, "failed", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(a.AntrianValidationStatus, "failed", StringComparison.OrdinalIgnoreCase)));
+        var includeBabState = isFinalStatus || hasFailedBabQueue;
+        var effectiveStatus = !isFinalStatus && hasFailedBabQueue
+            ? "tidak_lolos"
+            : buku.BukuStatus;
 
         var mahasiswa = await _sttsDb.Mahasiswas
             .Where(m => m.MhsNrp == buku.MhsNrp)
@@ -224,7 +238,8 @@ public class BukuController : ControllerBase
             ["judul"] = buku.BukuJudul,
             ["nama"] = mahasiswa?.MhsNama ?? "Unknown",
             ["notification_email"] = mahasiswa?.MhsEmail,
-            ["status"] = buku.BukuStatus,
+            ["status"] = effectiveStatus,
+            ["has_failed_bab"] = hasFailedBabQueue,
             ["jumlah_bab"] = buku.BukuJumlahBab,
             ["docx_archive_path"] = buku.BukuDocxZipPath,
             ["pdf_archive_path"] = buku.BukuPdfZipPath,
@@ -234,17 +249,11 @@ public class BukuController : ControllerBase
             ["updated_at"] = buku.BukuUpdatedAt
         };
 
-        if (isFinalStatus)
+        if (includeBabState)
         {
             var babs = await _db.Babs
                 .Where(b => b.BukuId == bukuId)
                 .OrderBy(b => b.BabOrder)
-                .ToListAsync();
-
-            var antrianList = await _db.Antrians
-                .Where(a => a.AntrianTipe == "buku" && a.BukuId == bukuId)
-                .OrderByDescending(a => a.AntrianCreatedAt)
-                .ThenByDescending(a => a.AntrianId)
                 .ToListAsync();
 
             var queueByBabId = antrianList
@@ -272,8 +281,8 @@ public class BukuController : ControllerBase
                 };
             }).ToList();
 
-            response["skor"] = buku.BukuSkor ?? 0;
-            response["jumlah_kesalahan"] = buku.BukuJumlahKesalahan ?? 0;
+            response["skor"] = buku.BukuSkor;
+            response["jumlah_kesalahan"] = buku.BukuJumlahKesalahan;
             response["bab"] = babData;
         }
 

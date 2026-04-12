@@ -41,6 +41,7 @@ public class PdfQueueBackgroundService : BackgroundService
                 {
                     string? bukuNrpForArchiveReady = null;
                     var shouldNotifyBukuArchiveReady = false;
+                    BukuFailureNotification? pendingBukuFailureNotification = null;
 
                     string filePath = queue.AntrianTipe == "buku" && queue.BabId.HasValue
                         ? (await db.Babs.FindAsync(queue.BabId.Value))?.BabDocxPath ?? ""
@@ -258,6 +259,10 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = BuildQueueErrorMessage("File tidak ditemukan: ", ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
+                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                            db,
+                            queue.BukuId,
+                            stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (HttpRequestException ex)
@@ -266,6 +271,10 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = BuildQueueErrorMessage("Adobe API error: ", ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
+                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                            db,
+                            queue.BukuId,
+                            stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (TimeoutException ex)
@@ -274,6 +283,10 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = BuildQueueErrorMessage("Konversi gagal: ", ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
+                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                            db,
+                            queue.BukuId,
+                            stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (InvalidOperationException ex)
@@ -282,6 +295,10 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = BuildQueueErrorMessage("Konversi gagal: ", ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
+                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                            db,
+                            queue.BukuId,
+                            stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (Exception ex)
@@ -290,10 +307,22 @@ public class PdfQueueBackgroundService : BackgroundService
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = BuildQueueErrorMessage(string.Empty, ex.Message);
                         await MarkAturanFailedAsync(db, queue, stoppingToken);
+                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                            db,
+                            queue.BukuId,
+                            stoppingToken);
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
 
                     await db.SaveChangesAsync(stoppingToken);
+
+                    if (pendingBukuFailureNotification is { } bukuFailureNotification)
+                    {
+                        await wsService.NotifyBukuStatusChanged(
+                            bukuFailureNotification.Nrp,
+                            bukuFailureNotification.BukuId,
+                            "tidak_lolos");
+                    }
                 }
 
                 await Task.Delay(5000, stoppingToken);

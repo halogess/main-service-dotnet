@@ -596,7 +596,6 @@ Menyimpan API keys untuk Google Gemini AI.
 |-------|------|-----------|------------|
 | `gemini_api_key_id` | uint | **PK** - ID API key | Identifikasi |
 | `gemini_api_key_value` | varchar(512) | API key value | Autentikasi |
-| `gemini_api_key_tier` | varchar(10) | Tier: `free`, `paid` | Rate limiting |
 | `gemini_api_key_status` | tinyint | Status aktif (1/0) | Filter aktif |
 | `gemini_api_key_usage` | uint | Jumlah penggunaan | Tracking |
 | `gemini_api_key_created_at` | datetime | Waktu pembuatan | Audit trail |

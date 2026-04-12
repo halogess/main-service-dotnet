@@ -219,7 +219,7 @@ public class ChapterTitleBabOrderValidationTests
                         }
                       },
                       "struktur_konten": {
-                        "satu_baris_kosong_setelah": { "value": true, "is_editable": true }
+                        "jumlah_baris_kosong_setelah": { "value": 1, "is_editable": true }
                       }
                     }
                     """,

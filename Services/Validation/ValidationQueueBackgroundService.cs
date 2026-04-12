@@ -98,6 +98,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                     queue.AntrianUpdatedAt = DateTime.Now;
                     await db.SaveChangesAsync(stoppingToken);
                     PendingValidationEmailNotification? pendingValidationEmail = null;
+                    BukuFailureNotification? pendingBukuFailureNotification = null;
 
                     try
                     {
@@ -372,9 +373,24 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "tidak_lolos");
                             }
                         }
+                        else if (queue.AntrianTipe == "buku")
+                        {
+                            pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                                db,
+                                queue.BukuId,
+                                stoppingToken);
+                        }
                     }
 
                     await db.SaveChangesAsync(stoppingToken);
+
+                    if (pendingBukuFailureNotification is { } bukuFailureNotification)
+                    {
+                        await wsService.NotifyBukuStatusChanged(
+                            bukuFailureNotification.Nrp,
+                            bukuFailureNotification.BukuId,
+                            "tidak_lolos");
+                    }
 
                     if (pendingValidationEmail != null &&
                         string.Equals(queue.AntrianValidationStatus, "completed", StringComparison.OrdinalIgnoreCase))

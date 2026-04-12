@@ -1,54 +1,48 @@
 services:
+  mysql-korektor:
+    image: mysql:8.0
+    container_name: db-korektor-buku
+    restart: always
+    ports:
+      - "${DB_PORT:-3307}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-change-me-root-password}
+      MYSQL_DATABASE: ${DB_NAME:-db_korektor_buku}
+      MYSQL_USER: ${DB_USER:-korektor_app}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-change-me-app-password}
+      MYSQL_ROOT_HOST: "%"
+    command: --default-authentication-plugin=mysql_native_password --bind-address=0.0.0.0
+    volumes:
+      - mysql_korektor_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   main-service:
     build: .
     container_name: main-service-dotnet
+    restart: always
+    depends_on:
+      mysql-korektor:
+        condition: service_healthy
+    env_file:
+      - .env
     ports:
       - "5062:5062"
     environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      - ASPNETCORE_HTTP_PORTS=5062
-      - STORAGE_PATH=/app/storage
-      - DOKUMEN_IMPORT_HOST_PATH=${DOKUMEN_IMPORT_SOURCE_HOST_PATH}
-      - DOKUMEN_IMPORT_CONTAINER_PATH=/app/import-source
-      - ConnectionStrings__SttsDbConnection=${ConnectionStrings__SttsDbConnection}
-      - ConnectionStrings__KorektorBukuDbConnection=${ConnectionStrings__KorektorBukuDbConnection}
-      - Auth__JwtSecret=${Auth__JwtSecret}
-      - Auth__AccessTokenExpiryMinutes=${Auth__AccessTokenExpiryMinutes}
-      - Auth__RefreshTokenExpiryDays=${Auth__RefreshTokenExpiryDays}
-      - Auth__AdminUsername=${Auth__AdminUsername}
-      - Auth__ExternalApiUrl=${Auth__ExternalApiUrl}
-      - Auth__ExternalApiToken=${Auth__ExternalApiToken}
-      - Auth__AppName=${Auth__AppName}
-      - Adobe__ApiBaseUrl=${Adobe__ApiBaseUrl}
-      - Gemini__Model=${Gemini__Model}
-      - Gemini__Temperature=${Gemini__Temperature}
-      - Gemini__TopP=${Gemini__TopP}
-      - Gemini__TopK=${Gemini__TopK}
-      - Gemini__MaxParallelBatches=${Gemini__MaxParallelBatches}
-      - Email__DashboardUrl=${Email__DashboardUrl}
-      - Email__SmtpHost=${Email__SmtpHost}
-      - Email__SmtpPort=${Email__SmtpPort}
-      - Email__UseSsl=${Email__UseSsl}
-      - Email__CheckCertificateRevocation=${Email__CheckCertificateRevocation}
-      - Email__SenderEmail=${Email__SenderEmail}
-      - Email__SenderName=${Email__SenderName}
-      - Email__SenderPassword=${Email__SenderPassword}
-      - Email__OverrideRecipientsEnabled=${Email__OverrideRecipientsEnabled}
-      - Email__OverrideRecipientEmail=${Email__OverrideRecipientEmail}
-      - AllowedHosts=*
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_HTTP_PORTS: 5062
+      STORAGE_PATH: /app/storage
+      DOKUMEN_IMPORT_HOST_PATH: ${DOKUMEN_IMPORT_SOURCE_HOST_PATH:-/srv/cekta/import-source}
+      DOKUMEN_IMPORT_CONTAINER_PATH: /app/import-source
+      ConnectionStrings__KorektorBukuDbConnection: Server=mysql-korektor;Port=3306;Database=${DB_NAME:-db_korektor_buku};User=${DB_USER:-korektor_app};Password=${DB_PASSWORD:-change-me-app-password};TreatTinyAsBoolean=false
     volumes:
       - ${STORAGE_HOST_PATH:-/srv/cekta/storage}:/app/storage
-      - ${DOKUMEN_IMPORT_SOURCE_HOST_PATH}:/app/import-source:ro
-    networks:
-      - cekta-db-network
-      - cekta-storage-network
+      - ${DOKUMEN_IMPORT_SOURCE_HOST_PATH:-/srv/cekta/import-source}:/app/import-source:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-networks:
-  cekta-db-network:
-    name: cekta-db-network
-    external: true
-  cekta-storage-network:
-    name: cekta-storage-network
-    driver: bridge
+volumes:
+  mysql_korektor_data:

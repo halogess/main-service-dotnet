@@ -1,4 +1,4 @@
-# Validasi Format Buku
+﻿# Validasi Format Buku
 
 Catatan: aturan numerik (margin, font size, spacing, dll) diambil dari Aturan/AturanDetail aktif sehingga bersifat konfigurasi.
 
@@ -21,7 +21,7 @@ Catatan: aturan numerik (margin, font size, spacing, dll) diambil dari Aturan/At
 | Judul Bab | format_nomor | Format nomor bab harus sesuai `numbering.number_format` + aturan `numbering.case` jika diisi. | diambil dari aturan.txt |
 | Judul Bab | judul_setelah_nomor | Judul bab harus ada setelah nomor bab. | hardcoded/derived |
 | Judul Bab | enter_after_number | Jika `numbering.enter_after_number` true, judul bab harus di baris berikutnya dan tidak ada baris kosong di antara nomor dan judul. | diambil dari aturan.txt |
-| Judul Bab | paragraf_kosong_setelah | Jika `struktur_konten.satu_baris_kosong_setelah` true, harus ada tepat 1 paragraf kosong setelah judul, lalu diikuti paragraf non-kosong. | diambil dari aturan.txt |
+| Judul Bab | paragraf_kosong_setelah | Jika `struktur_konten.jumlah_baris_kosong_setelah` bernilai N, harus ada tepat N paragraf kosong setelah judul, lalu diikuti paragraf non-kosong. | diambil dari aturan.txt |
 | Judul Bab | format_paragraf | Setiap baris judul bab harus memiliki paragraph format (tidak boleh ada baris tanpa format). | hardcoded/derived |
 | Judul Bab | alignment | Alignment judul bab sesuai `paragraph.alignment`. | diambil dari aturan.txt |
 | Judul Bab | indentation | Jika `paragraph.indentation` = none, semua indent (left/right/special) harus 0. | diambil dari aturan.txt |
@@ -30,7 +30,7 @@ Catatan: aturan numerik (margin, font size, spacing, dll) diambil dari Aturan/At
 | Judul Bab | format_teks | Format teks judul bab harus ditemukan jika ada aturan font. | hardcoded/derived |
 | Judul Bab | font | Font name/size/bold/italic/underline sesuai `font`. | diambil dari aturan.txt |
 | Judul Bab | paragraf_kosong_font_size | Ukuran font paragraf kosong setelah judul harus sama dengan judul (non-required/saran). | hardcoded/derived |
-| Judul Bab | paragraf_sebelum_subbab | Jika `struktur_konten.min_satu_paragraf_sebelum_subbab` true, harus ada minimal 1 paragraf antara judul bab dan subbab pertama. | diambil dari aturan.txt |
+| Judul Bab | paragraf_sebelum_subbab | Jika `struktur_konten.minimal_paragraf_sebelum_subbab` bernilai N, harus ada minimal N paragraf antara judul bab dan subbab pertama. | diambil dari aturan.txt |
 | Judul Subbab | font | Font name/size/bold/italic/underline sesuai `font`. | diambil dari aturan.txt |
 | Judul Subbab | alignment | Alignment judul subbab sesuai `paragraph.alignment`. | diambil dari aturan.txt |
 | Judul Subbab | left_right_indent | Left/right indent judul subbab sesuai `paragraph.indentation.left_indent/right_indent`. | diambil dari aturan.txt |
@@ -39,11 +39,11 @@ Catatan: aturan numerik (margin, font size, spacing, dll) diambil dari Aturan/At
 | Judul Subbab | line_spacing | Line spacing judul subbab sesuai `paragraph.spacing.line_spacing`. | diambil dari aturan.txt |
 | Judul Subbab | spacing_before_after | Spacing before/after judul subbab sesuai `paragraph.spacing.before/after`. | diambil dari aturan.txt |
 | Judul Subbab | case | Judul subbab harus Title Case/UPPERCASE/lowercase sesuai `numbering.case` (jika diisi). | diambil dari aturan.txt |
-| Judul Subbab | paragraf_setelah | Jika `struktur_konten.minimal_satu_paragraf_setelah` true, harus ada minimal 1 paragraf setelah judul subbab. | diambil dari aturan.txt |
+| Judul Subbab | paragraf_setelah | Jika `struktur_konten.minimal_paragraf_setelah` bernilai N, harus ada minimal N paragraf setelah judul subbab. | diambil dari aturan.txt |
 | Judul Subbab | posisi_bawah_halaman | Jika `struktur_konten.cegah_posisi_paling_bawah` true, judul subbab tidak boleh berada di paling bawah halaman. | diambil dari aturan.txt |
 | Judul Subbab | urutan_parent | Jika ada subbab bertingkat (mis. 1.2.1), parent (1.2) harus ada. | hardcoded/derived |
 | Judul Subbab | urutan_sibling | Tidak boleh loncat nomor sibling (mis. 1.3 tanpa 1.2). | hardcoded/derived |
-| Judul Subbab | subbab_tunggal | Jika `struktur_konten.cegah_subbab_tunggal` true, subbab tidak boleh berdiri sendiri (harus ada minimal dua sibling). | diambil dari aturan.txt |
+| Judul Subbab | subbab_tunggal | Jika `struktur_konten.minimal_subbab_level_sama` bernilai N, harus ada minimal N subbab pada level yang sama. | diambil dari aturan.txt |
 | Paragraf | font_name | Font paragraf sesuai `font.font_name`. | diambil dari aturan.txt |
 | Paragraf | font_size | Ukuran font paragraf sesuai `font.font_size`. | diambil dari aturan.txt |
 | Paragraf | alignment | Alignment paragraf sesuai `paragraph.alignment`. | diambil dari aturan.txt |

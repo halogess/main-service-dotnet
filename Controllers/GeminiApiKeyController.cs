@@ -38,7 +38,6 @@ public class GeminiApiKeyController : ControllerBase
         {
             id = k.GeminiApiKeyId,
             gemini_api_key_value = k.GeminiApiKeyValue,
-            gemini_api_key_tier = k.GeminiApiKeyTier,
             gemini_api_key_status = k.GeminiApiKeyStatus,
             gemini_api_key_usage = k.GeminiApiKeyUsage,
             created_at = k.GeminiApiKeyCreatedAt,
@@ -62,7 +61,6 @@ public class GeminiApiKeyController : ControllerBase
         {
             id = apiKey.GeminiApiKeyId,
             gemini_api_key_value = apiKey.GeminiApiKeyValue,
-            gemini_api_key_tier = apiKey.GeminiApiKeyTier,
             gemini_api_key_status = apiKey.GeminiApiKeyStatus,
             gemini_api_key_usage = apiKey.GeminiApiKeyUsage,
             created_at = apiKey.GeminiApiKeyCreatedAt,
@@ -79,15 +77,9 @@ public class GeminiApiKeyController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.gemini_api_key_value))
             return BadRequest(new { message = "gemini_api_key_value tidak boleh kosong" });
 
-        if (request.gemini_api_key_tier != null && string.IsNullOrWhiteSpace(request.gemini_api_key_tier))
-            return BadRequest(new { message = "gemini_api_key_tier tidak boleh kosong" });
-
         var apiKey = new GeminiApiKey
         {
             GeminiApiKeyValue = request.gemini_api_key_value.Trim(),
-            GeminiApiKeyTier = string.IsNullOrWhiteSpace(request.gemini_api_key_tier)
-                ? "free"
-                : request.gemini_api_key_tier.Trim(),
             GeminiApiKeyStatus = request.gemini_api_key_status ?? 1,
             GeminiApiKeyUsage = request.gemini_api_key_usage
         };
@@ -113,13 +105,6 @@ public class GeminiApiKeyController : ControllerBase
             if (string.IsNullOrWhiteSpace(request.gemini_api_key_value))
                 return BadRequest(new { message = "gemini_api_key_value tidak boleh kosong" });
             apiKey.GeminiApiKeyValue = request.gemini_api_key_value.Trim();
-        }
-
-        if (request.gemini_api_key_tier != null)
-        {
-            if (string.IsNullOrWhiteSpace(request.gemini_api_key_tier))
-                return BadRequest(new { message = "gemini_api_key_tier tidak boleh kosong" });
-            apiKey.GeminiApiKeyTier = request.gemini_api_key_tier.Trim();
         }
 
         if (request.gemini_api_key_status.HasValue)
@@ -161,7 +146,6 @@ public class GeminiApiKeyController : ControllerBase
 public class GeminiApiKeyCreateRequest
 {
     public string gemini_api_key_value { get; set; } = string.Empty;
-    public string? gemini_api_key_tier { get; set; }
     public sbyte? gemini_api_key_status { get; set; }
     public uint? gemini_api_key_usage { get; set; }
 }
@@ -169,7 +153,6 @@ public class GeminiApiKeyCreateRequest
 public class GeminiApiKeyUpdateRequest
 {
     public string? gemini_api_key_value { get; set; }
-    public string? gemini_api_key_tier { get; set; }
     public sbyte? gemini_api_key_status { get; set; }
     public uint? gemini_api_key_usage { get; set; }
     public bool? clear_usage { get; set; }

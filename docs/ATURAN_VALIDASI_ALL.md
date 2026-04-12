@@ -1,4 +1,4 @@
-# Aturan Validasi (DB + Hardcoded)
+﻿# Aturan Validasi (DB + Hardcoded)
 
 Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu menandakan konflik nilai antar sumber DB snapshot.
 
@@ -51,8 +51,8 @@ Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu mena
 | Isi Buku | judul_bab | paragraph.spacing.after | 0 | true | db |
 | Isi Buku | judul_bab | paragraph.spacing.before | 0 | true | db |
 | Isi Buku | judul_bab | paragraph.spacing.line_spacing | 1.5 | true | db |
-| Isi Buku | judul_bab | struktur_konten.min_satu_paragraf_sebelum_subbab | True | true | db |
-| Isi Buku | judul_bab | struktur_konten.satu_baris_kosong_setelah | True | true | db |
+| Isi Buku | judul_bab | struktur_konten.minimal_paragraf_sebelum_subbab | 1 | true | db |
+| Isi Buku | judul_bab | struktur_konten.jumlah_baris_kosong_setelah | 1 | true | db |
 | Isi Buku | judul_subbab | font.font_name | Times New Roman | true | db |
 | Isi Buku | judul_subbab | font.font_size | 14 | true | db |
 | Isi Buku | judul_subbab | font.font_style.bold | True | true | db |
@@ -69,8 +69,8 @@ Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu mena
 | Isi Buku | judul_subbab | paragraph.spacing.before | 0 | true | db |
 | Isi Buku | judul_subbab | paragraph.spacing.line_spacing | 1.5 | true | db |
 | Isi Buku | judul_subbab | struktur_konten.cegah_posisi_paling_bawah | True | true | db |
-| Isi Buku | judul_subbab | struktur_konten.cegah_subbab_tunggal | True | true | db |
-| Isi Buku | judul_subbab | struktur_konten.minimal_satu_paragraf_setelah | True | true | db |
+| Isi Buku | judul_subbab | struktur_konten.minimal_subbab_level_sama | 2 | true | db |
+| Isi Buku | judul_subbab | struktur_konten.minimal_paragraf_setelah | 1 | true | db |
 | Isi Buku | kode | judul_kode.font.font_name | Times New Roman | true | db |
 | Isi Buku | kode | judul_kode.font.font_size | 12 | true | db |
 | Isi Buku | kode | judul_kode.font.font_style.bold | True | true | db |
@@ -114,7 +114,7 @@ Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu mena
 | Isi Buku | tabel | caption_tabel.font.font_style.italic | False | true | db |
 | Isi Buku | tabel | caption_tabel.font.font_style.underline | False | true | db |
 | Isi Buku | tabel | caption_tabel.numbering.case | Title Case | true | db |
-| Isi Buku | tabel | caption_tabel.numbering.enter_after_number | True | true | db |
+| Isi Buku | tabel | caption_tabel.numbering.enter_after_numbering | True | true | db |
 | Isi Buku | tabel | caption_tabel.numbering.enter_after_numbering | True | true | db |
 | Isi Buku | tabel | caption_tabel.numbering.number_format | Tabel [nomor_bab].[nomor_tabel] | false | db |
 | Isi Buku | tabel | caption_tabel.paragraph.alignment | center | mixed(aturan.txt=false; rule.txt=true) | db |

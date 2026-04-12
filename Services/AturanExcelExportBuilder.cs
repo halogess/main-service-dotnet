@@ -137,12 +137,7 @@ public static class AturanExcelExportBuilder
             return;
         }
 
-        JsonNode? rootNode;
-        try
-        {
-            rootNode = JsonNode.Parse(detail.AturanDetailJsonValue);
-        }
-        catch (JsonException)
+        if (!TryParseCanonicalNode(detailKey, detail.AturanDetailJsonValue, out var rootNode))
         {
             rows.Add(new AturanExcelExportRow(detailKey, "Umum", string.Empty, "Raw JSON", detail.AturanDetailJsonValue, null, false, "JSON tidak valid"));
             return;
@@ -189,6 +184,40 @@ public static class AturanExcelExportBuilder
 
         if (!hasAnySplitNode)
             yield return (detailKey, rootObject);
+    }
+
+    private static bool TryParseCanonicalNode(string detailKey, string rawJson, out JsonNode? rootNode)
+    {
+        rootNode = null;
+        var jsonToParse = rawJson;
+        if (AturanDetailCanonicalizer.TryCanonicalize(detailKey, rawJson, out var canonicalJson, out var canonicalChanged, out var errorMessage)
+            && !string.IsNullOrWhiteSpace(canonicalJson))
+        {
+            jsonToParse = canonicalJson!;
+        }
+
+        try
+        {
+            rootNode = JsonNode.Parse(jsonToParse);
+            return true;
+        }
+        catch (JsonException)
+        {
+            if (!string.Equals(jsonToParse, rawJson, StringComparison.Ordinal))
+            {
+                try
+                {
+                    rootNode = JsonNode.Parse(rawJson);
+                    return true;
+                }
+                catch (JsonException)
+                {
+                    rootNode = null;
+                }
+            }
+
+            return false;
+        }
     }
 
     private static void FlattenNode(

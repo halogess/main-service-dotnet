@@ -15,11 +15,6 @@ public class GeminiApiKey
     [MaxLength(512)]
     public string GeminiApiKeyValue { get; set; } = string.Empty;
 
-    [Required]
-    [Column("gemini_api_key_tier")]
-    [MaxLength(10)]
-    public string GeminiApiKeyTier { get; set; } = "free";
-
     [Column("gemini_api_key_status")]
     public sbyte GeminiApiKeyStatus { get; set; } = 1;
 

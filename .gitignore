@@ -33,6 +33,7 @@ num*.txt
 shapes_output.txt
 style_content.txt
 temp_*.zip
+out-verify/
 
 # Storage (user data)
 storage/

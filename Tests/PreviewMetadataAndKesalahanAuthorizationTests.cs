@@ -265,6 +265,85 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
     }
 
     [Fact]
+    public async Task GetBukuById_ShouldExposeFailedBabStateEvenWhenBookStatusIsStillDiproses()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
+
+        db.Bukus.Add(new Buku
+        {
+            BukuId = 3,
+            MhsNrp = "05111740000123",
+            BukuJudul = "Buku Gagal",
+            BukuStatus = "diproses",
+            BukuJumlahBab = 1
+        });
+        db.Babs.Add(new Bab
+        {
+            BabId = 31,
+            BukuId = 3,
+            BabOrder = 1,
+            BabFilename = "BAB I.docx"
+        });
+        db.Antrians.Add(new Antrian
+        {
+            AntrianId = 301,
+            AntrianTipe = "buku",
+            BukuId = 3,
+            BabId = 31,
+            AntrianExtractionStatus = "failed",
+            AntrianErrorMessage = "Konversi gagal untuk BAB I",
+            AntrianUpdatedAt = DateTime.Now
+        });
+        await db.SaveChangesAsync();
+
+        var archiveService = new Mock<IBukuArchiveService>(MockBehavior.Strict);
+        archiveService
+            .Setup(service => service.GetDocxArchiveRelativePath("05111740000123", 3))
+            .Returns("buku/05111740000123/3/docx/buku-docx.zip");
+        archiveService
+            .Setup(service => service.GetPdfArchiveRelativePath("05111740000123", 3))
+            .Returns("buku/05111740000123/3/pdf/buku-pdf.zip");
+        archiveService
+            .Setup(service => service.TryResolveStorageFilePath(It.IsAny<string>(), out It.Ref<string>.IsAny))
+            .Returns((string _, out string fullPath) =>
+            {
+                fullPath = string.Empty;
+                return false;
+            });
+
+        var controller = new BukuController(
+            db,
+            sttsDb,
+            Mock.Of<IBukuService>(),
+            Mock.Of<IWebSocketService>(),
+            Mock.Of<IValidationReportService>(),
+            archiveService.Object)
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+
+        controller.HttpContext.Items["Nrp"] = "05111740000123";
+        controller.HttpContext.Items["Role"] = "mahasiswa";
+
+        var result = await controller.GetBukuById(3);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
+        var root = json.RootElement;
+
+        Assert.Equal("tidak_lolos", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("has_failed_bab").GetBoolean());
+
+        var bab = root.GetProperty("bab")[0];
+        Assert.Equal("failed", bab.GetProperty("extraction_status").GetString());
+        Assert.Equal("Konversi gagal untuk BAB I", bab.GetProperty("error_message").GetString());
+    }
+
+    [Fact]
     public async Task GetKesalahanById_ShouldForbidMahasiswaWhoDoesNotOwnDokumenError()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();

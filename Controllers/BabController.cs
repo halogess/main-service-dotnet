@@ -177,7 +177,7 @@ public class BabController : ControllerBase
                         judul = d.KesalahanDetailJudul,
                         penjelasan = d.KesalahanDetailPenjelasan,
                         steps = d.KesalahanDetailSteps,
-                        is_required = d.KesalahanIsRequired
+                        is_hard_constraint = d.KesalahanIsHardConstraint
                     })
                     .ToList()
             })

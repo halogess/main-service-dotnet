@@ -98,6 +98,7 @@ public sealed class AturanImportService : IAturanImportService
         var allRows = bodyRows.Concat(headerFooterRows).ToList();
         var labelMap = await LoadVisualLabelsAsync(allRows.Select(row => row.ElementId), aturanId, cancellationToken);
         var samples = await BuildSamplesAsync(allRows, labelMap, cancellationToken);
+        var footnoteSamples = await BuildNoteSamplesAsync("aturan", aturanId, "footnote", cancellationToken);
 
         ApplyPageSettings(detailDrafts["page_settings"], sections);
         ApplyPageNumbering(
@@ -112,7 +113,7 @@ public sealed class AturanImportService : IAturanImportService
         ApplyTableRule(detailDrafts["tabel"], samples, TableCaptionRegex);
         ApplyCodeRule(detailDrafts["kode"], samples, CodeCaptionRegex);
         ApplyFormulaRule(detailDrafts["rumus"], FilterSamples(samples, "rumus", "formula", "equation"));
-        ApplyFootnoteRule(detailDrafts["footnote"], FilterSamples(samples, "footnote"));
+        ApplyFootnoteRule(detailDrafts["footnote"], footnoteSamples);
 
         var normalizedDetails = new List<AturanDetail>();
         foreach (var draft in detailDrafts.Values)
@@ -281,6 +282,105 @@ public sealed class AturanImportService : IAturanImportService
                     TableContent = item.TableAggregate,
                     TableTextFormats = tableRunFormats,
                     TableParagraphFormats = tableParagraphFormats
+                };
+            })
+            .ToList();
+    }
+
+    private async Task<List<ElementSample>> BuildNoteSamplesAsync(
+        string refTipe,
+        uint refId,
+        string noteKind,
+        CancellationToken cancellationToken)
+    {
+        var notes = await _db.DokumenNotes
+            .Where(note => note.DnoteRefTipe == refTipe &&
+                           note.DnoteRefId == refId &&
+                           note.DnoteKind == noteKind)
+            .OrderBy(note => note.DnoteNumber ?? uint.MaxValue)
+            .ThenBy(note => note.DnoteId)
+            .Select(note => new NoteRow
+            {
+                NoteId = note.DnoteId,
+                NoteNumber = note.DnoteNumber,
+                NoteType = note.DnoteType,
+                Json = note.DnoteJsonTree
+            })
+            .ToListAsync(cancellationToken);
+
+        var parsedNotes = notes
+            .Select((note, index) => new
+            {
+                Note = note,
+                OrderIndex = index,
+                Content = ParseElementContent(note.Json)
+            })
+            .Where(item =>
+                !string.Equals(item.Note.NoteType, "separator", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(item.Note.NoteType, "continuationseparator", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(item.Content.PlainText))
+            .ToList();
+
+        if (parsedNotes.Count == 0)
+            return [];
+
+        var paragraphFormatIds = parsedNotes
+            .Select(item => item.Content.ParagraphFormatId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToList();
+
+        var textFormatIds = parsedNotes
+            .SelectMany(item => item.Content.TextFormatIds)
+            .Distinct()
+            .ToList();
+
+        var paragraphFormats = paragraphFormatIds.Count == 0
+            ? new Dictionary<uint, DokumenFormatParagraf>()
+            : await _db.DokumenFormatParagrafs
+                .Where(format => paragraphFormatIds.Contains(format.DfpId))
+                .ToDictionaryAsync(format => format.DfpId, cancellationToken);
+
+        var textFormats = textFormatIds.Count == 0
+            ? new Dictionary<uint, DokumenFormatText>()
+            : await _db.DokumenFormatTexts
+                .Where(format => textFormatIds.Contains(format.DftxId))
+                .ToDictionaryAsync(format => format.DftxId, cancellationToken);
+
+        return parsedNotes
+            .Select(item =>
+            {
+                paragraphFormats.TryGetValue(item.Content.ParagraphFormatId ?? 0, out var paragraphFormat);
+
+                var runFormats = item.Content.TextFormatIds
+                    .Where(textFormats.ContainsKey)
+                    .Select(id => textFormats[id])
+                    .GroupBy(format => format.DftxId)
+                    .Select(group => group.First())
+                    .ToList();
+
+                return new ElementSample
+                {
+                    Row = new ElementRow
+                    {
+                        ElementId = item.Note.NoteId,
+                        DsecId = 0,
+                        PartType = "body",
+                        PartPosition = "default",
+                        ElementType = "footnote",
+                        Json = item.Note.Json
+                    },
+                    OrderIndex = item.OrderIndex,
+                    Label = noteKind,
+                    NormalizedText = NormalizeWhitespace(item.Content.PlainText),
+                    Content = item.Content,
+                    ParagraphFormat = paragraphFormat,
+                    TextFormats = runFormats,
+                    TableFormat = null,
+                    TableContent = new TableContentAggregate(),
+                    TableTextFormats = Array.Empty<DokumenFormatText>(),
+                    TableParagraphFormats = Array.Empty<DokumenFormatParagraf>()
                 };
             })
             .ToList();
@@ -1910,6 +2010,14 @@ public sealed class AturanImportService : IAturanImportService
         public string PartType { get; init; } = "body";
         public string PartPosition { get; init; } = "default";
         public string? ElementType { get; init; }
+        public string? Json { get; init; }
+    }
+
+    private sealed class NoteRow
+    {
+        public uint NoteId { get; init; }
+        public uint? NoteNumber { get; init; }
+        public string? NoteType { get; init; }
         public string? Json { get; init; }
     }
 

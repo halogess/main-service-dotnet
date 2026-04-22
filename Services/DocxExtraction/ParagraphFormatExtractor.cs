@@ -32,10 +32,6 @@ public class ParagraphFormatExtractor
         var format = new DokumenFormatParagraf();
         var pPr = paragraph.ParagraphProperties;
         
-        // Store raw XML for debugging
-        if (pPr != null)
-            format.DfpRawPprXml = pPr.OuterXml;
-        
         // Style ID (direct reference)
         format.DfpPStyleId = pPr?.ParagraphStyleId?.Val?.Value;
         
@@ -76,47 +72,11 @@ public class ParagraphFormatExtractor
             ExtractDirectPropertiesOnly(format, pPr);
         }
         
-        // ============================================================
-        // NESTED DETAILS (JSON) - Always from direct pPr for reference
-        // ============================================================
-        
-        if (pPr != null)
-        {
-            // Numbering Properties (JSON)
-            var numPr = pPr.NumberingProperties;
-            if (numPr != null)
-                format.DfpNumprJson = SerializeElementToJson(numPr);
-            
-            // Paragraph Borders (JSON)
-            var pBdr = pPr.ParagraphBorders;
-            if (pBdr != null)
-                format.DfpPbdrJson = SerializeElementToJson(pBdr);
-            
-            // Shading (JSON)
-            var shd = pPr.Shading;
-            if (shd != null)
-                format.DfpShdJson = SerializeShadingToJson(shd);
-            
-            // Tabs (JSON)
-            var tabs = pPr.Tabs;
-            if (tabs != null)
-                format.DfpTabsJson = SerializeTabsToJson(tabs);
-            
-            // Conditional Style (cnfStyle)
-            var cnfStyle = pPr.GetFirstChild<ConditionalFormatStyle>();
-            if (cnfStyle != null)
-                format.DfpCnfStyleJson = SerializeElementToJson(cnfStyle);
-            
-            // Paragraph Mark Run Properties
-            var rPr = pPr.ParagraphMarkRunProperties;
-            if (rPr != null)
-                format.DfpParaMarkRprJson = SerializeElementToJson(rPr);
-            
-            // Paragraph Properties Change (revision tracking)
-            var pPrChange = pPr.ParagraphPropertiesChange;
-            if (pPrChange != null)
-                format.DfpPprChangeJson = SerializeElementToJson(pPrChange);
-        }
+        if (pPr?.NumberingProperties != null)
+            format.DfpNumprJson = SerializeElementToJson(pPr.NumberingProperties);
+
+        if (pPr?.Tabs != null)
+            format.DfpTabsJson = SerializeTabsToJson(pPr.Tabs);
 
         ApplyFallbackDefaults(format);
         
@@ -156,20 +116,6 @@ public class ParagraphFormatExtractor
         format.DfpKeepNext = effective.KeepNext;
         format.DfpKeepLines = effective.KeepLines;
         format.DfpPageBreakBefore = effective.PageBreakBefore;
-        format.DfpWidowControl = effective.WidowControl;
-        format.DfpSuppressLineNumbers = effective.SuppressLineNumbers;
-        format.DfpSuppressAutoHyphens = effective.SuppressAutoHyphens;
-        
-        // Layout Toggles (RESOLVED)
-        format.DfpSnapToGrid = effective.SnapToGrid;
-        format.DfpAdjustRightInd = effective.AdjustRightIndent;
-        format.DfpMirrorIndents = effective.MirrorIndents;
-        format.DfpSuppressOverlap = effective.SuppressOverlap;
-        format.DfpContextualSpacing = effective.ContextualSpacing;
-        format.DfpWordWrap = effective.WordWrap;
-        
-        // Outline level
-        format.DfpOutlineLvl = effective.OutlineLevel.HasValue ? (byte?)effective.OutlineLevel.Value : null;
     }
     
     /// <summary>
@@ -183,16 +129,6 @@ public class ParagraphFormatExtractor
         format.DfpKeepNext = IsToggleOn(pPr.KeepNext);
         format.DfpKeepLines = IsToggleOn(pPr.KeepLines);
         format.DfpPageBreakBefore = IsToggleOn(pPr.PageBreakBefore);
-        format.DfpWidowControl = !IsToggleOff(pPr.WidowControl);
-        format.DfpSuppressLineNumbers = IsToggleOn(pPr.SuppressLineNumbers);
-        format.DfpSuppressAutoHyphens = IsToggleOn(pPr.SuppressAutoHyphens);
-        format.DfpSnapToGrid = pPr.SnapToGrid != null ? IsToggleOn(pPr.SnapToGrid) : true;
-        format.DfpAdjustRightInd = pPr.AdjustRightIndent != null ? IsToggleOn(pPr.AdjustRightIndent) : true;
-        format.DfpMirrorIndents = IsToggleOn(pPr.MirrorIndents);
-        format.DfpSuppressOverlap = IsToggleOn(pPr.SuppressOverlap);
-        format.DfpContextualSpacing = IsToggleOn(pPr.ContextualSpacing);
-        format.DfpWordWrap = pPr.WordWrap != null ? IsToggleOn(pPr.WordWrap) : true;
-        
         // Spacing
         var spacing = pPr.SpacingBetweenLines;
         if (spacing != null)
@@ -241,9 +177,6 @@ public class ParagraphFormatExtractor
         if (pPr.TextAlignment?.Val?.HasValue == true)
             format.DfpTextAlignment = ConvertTextAlignment(pPr.TextAlignment.Val.Value);
         
-        // Outline level
-        if (pPr.OutlineLevel?.Val?.HasValue == true)
-            format.DfpOutlineLvl = (byte)pPr.OutlineLevel.Val.Value;
     }
     
     private static uint? ParseUint(string value)
@@ -263,13 +196,6 @@ public class ParagraphFormatExtractor
         if (toggle == null) return false;
         if (toggle.Val == null) return true;
         return toggle.Val.Value;
-    }
-    
-    private static bool IsToggleOff(OnOffType? toggle)
-    {
-        if (toggle == null) return false;
-        if (toggle.Val == null) return false;
-        return !toggle.Val.Value;
     }
     
     private static bool IsOnOffValueOn(OnOffValue? value)
@@ -310,17 +236,6 @@ public class ParagraphFormatExtractor
             arr.Add(obj);
         }
         return arr;
-    }
-    
-    private static string SerializeShadingToJson(Shading shd)
-    {
-        var obj = new JObject();
-        if (shd.Val?.HasValue == true) obj["val"] = shd.Val.Value.ToString();
-        if (shd.Color?.HasValue == true) obj["color"] = shd.Color.Value;
-        if (shd.Fill?.HasValue == true) obj["fill"] = shd.Fill.Value;
-        if (shd.ThemeColor?.HasValue == true) obj["themeColor"] = shd.ThemeColor.Value.ToString();
-        if (shd.ThemeFill?.HasValue == true) obj["themeFill"] = shd.ThemeFill.Value.ToString();
-        return obj.ToString(Formatting.None);
     }
     
     private static string SerializeTabsToJson(Tabs tabs)

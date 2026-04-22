@@ -41,13 +41,11 @@ foreach (var aturanGroup in groupedByAturan)
     {
         var details = aturanGroup.ToList();
         var globalDetail = details.FirstOrDefault(detail =>
-            detail.Status == 1 &&
             Matches(detail.Kategori, NomorHalamanKategori) &&
             Matches(detail.Key, GlobalKey));
 
         var legacyDetails = details
             .Where(detail =>
-                detail.Status == 1 &&
                 Matches(detail.Kategori, NomorHalamanKategori) &&
                 detail.Key != null &&
                 LegacyKeys.Contains(detail.Key, StringComparer.OrdinalIgnoreCase))
@@ -448,7 +446,6 @@ static async Task<List<AturanDetailRow>> LoadDetailsAsync(MySqlConnection connec
                aturan_detail_kategori,
                aturan_detail_key,
                aturan_detail_json_value,
-               aturan_detail_status,
                aturan_detail_catatan
         FROM aturan_detail
         ORDER BY aturan_id, aturan_detail_id
@@ -466,7 +463,6 @@ static async Task<List<AturanDetailRow>> LoadDetailsAsync(MySqlConnection connec
             Kategori: reader.IsDBNull(reader.GetOrdinal("aturan_detail_kategori")) ? null : reader.GetString(reader.GetOrdinal("aturan_detail_kategori")),
             Key: reader.IsDBNull(reader.GetOrdinal("aturan_detail_key")) ? null : reader.GetString(reader.GetOrdinal("aturan_detail_key")),
             JsonValue: reader.IsDBNull(reader.GetOrdinal("aturan_detail_json_value")) ? null : reader.GetString(reader.GetOrdinal("aturan_detail_json_value")),
-            Status: reader.GetSByte("aturan_detail_status"),
             Catatan: reader.IsDBNull(reader.GetOrdinal("aturan_detail_catatan")) ? null : reader.GetString(reader.GetOrdinal("aturan_detail_catatan"))));
     }
 
@@ -485,14 +481,12 @@ static async Task InsertGlobalNomorHalamanAsync(
             aturan_detail_kategori,
             aturan_detail_key,
             aturan_detail_json_value,
-            aturan_detail_status,
             aturan_detail_catatan
         ) VALUES (
             @aturanId,
             @kategori,
             @key,
             @jsonValue,
-            1,
             NULL
         )
         """;
@@ -513,8 +507,7 @@ static async Task UpdateJsonValueAsync(
 {
     const string sql = """
         UPDATE aturan_detail
-        SET aturan_detail_json_value = @jsonValue,
-            aturan_detail_status = 1
+        SET aturan_detail_json_value = @jsonValue
         WHERE aturan_detail_id = @detailId
         """;
 
@@ -552,5 +545,4 @@ internal sealed record AturanDetailRow(
     string? Kategori,
     string? Key,
     string? JsonValue,
-    sbyte Status,
     string? Catatan);

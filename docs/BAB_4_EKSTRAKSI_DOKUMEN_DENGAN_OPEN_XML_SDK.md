@@ -80,11 +80,11 @@ Komponen XML kunci yang diekstrak di sistem ini dapat dipetakan sebagai berikut:
 
 4. `w:fldSimple`, `w:fldChar`, `w:instrText`
    - Sumber: field sederhana dan field kompleks.
-   - Hasil: item konten JSON bertipe `field` + format `dokumen_format_field`.
+   - Hasil: item konten JSON bertipe `field` dengan metadata seperti `field_type`, `value`, dan `result_dftx_id`.
 
 5. `w:tbl`, `w:tr`, `w:tc`
    - Sumber: tabel pada body atau nested.
-   - Hasil: elemen bertipe `table` dengan struktur baris-sel + format tabel/baris/sel.
+   - Hasil: elemen bertipe `table` dengan struktur baris-sel hierarkis + format tabel level-utama.
 
 6. `w:drawing`, `w:pict`, `w:txbxContent`
    - Sumber: gambar, shape, chart, textbox, termasuk objek floating.
@@ -439,8 +439,8 @@ Untuk kasus `decimalZero`, angka dipadatkan ke format dua digit (misal `01`, `02
 Tabel diekstrak dari elemen `w:tbl` melalui `TableExtractor`. Struktur keluaran JSON pada level elemen berbentuk:
 - `dft_id` (referensi format tabel),
 - `content.rows` berisi daftar baris,
-- setiap baris memiliki `dftr_id` dan daftar sel,
-- setiap sel memiliki `dftc_id` dan konten.
+- setiap baris memiliki daftar sel,
+- setiap sel memiliki konten bertingkat.
 
 Konten sel dapat berupa:
 - paragraf (dengan tipe dan `dfp_id`),
@@ -468,23 +468,12 @@ Format tabel diekstrak oleh `TableFormatExtractor` dan disimpan pada `dokumen_fo
 Extractor tabel bekerja bersama `TableStyleResolver` untuk mendapatkan effective properties, sehingga style inheritance tabel turut diperhitungkan.
 
 ### 4.6.3 Ekstraksi Row dan Cell
-Setiap baris tabel diekstrak oleh `TableRowFormatExtractor`:
-- `dftr_tbl_header` (repeat as table header),
-- `dftr_cant_split` (larangan split baris antar halaman),
-- raw XML baris.
+Pada skema aktif, baris dan sel tabel dipertahankan sebagai struktur JSON bertingkat di dalam elemen tabel:
+- setiap row berisi array `cells`,
+- setiap cell berisi array `content`,
+- setiap item di dalam cell tetap dapat mereferensikan `dfp_id` dan `dftx_id` bila kontennya berupa paragraf atau teks berformat.
 
-Setiap sel diekstrak oleh `TableCellFormatExtractor`:
-- `grid span`,
-- `vertical merge`,
-- `vertical alignment`,
-- raw XML sel.
-
-Konversi indeks baris-kolom dipertahankan selama proses agar resolver conditional style dapat menentukan konteks seperti first row/last column/banded rows.
-
-Dalam kerangka reproduktibilitas, penyimpanan format row/cell sebagai entitas tersendiri memudahkan:
-- pengujian unit extractor format,
-- audit regresi setelah perubahan algoritma style resolver,
-- serta komparasi antarversi dokumen yang direvisi.
+Konversi indeks baris-kolom tetap dipertahankan selama proses ekstraksi agar traversal nested table dan pembacaan isi sel tetap stabil.
 
 ### 4.6.4 Ekstraksi Konten Cell
 Konten sel diproses sebagai mini-document block:
@@ -543,20 +532,8 @@ Elemen-elemen floating dalam cluster lokal diurutkan berdasarkan posisi `Y` untu
 
 Perlu dicatat bahwa urutan XML bawaan Word tidak selalu identik dengan urutan baca visual pada halaman saat objek floating digunakan. Dengan demikian, strategi reordering berbasis posisi vertikal adalah kompromi praktis untuk meningkatkan konsistensi interpretasi dokumen pada layer validasi otomatis.
 
-### 4.7.4 Ekstraksi Media dari Package
-Proyek menyediakan `MediaExtractor` untuk menyalin image part dari package DOCX ke filesystem berdasarkan `rId`. Mekanisme ini memudahkan kebutuhan:
-- rendering ulang gambar,
-- audit media,
-- proses visualisasi eksternal.
-
-Dalam pipeline ekstraksi inti saat ini, elemen konten menyimpan referensi media (`rId`) dan format drawing; sementara ekstraksi biner media dapat dijalankan sebagai tahap tambahan sesuai kebutuhan deployment.
-
-Dengan desain tersebut, sistem tetap ringan pada jalur ekstraksi utama, namun tetap memiliki komponen siap pakai untuk materialisasi media jika diperlukan.
-
-Secara operasional, pemisahan antara ekstraksi referensi media (`rId`) dan ekstraksi biner media memberi fleksibilitas deployment:
-1. mode hemat-storage: simpan referensi saja;
-2. mode visual-analytics: simpan referensi dan salin media biner;
-3. mode hybrid: salin media berdasarkan tipe elemen tertentu (misal hanya gambar pada body utama).
+### 4.7.4 Referensi Media dari Package
+Dalam pipeline ekstraksi inti saat ini, elemen konten menyimpan referensi media (`rId`) dan format drawing. Pendekatan ini menjaga jalur ekstraksi utama tetap ringan, sementara hubungan ke image part di dalam package DOCX tetap dapat ditelusuri saat dibutuhkan untuk analisis atau rendering lanjutan.
 
 ---
 
@@ -643,10 +620,7 @@ Hasil ekstraksi dipetakan ke skema relasional dengan prinsip pemisahan concern:
    - `dokumen_format_paragraf`
    - `dokumen_format_text`
    - `dokumen_format_table`
-   - `dokumen_format_table_row`
-   - `dokumen_format_table_cell`
    - `dokumen_format_drawing`
-   - `dokumen_format_field`
 
 Relasi inti:
 - `section` memiliki banyak `part`;
@@ -674,7 +648,7 @@ Kolom `delemen_json_tree` menyimpan struktur konten elemen dalam JSON. Pola umum
   "dfp_id": 123,
   "content": [
     { "type": "text", "dftx_id": 456, "value": "Contoh teks" },
-    { "type": "field", "dffd_id": 33, "result_dftx_id": 457, "value": "1" }
+    { "type": "field", "field_type": "PAGE", "result_dftx_id": 457, "value": "1" }
   ]
 }
 ```
@@ -686,10 +660,8 @@ Kolom `delemen_json_tree` menyimpan struktur konten elemen dalam JSON. Pola umum
   "content": {
     "rows": [
       {
-        "dftr_id": 20,
         "cells": [
           {
-            "dftc_id": 30,
             "content": [
               {
                 "type": "paragraph",

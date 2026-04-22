@@ -41,7 +41,7 @@ public partial class ValidationService
         }
 
         var judulDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanId == aturan.AturanId)
             .Where(d => d.AturanDetailKategori == "Isi Buku")
             .Where(d => d.AturanDetailKey == "judul_bab")
             .FirstOrDefaultAsync(cancellationToken);
@@ -249,7 +249,8 @@ public partial class ValidationService
         if (titleLayoutsById.Count > 0)
             titlePageLayout = titleLayoutsById.Values.FirstOrDefault();
 
-        result.IncrementTotalChecks();
+        var numberFormatHardConstraint = rule?.Numbering?.NumberFormat?.IsHardConstraint == true;
+        result.IncrementTotalChecks(numberFormatHardConstraint);
         if (!HasDisallowedWhitespace(numberLine))
         {
             result.IncrementPassedChecks();
@@ -269,7 +270,7 @@ public partial class ValidationService
         var numberCaseRule = rule?.Numbering?.Case?.Value;
         if (!string.IsNullOrWhiteSpace(numberFormat))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberFormatHardConstraint);
             if (MatchesNumberFormat(numberLine, numberFormat, numberCaseRule))
             {
                 result.IncrementPassedChecks();
@@ -293,7 +294,7 @@ public partial class ValidationService
             : null;
         if (expectedBabOrder.HasValue && actualChapterNumber.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberFormatHardConstraint);
             if (actualChapterNumber.Value == expectedBabOrder.Value)
             {
                 result.IncrementPassedChecks();
@@ -328,7 +329,8 @@ public partial class ValidationService
 
         if (rule?.Numbering?.EnterAfterNumber?.Value == true)
         {
-            result.IncrementTotalChecks();
+            var enterAfterNumberHardConstraint = rule.Numbering?.EnterAfterNumber?.IsHardConstraint == true;
+            result.IncrementTotalChecks(enterAfterNumberHardConstraint);
             if (titleLinesNonEmpty.Count > 0 && titleLineCandidates.Count > 0)
             {
                 result.IncrementPassedChecks();
@@ -350,7 +352,8 @@ public partial class ValidationService
                 {
                     Category = "Isi Buku",
                     Field = "judul_bab",
-                    Message = "Terdapat baris kosong di antara nomor bab dan judul"
+                    Message = "Terdapat baris kosong di antara nomor bab dan judul",
+                    IsHardConstraint = enterAfterNumberHardConstraint
                 });
             }
         }
@@ -385,7 +388,10 @@ public partial class ValidationService
                 emptyIndex++;
             }
 
-            result.IncrementTotalChecks();
+            var emptyLineHardConstraint = rule?.StrukturKonten?.JumlahBarisKosongSetelah?.Value is { }
+                ? rule.StrukturKonten?.JumlahBarisKosongSetelah?.IsHardConstraint == true
+                : rule?.StrukturKonten?.SatuBarisKosongSetelah?.IsHardConstraint == true;
+            result.IncrementTotalChecks(emptyLineHardConstraint);
             if (emptyLineCount == expectedEmptyLineCount)
             {
                 result.IncrementPassedChecks();
@@ -431,7 +437,16 @@ public partial class ValidationService
 
         if (paragraphIds.Count != titleBlock.Count)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(
+                rule?.Paragraph?.Alignment?.IsHardConstraint == true ||
+                rule?.Paragraph?.Indentation?.IsHardConstraint == true ||
+                rule?.Paragraph?.Indentation?.LeftIndent?.IsHardConstraint == true ||
+                rule?.Paragraph?.Indentation?.RightIndent?.IsHardConstraint == true ||
+                rule?.Paragraph?.Indentation?.FirstLineIndent?.IsHardConstraint == true ||
+                rule?.Paragraph?.Indentation?.Hanging?.IsHardConstraint == true ||
+                rule?.Paragraph?.Spacing?.LineSpacing?.IsHardConstraint == true ||
+                rule?.Paragraph?.Spacing?.Before?.IsHardConstraint == true ||
+                rule?.Paragraph?.Spacing?.After?.IsHardConstraint == true);
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -448,7 +463,7 @@ public partial class ValidationService
         var expectedAlignment = rule?.Paragraph?.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment) && titleParagraphs.Count > 0)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Alignment?.IsHardConstraint == true);
             var actualAlignments = titleParagraphs
                 .Select(pf => pf!.DfpJc ?? "unknown")
                 .Distinct()
@@ -485,7 +500,7 @@ public partial class ValidationService
         var spacingRule = rule?.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true && titleParagraphs.Count > 0)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actuals = titleParagraphs.Select(pf => GetLineSpacing(pf!)).ToList();
 
@@ -508,7 +523,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true && titleParagraphs.Count > 0)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actuals = titleParagraphs.Select(pf => TwipsToPoints(pf!.DfpSpacingBeforeTwips)).ToList();
 
@@ -532,7 +547,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true && titleParagraphs.Count > 0)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actuals = titleParagraphs.Select(pf => TwipsToPoints(pf!.DfpSpacingAfterTwips)).ToList();
 
@@ -561,7 +576,12 @@ public partial class ValidationService
 
         if (textFormatIds.Count == 0 && HasTitleFontRule(rule))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(
+                rule?.Font?.FontName?.IsHardConstraint == true ||
+                rule?.Font?.FontSize?.IsHardConstraint == true ||
+                rule?.Font?.FontStyle?.Bold?.IsHardConstraint == true ||
+                rule?.Font?.FontStyle?.Italic?.IsHardConstraint == true ||
+                rule?.Font?.FontStyle?.Underline?.IsHardConstraint == true);
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -580,7 +600,12 @@ public partial class ValidationService
 
             if (textFormats.Count == 0)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(
+                    rule?.Font?.FontName?.IsHardConstraint == true ||
+                    rule?.Font?.FontSize?.IsHardConstraint == true ||
+                    rule?.Font?.FontStyle?.Bold?.IsHardConstraint == true ||
+                    rule?.Font?.FontStyle?.Italic?.IsHardConstraint == true ||
+                    rule?.Font?.FontStyle?.Underline?.IsHardConstraint == true);
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
@@ -597,7 +622,7 @@ public partial class ValidationService
             var expectedFontName = rule?.Font?.FontName?.Value;
             if (!string.IsNullOrWhiteSpace(expectedFontName))
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(rule.Font?.FontName?.IsHardConstraint == true);
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -650,7 +675,7 @@ public partial class ValidationService
             var expectedFontSize = rule?.Font?.FontSize?.Value;
             if (expectedFontSize.HasValue)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(rule.Font?.FontSize?.IsHardConstraint == true);
                 var expectedPt = expectedFontSize.Value;
                 var expectedHalfPt = expectedPt * 2m;
                 if (titleRuns.Count > 0)
@@ -706,7 +731,7 @@ public partial class ValidationService
             var expectedBold = rule?.Font?.FontStyle?.Bold?.Value;
             if (expectedBold.HasValue)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(rule.Font?.FontStyle?.Bold?.IsHardConstraint == true);
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -756,7 +781,7 @@ public partial class ValidationService
             var expectedItalic = rule?.Font?.FontStyle?.Italic?.Value;
             if (expectedItalic.HasValue)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(rule.Font?.FontStyle?.Italic?.IsHardConstraint == true);
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -806,7 +831,7 @@ public partial class ValidationService
             var expectedUnderline = rule?.Font?.FontStyle?.Underline?.Value;
             if (expectedUnderline.HasValue)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(rule.Font?.FontStyle?.Underline?.IsHardConstraint == true);
                 if (titleRuns.Count > 0)
                 {
                     var mismatches = CollectRunMismatches(
@@ -917,7 +942,17 @@ public partial class ValidationService
             : (rule?.StrukturKonten?.MinSatuParagrafSebelumSubbab?.Value ?? true ? 1 : 0);
         if (expectedParagraphBeforeSubchapter > 0)
         {
-            await ValidateParagraphBeforeSubchapterAsync(result, bodyElements, labelMap, titleIds, expectedParagraphBeforeSubchapter, cancellationToken);
+            var paragraphBeforeSubchapterHardConstraint = rule?.StrukturKonten?.MinimalParagrafSebelumSubbab?.Value is { }
+                ? rule.StrukturKonten?.MinimalParagrafSebelumSubbab?.IsHardConstraint == true
+                : rule?.StrukturKonten?.MinSatuParagrafSebelumSubbab?.IsHardConstraint == true;
+            await ValidateParagraphBeforeSubchapterAsync(
+                result,
+                bodyElements,
+                labelMap,
+                titleIds,
+                expectedParagraphBeforeSubchapter,
+                paragraphBeforeSubchapterHardConstraint,
+                cancellationToken);
         }
 
         ElementNeighborContext? titleContext = null;
@@ -993,7 +1028,7 @@ public partial class ValidationService
 
             if (textFormats.Count > 0)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(rule?.Font?.FontSize?.IsHardConstraint == true);
                 var expectedHalfPt = expectedFontSize.Value * 2m;
                 var actuals = textFormats
                     .Select(tf => tf.DftxSizeHalfpt.HasValue ? (decimal?)tf.DftxSizeHalfpt.Value : null)
@@ -1012,8 +1047,7 @@ public partial class ValidationService
                         Field = "judul_bab",
                         Message = "Ukuran font baris kosong setelah judul bab tidak sesuai dengan judul",
                         Expected = expectedFontSize.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) + " pt",
-                        Actual = string.Join(", ", actuals.Select(a => (a!.Value / 2m).ToString(System.Globalization.CultureInfo.InvariantCulture) + " pt")),
-                        IsRequired = false // Non-required check
+                        Actual = string.Join(", ", actuals.Select(a => (a!.Value / 2m).ToString(System.Globalization.CultureInfo.InvariantCulture) + " pt"))
                     });
                 }
             }
@@ -1361,6 +1395,7 @@ public partial class ValidationService
         Dictionary<ulong, string> labelMap,
         HashSet<ulong> titleIds,
         int expectedParagraphCount,
+        bool isHardConstraint,
         CancellationToken cancellationToken)
     {
         // Find the end of chapter title block (after title elements and empty line)
@@ -1411,7 +1446,7 @@ public partial class ValidationService
         }
 
         // Check if there's at least the configured number of paragraphs between title and first subchapter.
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         var paragraphCount = 0;
         
         for (int i = titleEndIndex; i < firstSubchapterIndex.Value; i++)
@@ -2105,7 +2140,7 @@ public partial class ValidationService
         if (!string.IsNullOrWhiteSpace(indentationRule.Value) &&
             indentationRule.Value.Equals("none", StringComparison.OrdinalIgnoreCase))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(indentationRule.IsHardConstraint);
             if (normalizedParagraphs.All(pf => !HasIndentation(pf)))
             {
                 result.IncrementPassedChecks();
@@ -2140,6 +2175,7 @@ public partial class ValidationService
             result,
             normalizedParagraphs,
             indentationRule.LeftIndent?.Value ?? 0m,
+            indentationRule.LeftIndent?.IsHardConstraint == true,
             GetLeftIndentCm,
             field,
             $"Left indent {subjectLabel} tidak sesuai",
@@ -2150,6 +2186,7 @@ public partial class ValidationService
             result,
             normalizedParagraphs,
             indentationRule.RightIndent?.Value ?? 0m,
+            indentationRule.RightIndent?.IsHardConstraint == true,
             GetRightIndentCm,
             field,
             $"Right indent {subjectLabel} tidak sesuai",
@@ -2161,6 +2198,7 @@ public partial class ValidationService
             normalizedParagraphs,
             paragraphTexts,
             indentationRule.FirstLineIndent?.Value ?? 0m,
+            indentationRule.FirstLineIndent?.IsHardConstraint == true,
             field,
             $"First line indent {subjectLabel} tidak sesuai",
             evidence,
@@ -2170,6 +2208,7 @@ public partial class ValidationService
             result,
             normalizedParagraphs,
             indentationRule.Hanging?.Value ?? 0m,
+            indentationRule.Hanging?.IsHardConstraint == true,
             GetHangingIndentCm,
             field,
             $"Hanging indent {subjectLabel} tidak sesuai",
@@ -2181,6 +2220,7 @@ public partial class ValidationService
         ValidationResult result,
         IReadOnlyList<DokumenFormatParagraf> paragraphs,
         decimal? expected,
+        bool isHardConstraint,
         Func<DokumenFormatParagraf, decimal> selector,
         string field,
         string message,
@@ -2190,7 +2230,7 @@ public partial class ValidationService
         if (!expected.HasValue || paragraphs.Count == 0)
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         var actuals = paragraphs.Select(selector).ToList();
         if (actuals.All(actual => IsWithinTolerance(actual, expected.Value, 0.05m)))
         {
@@ -2215,6 +2255,7 @@ public partial class ValidationService
         IReadOnlyList<DokumenFormatParagraf> paragraphs,
         IReadOnlyList<string?>? paragraphTexts,
         decimal? expected,
+        bool isHardConstraint,
         string field,
         string message,
         string? evidence,
@@ -2223,7 +2264,7 @@ public partial class ValidationService
         if (!expected.HasValue || paragraphs.Count == 0)
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         var observations = paragraphs
             .Select((paragraph, index) => ObserveFirstLineIndent(
                 paragraph,

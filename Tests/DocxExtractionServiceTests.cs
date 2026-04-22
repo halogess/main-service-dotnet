@@ -97,7 +97,9 @@ public class DocxExtractionServiceTests
         // Assert.Equal(tableElements.Count, tableFormats.Count);
 
         // 5. Check Footnotes/Endnotes if any
-        var notes = await db.DokumenNotes.Where(n => n.DokumenId == dokumenId).ToListAsync();
+        var notes = await db.DokumenNotes
+            .Where(n => n.DnoteRefTipe == "dokumen" && n.DnoteRefId == dokumenId)
+            .ToListAsync();
         // bab2.docx might or might not have notes, but we check the query works
         // Assert.NotNull(notes); 
     }

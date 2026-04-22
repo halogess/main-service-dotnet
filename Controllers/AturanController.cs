@@ -298,55 +298,43 @@ public class AturanController : ControllerBase
             }
 
             var existingById = existingDetails.ToDictionary(detail => detail.AturanDetailId);
-            var normalizedJsonByDetailId = new Dictionary<uint, string>();
+            var normalizedByDetailId = new Dictionary<uint, (string CanonicalKey, string CanonicalKategori, string NormalizedJson)>();
+            var requestedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var detail in details)
             {
                 if (detail.aturan_detail_id is not { } detailId)
                     continue;
 
                 var existingDetail = existingById[detailId];
-                var effectiveKey = detail.key ?? existingDetail.AturanDetailKey;
-                var effectiveJson = existingDetail.AturanDetailJsonValue;
-
-                if (detail.json_value != null)
+                var requestedKey = detail.key ?? existingDetail.AturanDetailKey;
+                var requestedJson = detail.json_value ?? existingDetail.AturanDetailJsonValue;
+                if (!TryNormalizePatchedDetail(
+                        requestedKey,
+                        requestedJson,
+                        detailId,
+                        out var canonicalKey,
+                        out var canonicalKategori,
+                        out var normalizedJson,
+                        out var errorResponse))
                 {
-                    if (!AturanDetailCanonicalizer.TryCanonicalize(
-                        effectiveKey,
-                        detail.json_value,
-                        out var canonicalJson,
-                        out var canonicalChanged,
-                        out var errorMessage))
-                    {
-                        return BadRequest(new
-                        {
-                            message = $"json_value tidak valid untuk aturan_detail_id {detailId}: {errorMessage}"
-                        });
-                    }
-
-                    effectiveJson = canonicalJson;
-                    normalizedJsonByDetailId[detailId] = canonicalJson!;
+                    return errorResponse!;
                 }
 
-                if (!AturanDetailShapeValidator.TryValidate(effectiveKey, effectiveJson, out var shapeErrorMessage))
-                {
-                    return BadRequest(new
-                    {
-                        message = $"json_value tidak sesuai schema untuk aturan_detail_id {detailId}: {shapeErrorMessage}"
-                    });
-                }
+                if (!requestedKeys.Add(canonicalKey))
+                    return BadRequest(new { message = $"key aturan `{canonicalKey}` duplikat dalam request." });
+
+                normalizedByDetailId[detailId] = (canonicalKey, canonicalKategori, normalizedJson!);
             }
 
             foreach (var detail in details)
             {
                 var existing = existingById[detail.aturan_detail_id!.Value];
-                if (detail.kategori != null)
-                    existing.AturanDetailKategori = detail.kategori;
-                if (detail.key != null)
-                    existing.AturanDetailKey = detail.key;
-                if (normalizedJsonByDetailId.TryGetValue(detail.aturan_detail_id.Value, out var normalizedJson))
-                    existing.AturanDetailJsonValue = normalizedJson;
-                if (detail.status.HasValue)
-                    existing.AturanDetailStatus = detail.status.Value;
+                if (normalizedByDetailId.TryGetValue(detail.aturan_detail_id.Value, out var normalizedDetail))
+                {
+                    existing.AturanDetailKategori = normalizedDetail.CanonicalKategori;
+                    existing.AturanDetailKey = normalizedDetail.CanonicalKey;
+                    existing.AturanDetailJsonValue = normalizedDetail.NormalizedJson;
+                }
                 if (detail.catatan != null)
                     existing.AturanDetailCatatan = detail.catatan;
             }
@@ -466,11 +454,64 @@ public class AturanController : ControllerBase
             aturan_detail_key = detail.AturanDetailKey,
             json_value = detail.AturanDetailJsonValue,
             aturan_detail_json_value = detail.AturanDetailJsonValue,
-            status = detail.AturanDetailStatus,
-            aturan_detail_status = detail.AturanDetailStatus,
             catatan = detail.AturanDetailCatatan,
             aturan_detail_catatan = detail.AturanDetailCatatan
         };
+    }
+
+    private static bool TryNormalizePatchedDetail(
+        string? requestedKey,
+        string? requestedJson,
+        uint detailId,
+        out string canonicalKey,
+        out string canonicalKategori,
+        out string? normalizedJson,
+        out IActionResult? errorResponse)
+    {
+        canonicalKey = string.Empty;
+        canonicalKategori = string.Empty;
+        normalizedJson = null;
+        errorResponse = null;
+
+        if (!AturanDetailContract.IsCanonicalKey(requestedKey))
+        {
+            errorResponse = new BadRequestObjectResult(new
+            {
+                message = $"key aturan canonical wajib diisi untuk aturan_detail_id {detailId}"
+            });
+            return false;
+        }
+
+        canonicalKey = AturanDetailContract.NormalizeCanonicalKey(requestedKey);
+        canonicalKategori = AturanDetailContract.GetKategori(canonicalKey);
+        var sourceJson = string.IsNullOrWhiteSpace(requestedJson)
+            ? AturanDetailContract.GetDefaultJsonValue(canonicalKey)
+            : requestedJson;
+
+        if (!AturanDetailCanonicalizer.TryCanonicalize(
+                canonicalKey,
+                sourceJson,
+                out normalizedJson,
+                out var canonicalChanged,
+                out var errorMessage))
+        {
+            errorResponse = new BadRequestObjectResult(new
+            {
+                message = $"json_value tidak valid untuk aturan_detail_id {detailId}: {errorMessage}"
+            });
+            return false;
+        }
+
+        if (!AturanDetailShapeValidator.TryValidate(canonicalKey, normalizedJson, out var shapeErrorMessage))
+        {
+            errorResponse = new BadRequestObjectResult(new
+            {
+                message = $"json_value tidak sesuai schema untuk aturan_detail_id {detailId}: {shapeErrorMessage}"
+            });
+            return false;
+        }
+
+        return true;
     }
 }
 
@@ -511,6 +552,5 @@ public class AturanDetailPatchItem
     public string? kategori { get; set; }
     public string? key { get; set; }
     public string? json_value { get; set; }
-    public sbyte? status { get; set; }
     public string? catatan { get; set; }
 }

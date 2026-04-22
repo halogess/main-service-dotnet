@@ -40,7 +40,7 @@ public partial class ValidationService
         }
 
         var listItemDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanId == aturan.AturanId)
             .Where(d => d.AturanDetailKategori == "Isi Buku")
             .Where(d => d.AturanDetailKey == "item_daftar")
             .FirstOrDefaultAsync(cancellationToken);
@@ -248,11 +248,10 @@ public partial class ValidationService
         string ScopeHint,
         string PageRange,
         string AllowedActions,
-        string DisallowedActions,
-        bool IsRequired);
+        string DisallowedActions);
 
     private static void MergeIdenticalListItemErrorsByLevel(
-        List<ValidationError> errors,
+        IList<ValidationError> errors,
         int startIndex,
         IReadOnlyDictionary<ulong, string> listLevelByElementId)
     {
@@ -286,8 +285,7 @@ public partial class ValidationService
                 target.DokumenElemenId = error.DokumenElemenId;
         }
 
-        errors.RemoveRange(startIndex, errors.Count - startIndex);
-        errors.AddRange(merged);
+        ReplaceErrorTail(errors, startIndex, merged);
     }
 
     private static ListItemErrorMergeKey? TryBuildListItemErrorMergeKey(
@@ -323,8 +321,7 @@ public partial class ValidationService
             error.ScopeHint ?? string.Empty,
             error.PageRange ?? string.Empty,
             BuildActionToken(error.AllowedActions),
-            BuildActionToken(error.DisallowedActions),
-            error.IsRequired);
+            BuildActionToken(error.DisallowedActions));
     }
 
     private static List<ErrorLocation> AppendErrorLocations(
@@ -382,7 +379,7 @@ public partial class ValidationService
         var expectedFontName = rule?.Font?.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontName?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -435,7 +432,7 @@ public partial class ValidationService
         var expectedFontSize = rule?.Font?.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
             if (runs.Count > 0)
             {
@@ -510,7 +507,7 @@ public partial class ValidationService
         var expectedAlignment = rule?.Paragraph?.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Alignment?.IsHardConstraint == true);
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(paragraphText, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
@@ -561,7 +558,7 @@ public partial class ValidationService
 
         if (expectedHanging.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Indentation?.Hanging?.IsHardConstraint == true);
             if (Math.Abs(hangingCm - expectedHanging.Value) <= 0.05m || hasParagraphLikeIndentShape)
             {
                 result.IncrementPassedChecks();
@@ -583,7 +580,7 @@ public partial class ValidationService
 
         if (expectedLeftIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Indentation?.LeftIndent?.IsHardConstraint == true);
             var expectedLeftCm = expectedNormalizedLeftCm ?? expectedLeftIndent.Value;
 
             if (Math.Abs(normalizedLeftCm - expectedLeftCm) <= 0.05m || hasParagraphLikeIndentShape)
@@ -609,7 +606,7 @@ public partial class ValidationService
         // For list items, special indentation is represented by hanging indent only.
         // A non-zero first line indent would conflict with that model and must stay 0.
         var expectedFirstLineIndent = 0m;
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(false);
         var firstLineObservation = ObserveFirstLineIndent(format, rawParagraphText);
         if (Math.Abs(firstLineObservation.ActualCm - expectedFirstLineIndent) <= 0.05m &&
             !firstLineObservation.HasLeadingManualIndent)
@@ -634,7 +631,7 @@ public partial class ValidationService
         }
 
         var expectedRightIndent = rule?.Paragraph?.Indentation?.RightIndent?.Value ?? 0m;
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Paragraph?.Indentation?.RightIndent?.IsHardConstraint == true);
         var rightCm = GetRightIndentCm(format);
         if (Math.Abs(rightCm - expectedRightIndent) <= 0.05m)
         {
@@ -657,7 +654,7 @@ public partial class ValidationService
         var spacingRule = rule?.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
@@ -682,7 +679,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -707,7 +704,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 

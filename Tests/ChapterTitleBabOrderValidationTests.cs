@@ -223,7 +223,6 @@ public class ChapterTitleBabOrderValidationTests
                       }
                     }
                     """,
-                AturanDetailStatus = 1
             });
         }
 
@@ -251,7 +250,6 @@ public class ChapterTitleBabOrderValidationTests
                       }
                     }
                     """,
-                AturanDetailStatus = 1
             });
         }
 

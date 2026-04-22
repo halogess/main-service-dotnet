@@ -1,349 +1,154 @@
 # Spesifikasi Ekstraksi OpenXML ke Database
 
 ## Overview
-Service `DocxExtractionService` mengekstrak elemen dari file .docx (OpenXML) dan menyimpannya ke database dalam format JSON.
+
+`DocxExtractionService` membaca file `.docx` dalam mode read-only, mengekstrak struktur dan format dokumen yang relevan untuk validasi, lalu menyimpannya ke database aplikasi.
+
+Hasil ekstraksi dibagi ke dua bentuk utama:
+- tabel relasional untuk metadata struktur dan format utama;
+- JSON tree pada `dokumen_elemen` dan `dokumen_note` untuk konten bertingkat.
 
 ---
 
-## Arsitektur Ekstraksi
+## Alur Utama
 
-### 1. Entry Point
+### Entry Point
+
 ```csharp
-public async Task ExtractDocxToDatabase(string docxPath, int dokumenId)
+Task ExtractDocxToDatabase(string docxPath, uint dokumenId)
 ```
 
-**Flow:**
-1. Buka dokumen DOCX (read-only)
-2. Extract semua media (images) → tabel `dokumen_media`
-3. Loop body elements → convert ke JSON
-4. Simpan ke tabel `dokumen_elemen` dengan sequence
+### Flow
+
+1. Buka dokumen DOCX dalam mode baca.
+2. Bentuk section dan part (`body`, `header`, `footer`) yang relevan.
+3. Iterasi elemen konten dan konversi ke JSON tree.
+4. Simpan format yang memang dipersist secara terpisah.
+5. Simpan note dan metadata visual yang dibutuhkan modul validasi.
 
 ---
 
-## 2. Media Extraction
+## Konten yang Diekstrak
 
-### Method: `ExtractAllMedia()`
+### Paragraph
 
-**Proses:**
-1. Loop semua `ImageParts` dari `MainDocumentPart`
-2. Get relationship ID (`rId`)
-3. Read image bytes dari stream
-4. Save ke folder: `{STORAGE_PATH}/dokumen_images/{dokumenId}/`
-5. Generate filename: `{Guid}.{ext}`
-6. Insert ke `dokumen_media`:
-   - `dokumen_media_rid` → untuk lookup dari content
-   - `dokumen_media_filename` → nama file
-   - `dokumen_media_filepath` → full path
-   - `dokumen_media_content_type` → MIME type
-
-**Supported Image Types:**
-- PNG: `image/png`
-- JPEG: `image/jpeg`
-- GIF: `image/gif`
-- BMP: `image/bmp`
-- TIFF: `image/tiff`
-
----
-
-## 3. Body Element Conversion
-
-### Method: `ConvertBodyElementToItems()`
-
-**Element Types:**
-
-| OpenXML Element | Type | Handler |
-|----------------|------|---------|
-| `Paragraph` | paragraph/h1-h9/list-item | `FlattenParagraph()` |
-| `Table` | table | `ConvertTableRows()` |
-| `SectionProperties` | sectionBreak | Empty object |
-| `OfficeMath` | math | Store XML |
-| `BookmarkStart/End` | - | Skip (ignored) |
-| Other | {LocalName} | Store raw XML |
-
----
-
-## 4. Paragraph Flattening
-
-### Method: `FlattenParagraph()`
-
-**Konsep:** Flatten semua descendants menjadi inline array
-
-**Inline Elements:**
-
-| Element | Type | Output |
-|---------|------|--------|
-| `Text` | text | `{"type":"text","value":"..."}` |
-| `TabChar` | - | Append `\t` ke text |
-| `Break` | - | Append `\n` ke text |
-| `Drawing` (Image) | image | `{"type":"image","rId":"..."}` |
-| `Math.Paragraph` | math | `{"type":"math","text":"..."}` |
-| `OfficeMath` | math | `{"type":"math","text":"..."}` |
-
-**Special Cases:**
-
-1. **Pure Math Paragraph:**
-   - Jika hanya 1 elemen math → type = `math`
-   
-2. **Pure Image Paragraph:**
-   - Jika hanya 1 elemen image → type = `image`
-
-3. **Mixed Content:**
-   - Type = paragraph type (h1/h2/list-item/etc)
-   - Content = array of inline elements
-
-**Text Buffering:**
-- Text, Tab, Break di-buffer dulu
-- Flush saat ketemu non-text element (image/math)
-- Flush di akhir paragraph
-- Skip whitespace-only text
-
----
-
-## 5. Paragraph Type Detection
-
-### Method: `DetectParagraphType()`
-
-**Priority:**
-
-1. **Style-based:**
-   - `Heading1-9` → `h1` - `h9`
-   - `Title` → `title`
-   - `Subtitle` → `subtitle`
-
-2. **Numbering-based:**
-   - Has `NumberingId` → `list-item-{numId}-{ilvl}`
-   - Example: `list-item-1-0`, `list-item-2-1`
-
-3. **Default:**
-   - `paragraph`
-
-**Numbering Levels:**
-- `ilvl=0` → Level 1 (top)
-- `ilvl=1` → Level 2 (indented)
-- `ilvl=2` → Level 3 (more indented)
-
----
-
-## 6. Table Conversion
-
-### Method: `ConvertTableRows()`
-
-**Struktur:**
-```json
-{
-  "rows": [
-    {"cells": ["Cell 1", "Cell 2", "Cell 3"]},
-    {"cells": ["Row 2 Cell 1", "Row 2 Cell 2", "Row 2 Cell 3"]}
-  ]
-}
-```
-
-**Proses:**
-1. Loop `TableRow` elements
-2. Loop `TableCell` dalam row
-3. Extract semua `Text` descendants
-4. Join dengan space
-5. Simpan sebagai string
-
-**Limitations:**
-- Tidak preserve formatting dalam cell
-- Tidak handle merged cells
-- Tidak handle nested tables
-- Images dalam cell diabaikan
-
----
-
-## 7. Math Equation Handling
-
-**Math Elements:**
-- `Math.Paragraph` → Container untuk equation
-- `OfficeMath` → Equation element
-- `Math.Text` → Text dalam equation
-
-**Extraction:**
-```csharp
-var mathText = string.Join("", math.Descendants<Math.Text>().Select(t => t.Text));
-```
-
-**Output:**
-```json
-{
-  "type": "math",
-  "content": [
-    {"type": "math", "text": "x^2 + y^2 = z^2"}
-  ]
-}
-```
-
-**Skip Logic:**
-- Jika `Math.Paragraph` sudah diproses, skip `OfficeMath` di dalamnya
-- Prevent duplicate math extraction
-
----
-
-## 8. Ignored Elements
-
-**Completely Skipped:**
-- `BookmarkStart` / `BookmarkEnd` → Metadata
-- `LastRenderedPageBreak` → Rendering hint
-- `SoftHyphen` → Auto-hyphenation
-- `NoBreakHyphen` → Formatting
-- `SymbolChar` → Font-specific
-
-**Stored as XML:**
-- Unknown elements → `{"xml": "..."}`
-- Preserve untuk future handling
-
----
-
-## 9. Database Schema
-
-### Tabel: `dokumen_elemen`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `dokumen_elemen_id` | INT | PK, auto increment |
-| `dokumen_id` | INT | FK ke dokumen |
-| `dokumen_elemen_sequence` | INT | Urutan dari atas ke bawah |
-| `dokumen_elemen_type` | VARCHAR | paragraph/h1/table/math/image |
-| `dokumen_elemen_json_tree` | JSON | Content dalam format JSON compact |
-
-### Tabel: `dokumen_media`
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `dokumen_media_id` | INT | PK, auto increment |
-| `dokumen_id` | INT | FK ke dokumen |
-| `dokumen_media_rid` | VARCHAR | Relationship ID (rId5) |
-| `dokumen_media_filename` | VARCHAR | Generated filename |
-| `dokumen_media_filepath` | VARCHAR | Full path to file |
-| `dokumen_media_content_type` | VARCHAR | MIME type |
-
----
-
-## 10. JSON Output Examples
-
-### Paragraph dengan Text
-```json
-{
-  "content": [
-    {"type": "text", "value": "Ini adalah paragraf biasa."}
-  ]
-}
-```
-
-### Paragraph dengan Mixed Content
-```json
-{
-  "content": [
-    {"type": "text", "value": "Lihat gambar berikut:\n"},
-    {"type": "image", "rId": "rId5"},
-    {"type": "text", "value": "\nGambar di atas menunjukkan..."}
-  ]
-}
-```
-
-### Pure Math
-```json
-{
-  "content": [
-    {"type": "math", "text": "E = mc^2"}
-  ]
-}
-```
-
-### Pure Image
-```json
-{
-  "content": [
-    {"type": "image", "rId": "rId3"}
-  ]
-}
-```
+Paragraph disimpan sebagai elemen dengan:
+- `delemen_type` seperti `paragraph`, `h1`, `title`, atau `list-item-*`;
+- `dfp_id` bila format paragraf berhasil dipersist;
+- `content` berisi item inline seperti `text`, `field`, `image`, `shape`, `chart`, atau `math`.
 
 ### Table
+
+Table disimpan sebagai elemen bertipe `table` dengan struktur:
+
 ```json
 {
-  "rows": [
-    {"cells": ["Header 1", "Header 2"]},
-    {"cells": ["Data 1", "Data 2"]}
-  ]
+  "dft_id": 10,
+  "content": {
+    "rows": [
+      {
+        "cells": [
+          {
+            "content": [
+              {
+                "type": "paragraph",
+                "dfp_id": 40,
+                "content": [
+                  { "type": "text", "dftx_id": 41, "value": "Isi sel" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
-### List Item
+Row dan cell tidak dipersist sebagai tabel database terpisah; keduanya dipertahankan langsung di JSON tabel.
+
+### Drawing dan Image
+
+Drawing menghasilkan item seperti `image`, `shape`, atau `chart`. Untuk gambar, JSON mempertahankan:
+- `dfdr_id` bila format drawing berhasil dipersist;
+- `rId` sebagai relationship ID ke media di package DOCX.
+
+Tidak ada tabel media biner terpisah pada schema aktif. Resolusi gambar mengikuti artifact hasil ekstraksi atau relasi package saat diperlukan.
+
+### Field
+
+Field Word disimpan sebagai item JSON:
+
 ```json
 {
-  "content": [
-    {"type": "text", "value": "Item pertama dalam list"}
-  ]
+  "type": "field",
+  "field_type": "PAGE",
+  "result_dftx_id": 79,
+  "value": "12"
 }
 ```
 
----
+Field tidak memiliki tabel format khusus pada schema aktif.
 
-## 11. Performance Considerations
+### Math
 
-**Optimizations:**
-1. **Single Pass:** Loop body elements sekali saja
-2. **Text Buffering:** Gabung consecutive text nodes
-3. **Media Pre-extraction:** Extract images dulu sebelum content
-4. **Batch Insert:** SaveChanges sekali di akhir
-
-**Memory:**
-- Read-only document access
-- Stream processing untuk images
-- StringBuilder untuk text buffering
+Formula disimpan sebagai item `math` di content paragraf atau sebagai elemen khusus sesuai konteks ekstraksi.
 
 ---
 
-## 12. Error Handling
+## Tipe Elemen Body
 
-**File Not Found:**
-```csharp
-if (!File.Exists(fullFilePath))
-    throw new FileNotFoundException($"File tidak ditemukan: {fullFilePath}");
-```
-
-**Corrupt DOCX:**
-- OpenXML akan throw exception
-- Catch di `PdfQueueBackgroundService`
-- Set `antrian_convert_status = "failed"`
-
-**Missing MainDocumentPart:**
-- Null check dengan `!` operator
-- Assume valid DOCX structure
+| OpenXML Element | Output utama |
+|----------------|--------------|
+| `Paragraph` | paragraph / heading / list item |
+| `Table` | table dengan `rows` dan `cells` |
+| `Drawing` / `Picture` | image / shape / chart |
+| `FootnoteReference` / `EndnoteReference` | relasi ke `dokumen_note` |
+| `OfficeMath` | math |
+| `SectionProperties` | boundary section, bukan elemen konten biasa |
 
 ---
 
-## 13. Limitations
+## Persistensi Database
 
-**Not Supported:**
-1. Text formatting (bold, italic, color)
-2. Paragraph alignment
-3. Font information
-4. Merged table cells
-5. Nested tables
-6. Headers/Footers
-7. Footnotes/Endnotes
-8. Comments
-9. Track changes
-10. Custom XML parts
+### Tabel Struktur
 
-**Reason:** Focus pada content structure, bukan visual formatting
+- `dokumen_section`
+- `dokumen_part`
+- `dokumen_elemen`
+- `dokumen_note`
+- `dokumen_elemen_visual`
+
+### Tabel Format
+
+- `dokumen_format_paragraf`
+- `dokumen_format_text`
+- `dokumen_format_table`
+- `dokumen_format_drawing`
+
+### Tabel Pendukung Validasi
+
+- `aturan`
+- `aturan_detail`
+- `kesalahan`
+- `kesalahan_detail`
+- `antrian`
 
 ---
 
-## 14. Future Enhancements
+## Catatan Implementasi
 
-**Possible Additions:**
-1. Text styling (bold/italic) → `{"type":"text","value":"...","bold":true}`
-2. Hyperlinks → `{"type":"link","url":"...","text":"..."}`
-3. Table cell merging → `{"colspan":2,"rowspan":1}`
-4. Paragraph alignment → `{"align":"center"}`
-5. Font size → `{"fontSize":12}`
+- Text dan run dengan signature format yang sama dapat digabung agar JSON tidak terlalu fragmentatif.
+- Nested table diekstrak secara rekursif.
+- Relationship ID (`rId`) dipertahankan untuk drawing/image karena menjadi kunci lookup ke package atau artifact.
+- Kegagalan pada satu elemen sebisa mungkin tidak menggagalkan seluruh pipeline ekstraksi.
 
-**Implementation:**
-- Add properties ke inline objects
-- Preserve formatting tanpa ubah struktur
-- Backward compatible dengan existing data
+---
+
+## Ringkasan
+
+Ekstraksi OpenXML aktif berfokus pada:
+- struktur dokumen yang bisa divalidasi secara stabil;
+- format yang memang dipakai validator;
+- JSON tree yang cukup kaya untuk nested content tanpa memperbanyak tabel yang tidak terpakai.

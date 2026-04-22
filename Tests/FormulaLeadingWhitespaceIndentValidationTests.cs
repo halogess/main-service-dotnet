@@ -145,7 +145,6 @@ public class FormulaLeadingWhitespaceIndentValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "rumus",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {

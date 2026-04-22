@@ -30,11 +30,8 @@ public class TableFormatExtractor
         var effectiveTblPr = _styleResolver?.ResolveEffectiveTableProperties(table) 
                              ?? table.GetFirstChild<TableProperties>();
         
-        // Store raw XML for debugging (original direct formatting)
         var directTblPr = table.GetFirstChild<TableProperties>();
-        if (directTblPr != null)
-            format.DftRawTblprXml = directTblPr.OuterXml;
-        
+
         if (effectiveTblPr == null)
             return format;
         
@@ -92,16 +89,6 @@ public class TableFormatExtractor
         if (effectiveTblPr.TableLayout?.Type?.HasValue == true)
             format.DftTblLayoutType = ConvertTableLayout(effectiveTblPr.TableLayout.Type.Value);
         
-        // Table Borders (JSON)
-        var tblBorders = effectiveTblPr.TableBorders;
-        if (tblBorders != null)
-            format.DftTblBordersJson = SerializeTableBordersToJson(tblBorders);
-        
-        // Table Positioning Properties (w:tblpPr) - for floating tables
-        var tblpPr = effectiveTblPr.GetFirstChild<TablePositionProperties>();
-        if (tblpPr != null)
-            format.DftTblpprJson = SerializeTablePositionToJson(tblpPr);
-
         ApplyFallbackDefaults(format);
         
         return format;
@@ -164,86 +151,6 @@ public class TableFormatExtractor
         return "autofit";
     }
     
-    /// <summary>
-    /// Serialize TableBorders to JSON
-    /// </summary>
-    private static string SerializeTableBordersToJson(TableBorders borders)
-    {
-        var obj = new JObject();
-        
-        if (borders.TopBorder != null)
-            obj["top"] = SerializeBorderToJson(borders.TopBorder);
-        if (borders.BottomBorder != null)
-            obj["bottom"] = SerializeBorderToJson(borders.BottomBorder);
-        if (borders.LeftBorder != null)
-            obj["left"] = SerializeBorderToJson(borders.LeftBorder);
-        if (borders.RightBorder != null)
-            obj["right"] = SerializeBorderToJson(borders.RightBorder);
-        if (borders.InsideHorizontalBorder != null)
-            obj["insideH"] = SerializeBorderToJson(borders.InsideHorizontalBorder);
-        if (borders.InsideVerticalBorder != null)
-            obj["insideV"] = SerializeBorderToJson(borders.InsideVerticalBorder);
-        
-        return obj.ToString(Formatting.None);
-    }
-    
-    /// <summary>
-    /// Serialize a single border to JSON object
-    /// </summary>
-    private static JObject SerializeBorderToJson(BorderType border)
-    {
-        var obj = new JObject();
-        
-        if (border.Val?.HasValue == true)
-            obj["val"] = border.Val.Value.ToString();
-        if (border.Color?.HasValue == true)
-            obj["color"] = border.Color.Value;
-        if (border.Size?.HasValue == true)
-            obj["size"] = border.Size.Value;
-        if (border.Space?.HasValue == true)
-            obj["space"] = border.Space.Value;
-        if (border.Shadow?.HasValue == true)
-            obj["shadow"] = border.Shadow.Value;
-        if (border.Frame?.HasValue == true)
-            obj["frame"] = border.Frame.Value;
-        
-        return obj;
-    }
-    
-    /// <summary>
-    /// Serialize TablePositionProperties to JSON (for floating tables)
-    /// </summary>
-    private static string SerializeTablePositionToJson(TablePositionProperties tblpPr)
-    {
-        var obj = new JObject();
-        
-        if (tblpPr.LeftFromText?.HasValue == true)
-            obj["leftFromText"] = tblpPr.LeftFromText.Value;
-        if (tblpPr.RightFromText?.HasValue == true)
-            obj["rightFromText"] = tblpPr.RightFromText.Value;
-        if (tblpPr.TopFromText?.HasValue == true)
-            obj["topFromText"] = tblpPr.TopFromText.Value;
-        if (tblpPr.BottomFromText?.HasValue == true)
-            obj["bottomFromText"] = tblpPr.BottomFromText.Value;
-        
-        if (tblpPr.VerticalAnchor?.HasValue == true)
-            obj["verticalAnchor"] = tblpPr.VerticalAnchor.Value.ToString();
-        if (tblpPr.HorizontalAnchor?.HasValue == true)
-            obj["horizontalAnchor"] = tblpPr.HorizontalAnchor.Value.ToString();
-        
-        if (tblpPr.TablePositionX?.HasValue == true)
-            obj["positionX"] = tblpPr.TablePositionX.Value;
-        if (tblpPr.TablePositionY?.HasValue == true)
-            obj["positionY"] = tblpPr.TablePositionY.Value;
-        
-        if (tblpPr.TablePositionXAlignment?.HasValue == true)
-            obj["positionXAlignment"] = tblpPr.TablePositionXAlignment.Value.ToString();
-        if (tblpPr.TablePositionYAlignment?.HasValue == true)
-            obj["positionYAlignment"] = tblpPr.TablePositionYAlignment.Value.ToString();
-        
-        return obj.ToString(Formatting.None);
-    }
-
     private static void ApplyFallbackDefaults(DokumenFormatTable format)
     {
         if (string.IsNullOrWhiteSpace(format.DftTblWType))

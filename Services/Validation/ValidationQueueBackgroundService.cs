@@ -92,12 +92,21 @@ public class ValidationQueueBackgroundService : BackgroundService
 
                 if (queue != null)
                 {
+                    if (await QueueCancellationHelper.TryHandleCancelledResourceAsync(db, queue, stoppingToken))
+                    {
+                        _logger.LogInformation(
+                            "Skipping validation for antrian ID: {AntrianId} because the resource was cancelled",
+                            queue.AntrianId);
+                        continue;
+                    }
+
                     _logger.LogInformation("Processing validation for antrian ID: {AntrianId}", queue.AntrianId);
 
                     queue.AntrianValidationStatus = "processing";
                     queue.AntrianUpdatedAt = DateTime.Now;
                     await db.SaveChangesAsync(stoppingToken);
                     PendingValidationEmailNotification? pendingValidationEmail = null;
+                    DokumenFailureNotification? pendingDokumenFailureNotification = null;
                     BukuFailureNotification? pendingBukuFailureNotification = null;
 
                     try
@@ -118,6 +127,14 @@ public class ValidationQueueBackgroundService : BackgroundService
 
                                 // Perform validation on dokumen
                                 validationResult = await validationService.ValidateDokumenAsync((int)queue.DokumenId.Value, stoppingToken);
+
+                                if (await QueueCancellationHelper.TryHandleCancelledResourceAsync(db, queue, stoppingToken))
+                                {
+                                    _logger.LogInformation(
+                                        "Stopping validation result persistence for antrian ID: {AntrianId} because the dokumen was cancelled",
+                                        queue.AntrianId);
+                                    continue;
+                                }
                                 
                                 // Notify: Validation complete, processing results
                                 await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "processing_results", 70);
@@ -169,7 +186,10 @@ public class ValidationQueueBackgroundService : BackgroundService
 
                                 var minimumScoreValue = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
                                 dokumen.DokumenSkorMinimal = minimumScoreValue;
-                                var isLolos = roundedScore >= minimumScoreValue;
+                                var isLolos = IsValidationPassed(
+                                    roundedScore,
+                                    minimumScoreValue,
+                                    validationResult.HasHardConstraintViolation);
                                 dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
                                 dokumen.DokumenUpdatedAt = DateTime.Now;
 
@@ -183,10 +203,11 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 else
                                 {
                                     _logger.LogInformation(
-                                        "Validation status for dokumen ID: {DokumenId} determined by score. Score: {Score}, MinimumScore: {MinimumScore}, AturanId: {AturanId}, Status: {Status}",
+                                        "Validation status for dokumen ID: {DokumenId} determined by score and hard constraints. Score: {Score}, MinimumScore: {MinimumScore}, HasHardConstraintViolation: {HasHardConstraintViolation}, AturanId: {AturanId}, Status: {Status}",
                                         queue.DokumenId,
                                         roundedScore,
                                         minimumScoreValue,
+                                        validationResult.HasHardConstraintViolation,
                                         activeAturan.AturanId,
                                         dokumen.DokumenStatus);
                                 }
@@ -209,8 +230,18 @@ public class ValidationQueueBackgroundService : BackgroundService
                             if (bab != null)
                             {
                                 validationResult = await validationService.ValidateBabAsync(queue.BabId.Value, stoppingToken);
+
+                                if (await QueueCancellationHelper.TryHandleCancelledResourceAsync(db, queue, stoppingToken))
+                                {
+                                    _logger.LogInformation(
+                                        "Stopping validation result persistence for antrian ID: {AntrianId} because the buku was cancelled",
+                                        queue.AntrianId);
+                                    continue;
+                                }
+
                                 var roundedScore = (int)Math.Round(validationResult.Score);
                                 bab.BabSkor = roundedScore;
+                                bab.BabHasHardConstraintViolation = validationResult.HasHardConstraintViolation;
 
                                 var activeAturan = await db.Aturans
                                     .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
@@ -239,11 +270,12 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 bab.BabJumlahKesalahan = storedErrorCount;
 
                                 _logger.LogInformation(
-                                    "Validated bab ID: {BabId} (BukuId: {BukuId}), Score: {Score}, MinimumScoreAtValidation: {MinimumScore}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
+                                    "Validated bab ID: {BabId} (BukuId: {BukuId}), Score: {Score}, MinimumScoreAtValidation: {MinimumScore}, HasHardConstraintViolation: {HasHardConstraintViolation}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
                                     queue.BabId,
                                     queue.BukuId,
                                     roundedScore,
                                     minimumScoreValue,
+                                    validationResult.HasHardConstraintViolation,
                                     rawErrorCount,
                                     storedErrorCount);
                                 if (rawErrorCount > 0 && storedErrorCount == 0)
@@ -254,6 +286,14 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         rawErrorCount);
                                 }
                             }
+                        }
+
+                        if (await QueueCancellationHelper.TryHandleCancelledResourceAsync(db, queue, stoppingToken))
+                        {
+                            _logger.LogInformation(
+                                "Stopping validation finalization for antrian ID: {AntrianId} because the resource was cancelled",
+                                queue.AntrianId);
+                            continue;
                         }
 
                         queue.AntrianValidationStatus = "completed";
@@ -281,7 +321,8 @@ public class ValidationQueueBackgroundService : BackgroundService
                             if (allBabsValidated)
                             {
                                 var buku = await db.Bukus.FindAsync(new object[] { (int)queue.BukuId.Value }, stoppingToken);
-                                if (buku != null)
+                                if (buku != null &&
+                                    !string.Equals(buku.BukuStatus, "dibatalkan", StringComparison.OrdinalIgnoreCase))
                                 {
                                     var bukuRefId = (uint)queue.BukuId.Value;
                                     var scoredBabScores = babs
@@ -299,14 +340,8 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         .FirstOrDefaultAsync(stoppingToken);
                                     var defaultMinimumScore = (int)(activeAturan?.AturanSkorMinimum ?? 80u);
                                     var useFallbackMinimum = babs.Any(b => !b.BabSkorMinimal.HasValue);
-                                    var isLolos = allBabsHaveScore && babs.All(b =>
-                                    {
-                                        if (!b.BabSkor.HasValue)
-                                            return false;
-
-                                        var minimum = b.BabSkorMinimal ?? defaultMinimumScore;
-                                        return b.BabSkor.Value >= minimum;
-                                    });
+                                    var hasAnyHardConstraintViolation = babs.Any(b => b.BabHasHardConstraintViolation);
+                                    var isLolos = allBabsHaveScore && babs.All(b => IsBabValidationPassed(b, defaultMinimumScore));
 
                                     var totalKesalahan = await (
                                         from detail in db.KesalahanDetails
@@ -332,12 +367,13 @@ public class ValidationQueueBackgroundService : BackgroundService
 
                                     await wsService.NotifyBukuStatusChanged(buku.MhsNrp, (int)queue.BukuId.Value, finalStatus);
                                     _logger.LogInformation(
-                                        "All babs validated for buku ID: {BukuId}. FinalStatus={FinalStatus}, BookScore={BookScore}, DefaultMinimumScore={DefaultMinimumScore}, FallbackMinimumUsed={FallbackMinimumUsed}, TotalKesalahan={TotalKesalahan}",
+                                        "All babs validated for buku ID: {BukuId}. FinalStatus={FinalStatus}, BookScore={BookScore}, DefaultMinimumScore={DefaultMinimumScore}, FallbackMinimumUsed={FallbackMinimumUsed}, HasAnyHardConstraintViolation={HasAnyHardConstraintViolation}, TotalKesalahan={TotalKesalahan}",
                                         queue.BukuId,
                                         finalStatus,
                                         buku.BukuSkor,
                                         defaultMinimumScore,
                                         useFallbackMinimum,
+                                        hasAnyHardConstraintViolation,
                                         totalKesalahan);
                                     pendingValidationEmail = BuildPendingValidationEmailNotification(buku);
                                 }
@@ -347,6 +383,14 @@ public class ValidationQueueBackgroundService : BackgroundService
                     }
                     catch (Exception ex)
                     {
+                        if (await QueueCancellationHelper.TryHandleCancelledResourceAsync(db, queue, stoppingToken))
+                        {
+                            _logger.LogInformation(
+                                "Ignoring validation failure for antrian ID: {AntrianId} because the resource was cancelled",
+                                queue.AntrianId);
+                            continue;
+                        }
+
                         queue.AntrianValidationStatus = "failed";
                         queue.AntrianUpdatedAt = DateTime.Now;
                         queue.AntrianErrorMessage = ex.Message.Length > 255 ? ex.Message[..252] + "..." : ex.Message;
@@ -365,13 +409,10 @@ public class ValidationQueueBackgroundService : BackgroundService
                         // Notify failure via WebSocket
                         if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                         {
-                            var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
-                            if (dokumen != null)
-                            {
-                                dokumen.DokumenStatus = "tidak_lolos";
-                                dokumen.DokumenUpdatedAt = DateTime.Now;
-                                await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "tidak_lolos");
-                            }
+                            pendingDokumenFailureNotification = await DokumenFailureStatusHelper.TryMarkDokumenTidakLolosAsync(
+                                db,
+                                queue.DokumenId,
+                                stoppingToken);
                         }
                         else if (queue.AntrianTipe == "buku")
                         {
@@ -383,6 +424,14 @@ public class ValidationQueueBackgroundService : BackgroundService
                     }
 
                     await db.SaveChangesAsync(stoppingToken);
+
+                    if (pendingDokumenFailureNotification is { } dokumenFailureNotification)
+                    {
+                        await wsService.NotifyDokumenStatusChanged(
+                            dokumenFailureNotification.Nrp,
+                            dokumenFailureNotification.DokumenId,
+                            "tidak_lolos");
+                    }
 
                     if (pendingBukuFailureNotification is { } bukuFailureNotification)
                     {
@@ -442,6 +491,21 @@ public class ValidationQueueBackgroundService : BackgroundService
             dokumenTitle,
             isLolos,
             errorCount);
+    }
+
+    private static bool IsValidationPassed(int score, int minimumScore, bool hasHardConstraintViolation)
+        => score >= minimumScore && !hasHardConstraintViolation;
+
+    private static bool IsBabValidationPassed(Bab bab, int defaultMinimumScore)
+    {
+        if (!bab.BabSkor.HasValue)
+            return false;
+
+        var minimum = bab.BabSkorMinimal ?? defaultMinimumScore;
+        return IsValidationPassed(
+            bab.BabSkor.Value,
+            minimum,
+            bab.BabHasHardConstraintViolation);
     }
 
     private PendingValidationEmailNotification BuildPendingValidationEmailNotification(Buku buku)
@@ -676,7 +740,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         if (aturan != null)
         {
             aturanDetails = AturanDetailVisibility.FilterVisible(await db.AturanDetails
-                .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+                .Where(d => d.AturanId == aturan.AturanId)
                 .ToListAsync(cancellationToken));
         }
 
@@ -954,7 +1018,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                 KesalahanDetailJudul = title,
                 KesalahanDetailPenjelasan = explanation,
                 KesalahanDetailSteps = stepsJson,
-                KesalahanIsRequired = error.IsRequired
+                KesalahanIsHardConstraint = error.IsHardConstraint
             });
             storedDetailCount++;
         }
@@ -1919,7 +1983,7 @@ public class ValidationQueueBackgroundService : BackgroundService
             PageMarginLeftCm = source.PageMarginLeftCm,
             PageMarginRightCm = source.PageMarginRightCm,
             DokumenElemenId = source.DokumenElemenId,
-            IsRequired = source.IsRequired
+            IsHardConstraint = source.IsHardConstraint
         };
     }
 

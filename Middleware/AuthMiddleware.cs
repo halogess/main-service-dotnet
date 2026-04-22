@@ -3,16 +3,19 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
+using Microsoft.Extensions.Logging;
 
 namespace ValidasiTugasAkhir.MainService.Middleware;
 
 public class AuthMiddleware
 {
     private readonly RequestDelegate _next;
+    private readonly ILogger<AuthMiddleware> _logger;
 
-    public AuthMiddleware(RequestDelegate next)
+    public AuthMiddleware(RequestDelegate next, ILogger<AuthMiddleware> logger)
     {
         _next = next;
+        _logger = logger;
     }
 
     public async Task InvokeAsync(HttpContext context, SttsDbContext sttsDb, IConfiguration configuration)
@@ -31,6 +34,7 @@ public class AuthMiddleware
 
         if (string.IsNullOrEmpty(token))
         {
+            _logger.LogWarning("Auth rejected for {Path}: token missing", path);
             context.Response.StatusCode = 401;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync("{\"message\":\"Token tidak ditemukan\"}");
@@ -43,6 +47,7 @@ public class AuthMiddleware
             var secret = configuration["Auth:JwtSecret"];
             if (string.IsNullOrEmpty(secret))
             {
+                _logger.LogError("Auth failed for {Path}: JWT secret is not configured", path);
                 context.Response.StatusCode = 500;
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync("{\"message\":\"JWT Secret tidak dikonfigurasi\"}");
@@ -70,6 +75,7 @@ public class AuthMiddleware
 
             if (string.IsNullOrEmpty(username))
             {
+                _logger.LogWarning("Auth rejected for {Path}: username claim missing", path);
                 context.Response.StatusCode = 401;
                 context.Response.ContentType = "application/json";
                 await context.Response.WriteAsync("{\"message\":\"Username tidak ditemukan dalam token\"}");
@@ -91,6 +97,7 @@ public class AuthMiddleware
 
                 if (mahasiswa == null)
                 {
+                    _logger.LogWarning("Auth rejected for {Path}: mahasiswa {Username} not found", path, username);
                     context.Response.StatusCode = 401;
                     context.Response.ContentType = "application/json";
                     await context.Response.WriteAsync("{\"message\":\"Mahasiswa tidak ditemukan\"}");
@@ -101,14 +108,16 @@ public class AuthMiddleware
                 context.Items["Nrp"] = username;
                 context.Items["Role"] = role ?? "mahasiswa";
             }
-
-            await _next(context);
         }
-        catch
+        catch (Exception ex) when (ex is SecurityTokenException or ArgumentException)
         {
+            _logger.LogWarning(ex, "Auth rejected for {Path}: token validation failed", path);
             context.Response.StatusCode = 401;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync("{\"message\":\"Token tidak valid\"}");
+            return;
         }
+
+        await _next(context);
     }
 }

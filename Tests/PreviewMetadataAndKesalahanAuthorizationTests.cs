@@ -419,7 +419,8 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
                     KesalahanDetailId = 22,
                     KesalahanId = 12,
                     KesalahanDetailJudul = "Caption gambar salah",
-                    KesalahanDetailPenjelasan = "Penjelasan"
+                    KesalahanDetailPenjelasan = "Penjelasan",
+                    KesalahanIsHardConstraint = true
                 }
             ]
         });
@@ -439,9 +440,13 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
         var result = await controller.GetKesalahanById(12);
 
         var ok = Assert.IsType<OkObjectResult>(result);
-        var value = ok.Value!;
-        var valueType = value.GetType();
-        Assert.Equal((uint)12, valueType.GetProperty("id")!.GetValue(value));
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
+        var root = json.RootElement;
+        Assert.Equal((uint)12, root.GetProperty("id").GetUInt32());
+        var details = root.GetProperty("details");
+        Assert.Single(details.EnumerateArray());
+        Assert.False(details[0].TryGetProperty("is_required", out var ignoredIsRequired));
+        Assert.True(details[0].GetProperty("is_hard_constraint").GetBoolean());
     }
 
     [Fact]
@@ -471,7 +476,8 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
                         KesalahanDetailId = 41,
                         KesalahanId = 31,
                         KesalahanDetailJudul = "Detail halaman 2",
-                        KesalahanDetailPenjelasan = "Penjelasan"
+                        KesalahanDetailPenjelasan = "Penjelasan",
+                        KesalahanIsHardConstraint = true
                     }
                 ]
             },
@@ -524,6 +530,8 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
         Assert.Equal(31, items[0].GetProperty("kesalahan_id").GetInt32());
         Assert.Equal("Paragraf", items[0].GetProperty("kategori").GetString());
         Assert.Equal(1, items[0].GetProperty("details").GetArrayLength());
+        Assert.False(items[0].GetProperty("details")[0].TryGetProperty("is_required", out var ignoredDokumenIsRequired));
+        Assert.True(items[0].GetProperty("details")[0].GetProperty("is_hard_constraint").GetBoolean());
     }
 
     [Fact]
@@ -594,7 +602,8 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
                         KesalahanDetailId = 61,
                         KesalahanId = 51,
                         KesalahanDetailJudul = "Detail halaman 4",
-                        KesalahanDetailPenjelasan = "Penjelasan"
+                        KesalahanDetailPenjelasan = "Penjelasan",
+                        KesalahanIsHardConstraint = true
                     }
                 ]
             },
@@ -641,5 +650,7 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
         Assert.Equal(51, items[0].GetProperty("kesalahan_id").GetInt32());
         Assert.Equal("Tabel", items[0].GetProperty("kategori").GetString());
         Assert.Equal(1, items[0].GetProperty("details").GetArrayLength());
+        Assert.False(items[0].GetProperty("details")[0].TryGetProperty("is_required", out var ignoredBabIsRequired));
+        Assert.True(items[0].GetProperty("details")[0].GetProperty("is_hard_constraint").GetBoolean());
     }
 }

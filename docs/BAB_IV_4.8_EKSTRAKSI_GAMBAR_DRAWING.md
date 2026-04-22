@@ -1,7 +1,7 @@
 # BAB IV - Subbab 4.8: Ekstraksi Gambar dan Drawing
 
 ## Ringkasan Subbab
-Subbab ini membahas secara teknis proses ekstraksi gambar dan drawing dari dokumen Word menggunakan OpenXML SDK. Drawing dalam WordprocessingML dapat berupa inline (mengikuti flow teks) atau anchor (floating, diposisikan independen). Sistem ekstraksi dalam proyek ini melibatkan beberapa komponen: `DrawingExtractor` sebagai orchestrator untuk mendeteksi jenis konten (image, chart, textbox, shape) dan mengekstrak content, `DrawingFormatExtractor` untuk mengekstrak format properties (extent, positioning, wrapping), `FloatingElementHelper` untuk menangani elemen-elemen floating dan reordering berdasarkan posisi Y, dan `MediaExtractor` untuk mengekstrak file binary gambar dari package. Proses ini mencakup penanganan format modern DrawingML (w:drawing) dan legacy VML (w:pict), berbagai jenis graphic (picture, chart, smartart, textbox, shape), nested content dalam shapes dan groups, serta text wrapping configurations. Hasil ekstraksi disimpan dalam model `DokumenFormatDrawing` dan file media disimpan ke filesystem dengan naming convention yang menggunakan dokumen ID dan relationship ID.
+Subbab ini membahas secara teknis proses ekstraksi gambar dan drawing dari dokumen Word menggunakan OpenXML SDK. Drawing dalam WordprocessingML dapat berupa inline (mengikuti flow teks) atau anchor (floating, diposisikan independen). Sistem ekstraksi dalam proyek ini melibatkan beberapa komponen: `DrawingExtractor` sebagai orchestrator untuk mendeteksi jenis konten (image, chart, textbox, shape) dan mengekstrak content, `DrawingFormatExtractor` untuk mengekstrak format properties, dan `FloatingElementHelper` untuk menangani elemen-elemen floating dan reordering berdasarkan posisi Y. Proses ini mencakup penanganan format modern DrawingML (w:drawing) dan legacy VML (w:pict), berbagai jenis graphic (picture, chart, smartart, textbox, shape), nested content dalam shapes dan groups, serta text wrapping configurations. Hasil ekstraksi disimpan dalam model `DokumenFormatDrawing`, sementara item konten mempertahankan referensi `rId` ke media pada package DOCX.
 
 ---
 
@@ -101,7 +101,7 @@ private void ExtractInlineProperties(Inline inline, DokumenFormatDrawing format)
 
 ### 4.8.2.2 Embed Relationship ID
 
-Relationship ID (rId) pada blip menghubungkan drawing ke actual image file dalam package. RId adalah string seperti "rId5" yang kemudian resolved melalui relationships. Dalam `DrawingFormatExtractor.ExtractGraphicInfo()` lines 210-248, rId diekstrak dari Blip element (baik Embed untuk embedded images maupun Link untuk linked images). RId ini kemudian digunakan oleh `MediaExtractor` untuk mengakses binary stream. Penyimpanan rId dalam output memungkinkan tracking gambar mana yang digunakan di mana.
+Relationship ID (rId) pada blip menghubungkan drawing ke actual image file dalam package. RId adalah string seperti "rId5" yang kemudian resolved melalui relationships. Dalam extractor drawing, nilai ini diambil dari Blip element (baik Embed untuk embedded images maupun Link untuk linked images) dan dipertahankan di output JSON. Penyimpanan rId dalam output memungkinkan tracking gambar mana yang digunakan di mana tanpa perlu menyimpan binary media secara terpisah.
 
 ```csharp
 // DrawingFormatExtractor.cs lines 222-228
@@ -700,22 +700,12 @@ public List<(OpenXmlElement element, int originalIndex)> ReorderFloatingElements
 
 ### 4.8.8.1 ImageParts Enumeration
 
-OpenXML package menyimpan images dalam ImageParts. Semua images di-enumerate melalui `MainDocumentPart.ImageParts`. Dalam `MediaExtractor.ExtractAllMedia()` lines 23-43, semua ImageParts diiterate untuk extraction. Relationship ID di-get menggunakan `GetIdOfPart()`. Loop ini memastikan semua embedded images diekstrak, tidak hanya yang explicitly referenced dalam extraction.
+OpenXML package menyimpan images dalam `ImageParts`. Pada pipeline aktif, relationship ID ke image part dipertahankan melalui `rId` di item konten, sehingga enumerasi binary media dapat dilakukan hanya ketika dibutuhkan oleh proses eksternal atau analisis lanjutan.
 
 ```csharp
-// MediaExtractor.cs lines 23-43
-public async Task ExtractAllMedia(WordprocessingDocument doc, int dokumenId)
-{
-    var main = doc.MainDocumentPart!;
-    
-    foreach (var imgPart in main.ImageParts)
-    {
-        string rId = main.GetIdOfPart(imgPart);
-        
-        using var stream = imgPart.GetStream();
-        using var ms = new MemoryStream();
-        await stream.CopyToAsync(ms);
-        
+var blip = graphicData.Descendants<DocumentFormat.OpenXml.Drawing.Blip>().FirstOrDefault();
+var rId = blip?.Embed?.Value ?? blip?.Link?.Value;
+return new JObject { ["type"] = "image", ["rId"] = rId };
         string ext = Path.GetExtension(imgPart.Uri.OriginalString).TrimStart('.');
         if (string.IsNullOrEmpty(ext)) ext = "png";
         

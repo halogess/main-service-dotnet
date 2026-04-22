@@ -33,6 +33,8 @@ public class DokumenListItem
     public long UkuranFile { get; set; }
     public string Status { get; set; } = string.Empty;
     public int JumlahKesalahan { get; set; }
+    public bool HasFailedQueue { get; set; }
+    public string? ErrorMessage { get; set; }
 }
 
 public class DokumenListResult
@@ -127,12 +129,41 @@ public class DokumenService : IDokumenService
         if (dokumen == null)
             throw new KeyNotFoundException("Dokumen tidak ditemukan");
         
-        if (dokumen.DokumenStatus != "dalam_antrian")
-            throw new InvalidOperationException("Hanya dokumen dalam antrian yang bisa dibatalkan");
-        
-        dokumen.DokumenStatus = "dibatalkan";
-        dokumen.DokumenUpdatedAt = DateTime.Now;
-        await _db.SaveChangesAsync();
+        if (dokumen.DokumenStatus != "dalam_antrian" && dokumen.DokumenStatus != "diproses")
+            throw new InvalidOperationException("Hanya dokumen dalam antrian atau diproses yang bisa dibatalkan");
+
+        var now = DateTime.Now;
+        var strategy = _db.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(async () =>
+        {
+            var transaction = _db.Database.IsRelational()
+                ? await _db.Database.BeginTransactionAsync()
+                : null;
+
+            await using (transaction)
+            {
+                dokumen.DokumenStatus = "dibatalkan";
+                dokumen.DokumenUpdatedAt = now;
+
+                var queues = await _db.Antrians
+                    .Where(a => a.DokumenId == (uint)dokumenId)
+                    .ToListAsync();
+
+                foreach (var queue in queues)
+                {
+                    QueueCancellationHelper.ClearActiveStages(
+                        queue,
+                        QueueCancellationHelper.CancelledByUserMessage,
+                        now);
+                }
+
+                await _db.SaveChangesAsync();
+                if (transaction != null)
+                    await transaction.CommitAsync();
+            }
+        });
+
         await _wsService.NotifyDokumenCancelled(nrp, dokumenId);
         
         _logger.LogInformation("Dokumen dibatalkan: ID={DokumenId}, NRP={Nrp}", dokumenId, nrp);
@@ -146,7 +177,9 @@ public class DokumenService : IDokumenService
 
     public bool HasDokumenInQueue(string nrp)
     {
-        return _db.Dokumens.Any(d => d.MhsNrp == nrp && d.DokumenStatus == "dalam_antrian");
+        return _db.Dokumens.Any(d =>
+            d.MhsNrp == nrp &&
+            d.DokumenStatus == "dalam_antrian");
     }
 
     public DokumenStats GetStats(string nrp)
@@ -180,24 +213,50 @@ public class DokumenService : IDokumenService
             : query.OrderByDescending(d => d.DokumenCreatedAt);
         
         var totalCount = query.Count();
-        
         var dokumenList = query
             .Skip(offset)
             .Take(limit)
-            .Select(d => new DokumenListItem
+            .Select(d => new
+            {
+                d.DokumenId,
+                d.DokumenFilename,
+                d.DokumenCreatedAt,
+                d.DokumenFilesizeBytes,
+                d.DokumenStatus,
+                d.DokumenJumlahKesalahan
+            })
+            .ToList();
+
+        var dokumenIds = dokumenList.Select(d => d.DokumenId).ToList();
+        var latestQueues = dokumenIds.Count == 0
+            ? new Dictionary<int, Antrian>()
+            : _db.Antrians
+                .Where(a => a.DokumenId.HasValue && dokumenIds.Contains((int)a.DokumenId.Value))
+                .OrderByDescending(a => a.AntrianCreatedAt)
+                .ThenByDescending(a => a.AntrianId)
+                .AsEnumerable()
+                .GroupBy(a => (int)a.DokumenId!.Value)
+                .ToDictionary(g => g.Key, g => g.First());
+
+        var items = dokumenList.Select(d =>
+        {
+            latestQueues.TryGetValue(d.DokumenId, out var queue);
+            return new DokumenListItem
             {
                 Id = d.DokumenId,
                 Filename = d.DokumenFilename,
                 TanggalUpload = d.DokumenCreatedAt,
                 UkuranFile = d.DokumenFilesizeBytes ?? 0L,
                 Status = d.DokumenStatus,
-                JumlahKesalahan = d.DokumenJumlahKesalahan ?? 0
-            })
-            .ToList();
+                JumlahKesalahan = d.DokumenJumlahKesalahan ?? 0,
+                HasFailedQueue = QueueCancellationHelper.HasFailedStage(queue),
+                ErrorMessage = queue?.AntrianErrorMessage
+            };
+        }).ToList();
 
         return new DokumenListResult
         {
-            Data = dokumenList,
+            Data = items,
             Total = totalCount,
             Limit = limit,
             Offset = offset

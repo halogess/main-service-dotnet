@@ -56,19 +56,10 @@ public partial class ValidationService
         if (aturan == null)
             return result;
 
-        var tableDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
-            .Where(d => d.AturanDetailKategori == "Isi Buku")
-            .Where(d => d.AturanDetailKey == "tabel")
-            .FirstOrDefaultAsync(cancellationToken);
+        var detailMap = await LoadCanonicalDetailsAsync(aturan.AturanId, cancellationToken, "tabel");
+        detailMap.TryGetValue("tabel", out var tableDetail);
 
-        var captionDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
-            .Where(d => d.AturanDetailKategori == "Isi Buku")
-            .Where(d => d.AturanDetailKey == "caption_tabel")
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (tableDetail == null && captionDetail == null)
+        if (tableDetail == null)
             return result;
 
         var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -93,8 +84,7 @@ public partial class ValidationService
                         tableRule = JsonSerializer.Deserialize<TableRule>(rawJson, jsonOptions);
                     }
 
-                    if (captionDetail == null &&
-                        doc.RootElement.TryGetProperty("caption_tabel", out var captionElement))
+                    if (doc.RootElement.TryGetProperty("caption_tabel", out var captionElement))
                     {
                         captionRule = JsonSerializer.Deserialize<TableCaptionRule>(captionElement.GetRawText(), jsonOptions);
                     }
@@ -114,26 +104,6 @@ public partial class ValidationService
                     Message = "Format aturan tabel tidak valid"
                 });
                 return result;
-            }
-        }
-
-        if (captionDetail != null)
-        {
-            try
-            {
-                captionRule = JsonSerializer.Deserialize<TableCaptionRule>(
-                    captionDetail.AturanDetailJsonValue ?? "{}",
-                    jsonOptions);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(ex, "Failed to parse aturan caption_tabel");
-                result.Errors.Add(new ValidationError
-                {
-                    Category = "Isi Buku",
-                    Field = "caption_tabel",
-                    Message = "Format aturan caption tabel tidak valid"
-                });
             }
         }
 
@@ -287,7 +257,7 @@ public partial class ValidationService
 
             if (tableRule?.CegahGambarTabel?.Value == true)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(tableRule.CegahGambarTabel?.IsHardConstraint == true);
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
@@ -364,7 +334,7 @@ public partial class ValidationService
 
             if (captionRule != null && IsContinuationCaptionRequired(captionRule.WajibCaptionLanjutanJikaLintasHalaman))
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(captionRule.WajibCaptionLanjutanJikaLintasHalaman?.IsHardConstraint == true);
                 if (SpansMultiplePages(locations))
                 {
                     result.Errors.Add(new ValidationError
@@ -409,7 +379,7 @@ public partial class ValidationService
                     tableFormats.TryGetValue(block.TableFormatId ?? 0, out var tableFormat))
                 {
                     var expectedAlignment = tableRule.Position.Alignment.Value;
-                    result.IncrementTotalChecks();
+                    result.IncrementTotalChecks(tableRule.Position.Alignment?.IsHardConstraint == true);
                     var actualAlignment = tableFormat.DftJc ?? "unknown";
                     pageLayoutsById.TryGetValue(block.ElementId, out var tableLayout);
                     var isNearFullWidthCenterCase = IsCenterAlignmentSatisfiedByNearFullWidth(
@@ -440,7 +410,7 @@ public partial class ValidationService
                 if (tableRule.Position?.IndentFromLeft?.Value.HasValue == true &&
                     tableFormats.TryGetValue(block.TableFormatId ?? 0, out var indentFormat))
                 {
-                    result.IncrementTotalChecks();
+                    result.IncrementTotalChecks(tableRule.Position.IndentFromLeft?.IsHardConstraint == true);
                     var expectedIndent = tableRule.Position.IndentFromLeft.Value.Value;
                     var actualTwips = indentFormat.DftTblIndTwips ?? 0;
                     var actualIndent = actualTwips / 1440.0m * 2.54m;
@@ -467,7 +437,7 @@ public partial class ValidationService
                     tableFormats.TryGetValue(block.TableFormatId ?? 0, out var widthFormat) &&
                     pageLayoutsById.TryGetValue(block.ElementId, out var layout))
                 {
-                    result.IncrementTotalChecks();
+                    result.IncrementTotalChecks(tableRule.Position.CegahMelebihiMargin?.IsHardConstraint == true);
 
                     var availableWidth = GetAvailableWidthCm(layout);
                     var indentTwips = widthFormat.DftTblIndTwips ?? 0;
@@ -500,7 +470,7 @@ public partial class ValidationService
                 {
                     if (pageNumbersById.TryGetValue(block.ElementId, out var pageNumber) && pageNumber > 0)
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(tableRule.Position.CegahMemenuhiHalaman?.IsHardConstraint == true);
                         if (pagesWithParagraph.Contains(pageNumber))
                         {
                             result.IncrementPassedChecks();
@@ -523,7 +493,7 @@ public partial class ValidationService
 
                 if (tableRule.CegahGambarTabel?.Value == true)
                 {
-                    result.IncrementTotalChecks();
+                    result.IncrementTotalChecks(tableRule.CegahGambarTabel?.IsHardConstraint == true);
                     if (!block.Content.HasImageContent)
                     {
                         result.IncrementPassedChecks();
@@ -590,6 +560,7 @@ public partial class ValidationService
                 var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
                     ? normalizedCaptionPosition
                     : positionRule.ToLowerInvariant();
+                var captionPositionHardConstraint = captionRule.Position?.IsHardConstraint == true;
 
                 if (normalizedPosition == "before")
                 {
@@ -603,7 +574,7 @@ public partial class ValidationService
                     }
                     else if (captionAfter != null)
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(captionPositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -617,7 +588,7 @@ public partial class ValidationService
                     }
                     else
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(captionPositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -638,7 +609,7 @@ public partial class ValidationService
                     }
                     else if (captionBefore != null)
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(captionPositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -652,7 +623,7 @@ public partial class ValidationService
                     }
                     else
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(captionPositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -1493,7 +1464,7 @@ public partial class ValidationService
         var expectedFontName = rule?.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.FontName?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1557,7 +1528,7 @@ public partial class ValidationService
 
         if (spacingRule.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actuals = paragraphFormats.Select(GetLineSpacing).Distinct().ToList();
 
@@ -1582,7 +1553,7 @@ public partial class ValidationService
 
         if (spacingRule.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actuals = paragraphFormats.Select(pf => TwipsToPoints(pf.DfpSpacingBeforeTwips)).Distinct().ToList();
 
@@ -1607,7 +1578,7 @@ public partial class ValidationService
 
         if (spacingRule.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actuals = paragraphFormats.Select(pf => TwipsToPoints(pf.DfpSpacingAfterTwips)).Distinct().ToList();
 
@@ -1653,7 +1624,7 @@ public partial class ValidationService
         var expectedFontName = fontRule.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(fontRule.FontName?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1706,7 +1677,7 @@ public partial class ValidationService
         var expectedFontSize = fontRule.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(fontRule.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
             if (runs.Count > 0)
             {
@@ -1765,7 +1736,7 @@ public partial class ValidationService
         var expectedBold = fontRule.FontStyle?.Bold?.Value;
         if (expectedBold.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(fontRule.FontStyle?.Bold?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1818,7 +1789,7 @@ public partial class ValidationService
         var expectedItalic = fontRule.FontStyle?.Italic?.Value;
         if (expectedItalic.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(fontRule.FontStyle?.Italic?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1871,7 +1842,7 @@ public partial class ValidationService
         var expectedUnderline = fontRule.FontStyle?.Underline?.Value;
         if (expectedUnderline.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(fontRule.FontStyle?.Underline?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1953,7 +1924,7 @@ public partial class ValidationService
         var expectedAlignment = paragraphRule.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(paragraphRule.Alignment?.IsHardConstraint == true);
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(evidenceText, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
@@ -1988,7 +1959,7 @@ public partial class ValidationService
         var spacingRule = paragraphRule.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
@@ -2013,7 +1984,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -2038,7 +2009,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 
@@ -2107,7 +2078,7 @@ public partial class ValidationService
 
         if (!matched)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberingRule.NumberFormat?.IsHardConstraint == true);
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -2121,13 +2092,13 @@ public partial class ValidationService
             return;
         }
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(numberingRule.NumberFormat?.IsHardConstraint == true);
         result.IncrementPassedChecks();
 
         var requireTitle = numberingRule.EnterAfterNumbering?.Value == true;
         if (requireTitle)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberingRule.EnterAfterNumbering?.IsHardConstraint == true);
             if (!string.IsNullOrWhiteSpace(titleText))
             {
                 result.IncrementPassedChecks();
@@ -2152,7 +2123,7 @@ public partial class ValidationService
             caseRule.Equals("Title Case", StringComparison.OrdinalIgnoreCase) &&
             !string.IsNullOrWhiteSpace(titleText))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberingRule.Case?.IsHardConstraint == true);
             if (IsTitleCaseText(titleText))
             {
                 result.IncrementPassedChecks();

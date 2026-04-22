@@ -147,7 +147,6 @@ public class ParagraphAfterListIndentValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "paragraf",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {
@@ -181,7 +180,6 @@ public class ParagraphAfterListIndentValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "item_daftar",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {

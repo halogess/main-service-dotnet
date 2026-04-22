@@ -2,6 +2,7 @@ using System.Data;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Collections.ObjectModel;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -901,16 +902,74 @@ public class FootnoteContentStructureRule
 
 public class ValidationResult
 {
+    public sealed class ValidationErrorCollection : Collection<ValidationError>
+    {
+        private readonly ValidationResult _owner;
+        private bool _suppressPrepareErrorForInsert;
+
+        public ValidationErrorCollection(ValidationResult owner)
+        {
+            _owner = owner;
+        }
+
+        internal void ReplaceTail(int startIndex, IReadOnlyList<ValidationError> replacement)
+        {
+            _suppressPrepareErrorForInsert = true;
+            try
+            {
+                while (Count > startIndex)
+                    RemoveAt(Count - 1);
+
+                foreach (var error in replacement)
+                    Add(error);
+            }
+            finally
+            {
+                _suppressPrepareErrorForInsert = false;
+            }
+        }
+
+        protected override void InsertItem(int index, ValidationError item)
+        {
+            if (!_suppressPrepareErrorForInsert)
+                _owner.PrepareErrorForInsert(item);
+            base.InsertItem(index, item);
+        }
+
+        protected override void SetItem(int index, ValidationError item)
+        {
+            if (!_suppressPrepareErrorForInsert)
+                _owner.PrepareErrorForInsert(item);
+            base.SetItem(index, item);
+        }
+    }
+
+    public ValidationResult()
+    {
+        Errors = new ValidationErrorCollection(this);
+    }
+
     public bool IsValid => Errors.Count == 0;
-    public List<ValidationError> Errors { get; set; } = new();
+    public ValidationErrorCollection Errors { get; }
     public int TotalChecks { get; set; }
     public int PassedChecks { get; set; }
 
     // Unique check tracking: each check statement line is treated as one check key.
     private readonly HashSet<string> _uniqueCheckKeys = new(StringComparer.Ordinal);
     private readonly HashSet<string> _failedUniqueCheckKeys = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _failedHardConstraintCheckKeys = new(StringComparer.Ordinal);
     private string? _pendingCheckKey;
     private bool _pendingCheckPassed;
+    private bool _pendingCheckIsHardConstraint;
+
+    public bool HasHardConstraintViolation
+    {
+        get
+        {
+            FinalizePendingCheck();
+            return _failedHardConstraintCheckKeys.Count > 0 || Errors.Any(error => error.IsHardConstraint);
+        }
+    }
 
     public int UniqueTotalChecks
     {
@@ -942,6 +1001,7 @@ public class ValidationResult
     public decimal Score => UniqueTotalChecks > 0 ? (decimal)UniquePassedChecks / UniqueTotalChecks * 100 : 100;
 
     public void IncrementTotalChecks(
+        bool isHardConstraint = false,
         [CallerFilePath] string filePath = "",
         [CallerLineNumber] int lineNumber = 0,
         [CallerMemberName] string memberName = "")
@@ -953,6 +1013,7 @@ public class ValidationResult
         _uniqueCheckKeys.Add(checkKey);
         _pendingCheckKey = checkKey;
         _pendingCheckPassed = false;
+        _pendingCheckIsHardConstraint = isHardConstraint;
     }
 
     public void IncrementPassedChecks(
@@ -982,11 +1043,13 @@ public class ValidationResult
         FinalizePendingCheck();
         other.FinalizePendingCheck();
 
-        Errors.AddRange(other.Errors);
+        foreach (var error in other.Errors)
+            Errors.Add(error);
         TotalChecks += other.TotalChecks;
         PassedChecks += other.PassedChecks;
         _uniqueCheckKeys.UnionWith(other._uniqueCheckKeys);
         _failedUniqueCheckKeys.UnionWith(other._failedUniqueCheckKeys);
+        _failedHardConstraintCheckKeys.UnionWith(other._failedHardConstraintCheckKeys);
     }
 
     private void FinalizePendingCheck()
@@ -995,10 +1058,27 @@ public class ValidationResult
             return;
 
         if (!_pendingCheckPassed)
+        {
             _failedUniqueCheckKeys.Add(_pendingCheckKey);
+            if (_pendingCheckIsHardConstraint)
+                _failedHardConstraintCheckKeys.Add(_pendingCheckKey);
+        }
 
         _pendingCheckKey = null;
         _pendingCheckPassed = false;
+        _pendingCheckIsHardConstraint = false;
+    }
+
+    private void PrepareErrorForInsert(ValidationError? error)
+    {
+        if (error == null)
+            return;
+
+        if (!error.IsHardConstraint && _pendingCheckIsHardConstraint && !_pendingCheckPassed)
+            error.IsHardConstraint = true;
+
+        if (error.IsHardConstraint && !string.IsNullOrWhiteSpace(_pendingCheckKey))
+            _failedHardConstraintCheckKeys.Add(_pendingCheckKey);
     }
 
     private static string BuildCheckKey(string filePath, int lineNumber, string memberName)
@@ -1052,7 +1132,7 @@ public class ValidationError
     public decimal? PageMarginLeftCm { get; set; }
     public decimal? PageMarginRightCm { get; set; }
     public ulong? DokumenElemenId { get; set; }
-    public bool IsRequired { get; set; } = true;
+    public bool IsHardConstraint { get; set; }
 }
 
 #endregion
@@ -1235,12 +1315,8 @@ public partial class ValidationService : IValidationService
         var listItemResult = await ValidateListItemAsync(dokumenId, classification.ListItemIds, cancellationToken);
         result.MergeFrom(listItemResult);
 
-        // Footnote extraction currently stored only for dokumen flow.
-        if (!IsBabScopedValidation())
-        {
-            var footnoteResult = await ValidateFootnoteAsync(dokumenId, cancellationToken);
-            result.MergeFrom(footnoteResult);
-        }
+        var footnoteResult = await ValidateFootnoteAsync(dokumenId, cancellationToken);
+        result.MergeFrom(footnoteResult);
 
         // Validate images
         var imageResult = await ValidateImageAsync(dokumenId, cancellationToken);
@@ -1262,9 +1338,9 @@ public partial class ValidationService : IValidationService
         return result;
     }
 
-    private static void NormalizeContentErrorCategories(List<ValidationError> errors)
+    private static void NormalizeContentErrorCategories(IList<ValidationError> errors)
     {
-        if (errors == null || errors.Count == 0)
+        if (errors.Count == 0)
             return;
 
         foreach (var error in errors)
@@ -1647,7 +1723,7 @@ public partial class ValidationService : IValidationService
         public decimal? RightCm { get; init; }
     }
 
-    private static void ApplyContextToErrors(List<ValidationError> errors, int startIndex, ElementNeighborContext? context)
+    private static void ApplyContextToErrors(IList<ValidationError> errors, int startIndex, ElementNeighborContext? context)
     {
         if (context == null)
             return;
@@ -1656,13 +1732,28 @@ public partial class ValidationService : IValidationService
             ApplyContext(errors[i], context);
     }
 
-    private static void ApplyElementIdToErrors(List<ValidationError> errors, int startIndex, ulong elementId)
+    private static void ApplyElementIdToErrors(IList<ValidationError> errors, int startIndex, ulong elementId)
     {
         for (var i = startIndex; i < errors.Count; i++)
         {
             if (!errors[i].DokumenElemenId.HasValue)
                 errors[i].DokumenElemenId = elementId;
         }
+    }
+
+    private static void ReplaceErrorTail(IList<ValidationError> errors, int startIndex, IReadOnlyList<ValidationError> replacement)
+    {
+        if (errors is ValidationResult.ValidationErrorCollection collection)
+        {
+            collection.ReplaceTail(startIndex, replacement);
+            return;
+        }
+
+        while (errors.Count > startIndex)
+            errors.RemoveAt(errors.Count - 1);
+
+        foreach (var error in replacement)
+            errors.Add(error);
     }
 
     private static void ApplyContext(ValidationError error, ElementNeighborContext context)

@@ -56,11 +56,8 @@ public partial class ValidationService
         if (aturan == null)
             return result;
 
-        var codeDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
-            .Where(d => d.AturanDetailKategori == "Isi Buku")
-            .Where(d => d.AturanDetailKey == "kode")
-            .FirstOrDefaultAsync(cancellationToken);
+        var detailMap = await LoadCanonicalDetailsAsync(aturan.AturanId, cancellationToken, "kode");
+        detailMap.TryGetValue("kode", out var codeDetail);
 
         if (codeDetail == null)
             return result;
@@ -282,7 +279,7 @@ public partial class ValidationService
 
             if (violation.IsTableType && codeRule?.CegahTabelKode?.Value == true)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(codeRule.CegahTabelKode?.IsHardConstraint == true);
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
@@ -297,7 +294,7 @@ public partial class ValidationService
 
             if (violation.IsImageType && codeRule?.CegahGambarKode?.Value == true)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(codeRule.CegahGambarKode?.IsHardConstraint == true);
                 result.Errors.Add(new ValidationError
                 {
                     Category = "Isi Buku",
@@ -389,13 +386,13 @@ public partial class ValidationService
 
             if (codeRule?.CegahTabelKode?.Value == true)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(codeRule.CegahTabelKode?.IsHardConstraint == true);
                 result.IncrementPassedChecks();
             }
 
             if (codeRule?.CegahGambarKode?.Value == true)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(codeRule.CegahGambarKode?.IsHardConstraint == true);
                 if (!content.HasNonTextContent)
                 {
                     result.IncrementPassedChecks();
@@ -436,7 +433,7 @@ public partial class ValidationService
 
             if (titleRule != null && IsContinuationCaptionRequired(titleRule.WajibCaptionLanjutanJikaLintasHalaman))
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(titleRule.WajibCaptionLanjutanJikaLintasHalaman?.IsHardConstraint == true);
                 if (SpansMultiplePages(blockLocations))
                 {
                     result.Errors.Add(new ValidationError
@@ -475,6 +472,7 @@ public partial class ValidationService
                 var normalizedPosition = string.IsNullOrWhiteSpace(positionRule)
                     ? normalizedTitlePosition
                     : positionRule.ToLowerInvariant();
+                var titlePositionHardConstraint = titleRule.Position?.IsHardConstraint == true;
 
                 if (normalizedPosition == "after")
                 {
@@ -484,7 +482,7 @@ public partial class ValidationService
                     }
                     else if (captionBefore != null)
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(titlePositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -498,7 +496,7 @@ public partial class ValidationService
                     }
                     else
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(titlePositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -519,7 +517,7 @@ public partial class ValidationService
                     }
                     else if (captionAfter != null)
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(titlePositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -533,7 +531,7 @@ public partial class ValidationService
                     }
                     else
                     {
-                        result.IncrementTotalChecks();
+                        result.IncrementTotalChecks(titlePositionHardConstraint);
                         result.Errors.Add(new ValidationError
                         {
                             Category = "Isi Buku",
@@ -686,8 +684,7 @@ public partial class ValidationService
         string ScopeHint,
         string PageRange,
         string AllowedActions,
-        string DisallowedActions,
-        bool IsRequired);
+        string DisallowedActions);
 
     private async Task<Dictionary<ulong, int>> LoadCodeListLevelsFromVisualAsync(
         IEnumerable<ulong> elementIds,
@@ -784,7 +781,7 @@ public partial class ValidationService
     }
 
     private static void MergeIdenticalCodeLineErrorsWithinBlockPage(
-        List<ValidationError> errors,
+        IList<ValidationError> errors,
         int startIndex,
         IReadOnlyDictionary<ulong, string> codeMergeSetKeyByElementId)
     {
@@ -818,8 +815,7 @@ public partial class ValidationService
                 target.DokumenElemenId = error.DokumenElemenId;
         }
 
-        errors.RemoveRange(startIndex, errors.Count - startIndex);
-        errors.AddRange(merged);
+        ReplaceErrorTail(errors, startIndex, merged);
     }
 
     private static CodeLineErrorMergeKey? TryBuildCodeLineErrorMergeKey(
@@ -855,8 +851,7 @@ public partial class ValidationService
             error.ScopeHint ?? string.Empty,
             error.PageRange ?? string.Empty,
             BuildActionToken(error.AllowedActions),
-            BuildActionToken(error.DisallowedActions),
-            error.IsRequired);
+            BuildActionToken(error.DisallowedActions));
     }
 
     private static int? TryGetSingleLocationPage(IReadOnlyList<ErrorLocation> locations)
@@ -1031,7 +1026,7 @@ public partial class ValidationService
         var expectedFontName = rule.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.FontName?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1084,7 +1079,7 @@ public partial class ValidationService
         var expectedFontSize = rule.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
             if (runs.Count > 0)
             {
@@ -1143,7 +1138,7 @@ public partial class ValidationService
         var expectedBold = rule.FontStyle?.Bold?.Value;
         if (expectedBold.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.FontStyle?.Bold?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1196,7 +1191,7 @@ public partial class ValidationService
         var expectedItalic = rule.FontStyle?.Italic?.Value;
         if (expectedItalic.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.FontStyle?.Italic?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1249,7 +1244,7 @@ public partial class ValidationService
         var expectedUnderline = rule.FontStyle?.Underline?.Value;
         if (expectedUnderline.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.FontStyle?.Underline?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -1329,7 +1324,7 @@ public partial class ValidationService
         var expectedAlignment = rule.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Alignment?.IsHardConstraint == true);
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(paragraphText, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
@@ -1377,7 +1372,7 @@ public partial class ValidationService
 
         if (expectedHanging.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Indentation?.Hanging?.IsHardConstraint == true);
             if (Math.Abs(hangingCm - expectedHanging.Value) <= indentToleranceCm)
             {
                 result.IncrementPassedChecks();
@@ -1399,7 +1394,7 @@ public partial class ValidationService
 
         if (expectedLeftIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Indentation?.LeftIndent?.IsHardConstraint == true);
             var leftCm = leftTwips / 1440.0m * 2.54m;
             var alignedLeftCm = expectedHanging.HasValue
                 ? Math.Max(0m, leftCm - hangingCm)
@@ -1425,7 +1420,7 @@ public partial class ValidationService
         }
 
         var expectedRightIndent = rule.Indentation?.RightIndent?.Value ?? 0m;
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Indentation?.RightIndent?.IsHardConstraint == true);
         var rightCm = GetRightIndentCm(format);
         if (Math.Abs(rightCm - expectedRightIndent) <= indentToleranceCm)
         {
@@ -1448,7 +1443,7 @@ public partial class ValidationService
         var spacingRule = rule.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
@@ -1473,7 +1468,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -1498,7 +1493,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 
@@ -1535,7 +1530,7 @@ public partial class ValidationService
 
         if (expectedUse.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.UseNumbering?.IsHardConstraint == true);
             if (expectedUse.Value == hasNumbering)
             {
                 result.IncrementPassedChecks();
@@ -1564,7 +1559,7 @@ public partial class ValidationService
 
         if (!MatchesCodeNumberFormat(label, expectedFormat))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.NumberFormat?.IsHardConstraint == true);
             result.Errors.Add(new ValidationError
             {
                 Category = "Isi Buku",
@@ -1578,7 +1573,7 @@ public partial class ValidationService
         }
         else
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.NumberFormat?.IsHardConstraint == true);
             result.IncrementPassedChecks();
         }
     }

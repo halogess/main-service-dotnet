@@ -52,7 +52,7 @@ Catatan: aturan numerik (margin, font size, spacing, dll) diambil dari Aturan/At
 | Paragraf | hanging_indent_after_list | Jika override setelah list aktif, hanging indent harus sesuai nilai yang dihitung. | hardcoded/derived |
 | Paragraf | line_spacing | Line spacing paragraf sesuai `paragraph.spacing.line_spacing`. | diambil dari aturan.txt |
 | Paragraf | spacing_before_after | Spacing before/after paragraf sesuai `paragraph.spacing.before/after` dan autospacing harus false. | diambil dari aturan.txt |
-| Paragraf | sentence_count | Saran: minimal 3 kalimat per paragraf (IsRequired=false). | hardcoded/derived |
+| Paragraf | sentence_count | Saran: minimal 3 kalimat per paragraf (non-hard-constraint). | hardcoded/derived |
 | Item Daftar | font_name | Font item daftar sesuai `font.font_name`. | diambil dari aturan.txt |
 | Item Daftar | font_size | Ukuran font item daftar sesuai `font.font_size`. | diambil dari aturan.txt |
 | Item Daftar | alignment | Alignment item daftar sesuai `paragraph.alignment`. | diambil dari aturan.txt |

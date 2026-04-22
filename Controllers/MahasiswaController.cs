@@ -14,18 +14,18 @@ namespace ValidasiTugasAkhir.MainService.Controllers
         private readonly IMahasiswaService _mahasiswaService;
         private readonly KorektorBukuDbContext _db;
         private readonly SttsDbContext _sttsDb;
-        private readonly IExtractionArtifactCleanupService _cleanupService;
+        private readonly INonActiveBookHistoryPurgeService _bookHistoryPurgeService;
 
         public MahasiswaController(
             IMahasiswaService mahasiswaService,
             KorektorBukuDbContext db,
             SttsDbContext sttsDb,
-            IExtractionArtifactCleanupService cleanupService)
+            INonActiveBookHistoryPurgeService bookHistoryPurgeService)
         {
             _mahasiswaService = mahasiswaService;
             _db = db;
             _sttsDb = sttsDb;
-            _cleanupService = cleanupService;
+            _bookHistoryPurgeService = bookHistoryPurgeService;
         }
 
 
@@ -84,151 +84,46 @@ namespace ValidasiTugasAkhir.MainService.Controllers
             if (request?.mahasiswa == null || request.mahasiswa.Count == 0)
                 return BadRequest(new { message = "Daftar mahasiswa yang akan dihapus tidak boleh kosong" });
 
-            var deleted = 0;
-            var errors = new List<string>();
-            var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
-            var fullStoragePath = Path.GetFullPath(storagePath);
+            var purgeResult = await _bookHistoryPurgeService.PurgeAsync(
+                request.mahasiswa
+                    .Select(item => new NonActiveBookHistoryPurgeRequestItem
+                    {
+                        Nrp = item.nrp,
+                        BukuIds = item.buku_ids
+                    })
+                    .ToList(),
+                HttpContext.RequestAborted);
 
-            foreach (var mhs in request.mahasiswa)
+            var hasStorageFailure = purgeResult.FailedStorageDirectories.Count > 0;
+            var message = hasStorageFailure
+                ? "Hapus buku selesai, tetapi ada folder storage yang gagal dihapus."
+                : "Hapus buku selesai";
+
+            return Ok(new
             {
-                if (string.IsNullOrWhiteSpace(mhs.nrp))
+                message,
+                deleted = purgeResult.Deleted,
+                deleted_storage_directories = purgeResult.DeletedStorageDirectories,
+                failed_storage_directories = purgeResult.FailedStorageDirectories,
+                skipped_books = purgeResult.SkippedBooks.Select(item => new
                 {
-                    errors.Add("NRP mahasiswa tidak boleh kosong");
-                    continue;
-                }
-
-                var requestedBukuIds = mhs.buku_ids
-                    .Where(id => id > 0)
-                    .Distinct()
-                    .ToList();
-
-                if (requestedBukuIds.Count == 0)
-                {
-                    errors.Add($"{mhs.nrp}: buku_ids tidak boleh kosong");
-                    continue;
-                }
-
-                try
-                {
-                    var mahasiswa = await _sttsDb.Mahasiswas
-                        .AsNoTracking()
-                        .Where(item => item.MhsNrp == mhs.nrp)
-                        .Select(item => new
-                        {
-                            item.MhsNrp,
-                            item.MhsStatus,
-                            item.MhsLulusTahun
-                        })
-                        .FirstOrDefaultAsync();
-
-                    if (mahasiswa == null)
-                    {
-                        errors.Add($"{mhs.nrp}: mahasiswa tidak ditemukan");
-                        continue;
-                    }
-
-                    if (mahasiswa.MhsStatus == 1 && string.IsNullOrWhiteSpace(mahasiswa.MhsLulusTahun))
-                    {
-                        errors.Add($"{mhs.nrp}: mahasiswa masih aktif");
-                        continue;
-                    }
-
-                    await using var transaction = _db.Database.IsRelational()
-                        ? await _db.Database.BeginTransactionAsync(HttpContext.RequestAborted)
-                        : null;
-
-                    var bukus = await _db.Bukus
-                        .Where(b => b.MhsNrp == mhs.nrp && requestedBukuIds.Contains(b.BukuId))
-                        .ToListAsync();
-
-                    if (bukus.Count == 0)
-                    {
-                        errors.Add($"{mhs.nrp}: buku tidak ditemukan");
-                        continue;
-                    }
-
-                    var resolvedBukuIds = bukus
-                        .Select(b => b.BukuId)
-                        .Distinct()
-                        .ToList();
-
-                    var missingBukuIds = requestedBukuIds
-                        .Except(resolvedBukuIds)
-                        .ToList();
-
-                    if (missingBukuIds.Count > 0)
-                    {
-                        errors.Add(
-                            $"{mhs.nrp}: buku {string.Join(", ", missingBukuIds)} tidak ditemukan atau bukan milik mahasiswa");
-                    }
-
-                    var babs = await _db.Babs
-                        .Where(b => resolvedBukuIds.Contains((int)b.BukuId))
-                        .ToListAsync();
-                    var babIds = babs
-                        .Select(b => b.BabId)
-                        .Distinct()
-                        .ToList();
-
-                    foreach (var babId in babIds)
-                        await _cleanupService.ResetAsync("bab", babId, HttpContext.RequestAborted);
-
-                    var kesalahans = babIds.Count == 0
-                        ? new List<Kesalahan>()
-                        : await _db.Kesalahans
-                            .Where(k => k.KesalahanRefTipe == KesalahanRefTipe.bab && babIds.Contains(k.KesalahanRefId))
-                            .ToListAsync();
-
-                    var antrians = await _db.Antrians
-                        .Where(a => a.AntrianTipe == "buku" &&
-                                    ((a.BukuId.HasValue && resolvedBukuIds.Contains((int)a.BukuId.Value)) ||
-                                     (a.BabId.HasValue && babIds.Contains(a.BabId.Value))))
-                        .ToListAsync();
-
-                    if (kesalahans.Count > 0)
-                        _db.Kesalahans.RemoveRange(kesalahans);
-
-                    if (antrians.Count > 0)
-                        _db.Antrians.RemoveRange(antrians);
-
-                    _db.Babs.RemoveRange(babs);
-                    _db.Bukus.RemoveRange(bukus);
-                    await _db.SaveChangesAsync();
-
-                    if (transaction != null)
-                        await transaction.CommitAsync(HttpContext.RequestAborted);
-
-                    foreach (var bukuId in resolvedBukuIds)
-                    {
-                        var bukuDir = BuildSafeBukuDirectory(fullStoragePath, storagePath, mhs.nrp, bukuId);
-                        if (string.IsNullOrWhiteSpace(bukuDir))
-                        {
-                            errors.Add($"{mhs.nrp}: path storage buku {bukuId} tidak valid");
-                            continue;
-                        }
-
-                        if (Directory.Exists(bukuDir))
-                            Directory.Delete(bukuDir, true);
-                    }
-
-                    deleted += bukus.Count;
-                }
-                catch (Exception ex)
-                {
-                    errors.Add($"{mhs.nrp}: {ex.Message}");
-                }
-            }
-
-            return Ok(new { message = "Hapus buku selesai", deleted, errors });
+                    nrp = item.Nrp,
+                    buku_id = item.BukuId,
+                    reason = item.Reason
+                }),
+                errors = purgeResult.Errors
+            });
         }
 
         [HttpGet("nonaktif/buku")]
-        public IActionResult GetNonaktifBuku([FromQuery] string? angkatan = null, [FromQuery] string? jurusan = null, [FromQuery] string? search = null, [FromQuery] int limit = 10, [FromQuery] int offset = 0)
+        public async Task<IActionResult> GetNonaktifBuku([FromQuery] string? angkatan = null, [FromQuery] string? jurusan = null, [FromQuery] string? search = null, [FromQuery] int limit = 10, [FromQuery] int offset = 0)
         {
             if (HttpContext.Items["Role"]?.ToString() != "admin")
                 return Forbid();
 
-            var bukuList = _db.Bukus.Where(b => b.BukuStatus != "dibatalkan").ToList();
+            var bukuList = await _db.Bukus
+                .AsNoTracking()
+                .ToListAsync();
             var allNrps = bukuList.Select(b => b.MhsNrp).Distinct().ToList();
 
             var mahasiswaQuery = _sttsDb.Mahasiswas
@@ -245,7 +140,9 @@ namespace ValidasiTugasAkhir.MainService.Controllers
             if (!string.IsNullOrEmpty(search))
                 mahasiswaQuery = mahasiswaQuery.Where(m => m.MhsNrp.Contains(search) || (m.MhsNama != null && m.MhsNama.Contains(search)));
 
-            var mahasiswaNonAktif = mahasiswaQuery.Select(m => m.MhsNrp).ToList();
+            var mahasiswaNonAktif = await mahasiswaQuery
+                .Select(m => m.MhsNrp)
+                .ToListAsync();
             var filteredBukus = bukuList.Where(b => mahasiswaNonAktif.Contains(b.MhsNrp)).ToList();
 
             var groupedByNrp = filteredBukus
@@ -258,7 +155,7 @@ namespace ValidasiTugasAkhir.MainService.Controllers
             var totalCount = filteredBukus.Select(b => b.MhsNrp).Distinct().Count();
             var nrps = groupedByNrp.Select(g => g.Key).ToList();
 
-            var mahasiswaJurusan = (from m in _sttsDb.Mahasiswas
+            var mahasiswaJurusan = await (from m in _sttsDb.Mahasiswas
                 where nrps.Contains(m.MhsNrp)
                 join j in _sttsDb.Jurusans on m.JurKode equals j.JurKode into jGroup
                 from j in jGroup.DefaultIfEmpty()
@@ -271,11 +168,65 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                     JurKode = j != null ? j.JurKode : null,
                     JurNama = j != null ? j.JurNama : "Unknown",
                     JurSingkat = j != null ? j.JurSingkat : "Unknown"
-                }).ToDictionary(x => x.MhsNrp);
+                }).ToDictionaryAsync(x => x.MhsNrp);
+
+            var groupedBukuIds = groupedByNrp
+                .SelectMany(group => group.Select(item => item.BukuId))
+                .Distinct()
+                .ToList();
+
+            var babMappings = groupedBukuIds.Count == 0
+                ? new List<(int BukuId, uint BabId)>()
+                : (await _db.Babs
+                    .AsNoTracking()
+                    .Where(b => groupedBukuIds.Contains((int)b.BukuId))
+                    .Select(b => new { BukuId = (int)b.BukuId, b.BabId })
+                    .ToListAsync())
+                    .Select(item => (item.BukuId, item.BabId))
+                    .ToList();
+
+            var babIds = babMappings
+                .Select(item => item.BabId)
+                .Distinct()
+                .ToList();
+
+            var queueRows = groupedBukuIds.Count == 0
+                ? new List<Antrian>()
+                : await _db.Antrians
+                    .AsNoTracking()
+                    .Where(a => a.AntrianTipe == "buku" &&
+                                ((a.BukuId.HasValue && groupedBukuIds.Contains((int)a.BukuId.Value)) ||
+                                 (a.BabId.HasValue && babIds.Contains(a.BabId.Value))))
+                    .ToListAsync();
+
+            var babToBukuMap = babMappings.ToDictionary(item => item.BabId, item => item.BukuId);
+            var queuesByBukuId = new Dictionary<int, List<Antrian>>();
+            foreach (var queue in queueRows)
+            {
+                int? targetBukuId = queue.BukuId.HasValue
+                    ? (int)queue.BukuId.Value
+                    : queue.BabId.HasValue && babToBukuMap.TryGetValue(queue.BabId.Value, out var mappedBukuId)
+                        ? mappedBukuId
+                        : null;
+
+                if (!targetBukuId.HasValue)
+                    continue;
+
+                if (!queuesByBukuId.TryGetValue(targetBukuId.Value, out var queueList))
+                {
+                    queueList = new List<Antrian>();
+                    queuesByBukuId[targetBukuId.Value] = queueList;
+                }
+
+                queueList.Add(queue);
+            }
 
             var result = groupedByNrp.Select(g => {
                 var mhs = mahasiswaJurusan.GetValueOrDefault(g.Key);
                 var bukuListData = g.OrderByDescending(b => b.BukuCreatedAt).Select(b => new {
+                    eligibility = BukuHistoryDeletionPolicy.Evaluate(
+                        b.BukuStatus,
+                        queuesByBukuId.GetValueOrDefault(b.BukuId) ?? []),
                     id = b.BukuId,
                     judul = b.BukuJudul,
                     tanggal_upload = b.BukuCreatedAt,
@@ -283,6 +234,17 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                     status = b.BukuStatus,
                     skor = b.BukuSkor ?? 0,
                     jumlah_kesalahan = b.BukuJumlahKesalahan ?? 0
+                }).Select(item => new {
+                    item.id,
+                    item.judul,
+                    item.tanggal_upload,
+                    item.jumlah_bab,
+                    item.status,
+                    item.skor,
+                    item.jumlah_kesalahan,
+                    has_failed_bab = item.eligibility.HasFailedBab,
+                    can_delete = item.eligibility.CanDelete,
+                    delete_block_reason = item.eligibility.DeleteBlockReason
                 }).ToList();
 
                 return new {
@@ -338,14 +300,6 @@ namespace ValidasiTugasAkhir.MainService.Controllers
                 .Select(item => item!.Value)
                 .ToHashSet()
                 ?? new HashSet<int>();
-        }
-
-        private static string? BuildSafeBukuDirectory(string fullStoragePath, string storagePath, string nrp, int bukuId)
-        {
-            var candidate = Path.GetFullPath(Path.Combine(storagePath, "buku", nrp, bukuId.ToString()));
-            return candidate.StartsWith(fullStoragePath, StringComparison.OrdinalIgnoreCase)
-                ? candidate
-                : null;
         }
     }
 }

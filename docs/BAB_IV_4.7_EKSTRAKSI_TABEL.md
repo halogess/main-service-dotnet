@@ -1,7 +1,7 @@
 # BAB IV - Subbab 4.7: Ekstraksi Tabel
 
 ## Ringkasan Subbab
-Subbab ini membahas secara teknis proses ekstraksi tabel dari dokumen Word menggunakan OpenXML SDK. Tabel dalam WordprocessingML memiliki struktur hierarkis yang kompleks: Table (w:tbl) → TableRow (w:tr) → TableCell (w:tc) → Paragraphs/Nested Content. Dalam implementasi `DocxExtractionService`, ekstraksi tabel melibatkan beberapa komponen utama: `TableExtractor` sebagai orchestrator utama, `TableFormatExtractor` untuk table-level properties, `TableRowFormatExtractor` untuk row properties, `TableCellFormatExtractor` untuk cell properties, `TableStyleResolver` untuk inheritance dan conditional formatting, serta `TablePropertyMerger` untuk property merging. Proses ini mencakup ekstraksi properties pada setiap level (table, row, cell), penanganan cell merging (GridSpan dan VerticalMerge), resolusi style dengan conditional formatting (firstRow, lastCol, banding), dan recursive extraction untuk nested content termasuk nested tables. Hasil ekstraksi disimpan dalam model database terpisah untuk setiap level, memungkinkan validasi detail terhadap format tabel dalam tugas akhir.
+Subbab ini membahas secara teknis proses ekstraksi tabel dari dokumen Word menggunakan OpenXML SDK. Tabel dalam WordprocessingML memiliki struktur hierarkis yang kompleks: Table (w:tbl) → TableRow (w:tr) → TableCell (w:tc) → Paragraphs/Nested Content. Dalam implementasi `DocxExtractionService`, ekstraksi tabel berpusat pada `TableExtractor` sebagai orchestrator utama dan `TableFormatExtractor` untuk properti level tabel. Konten row dan cell dipertahankan sebagai struktur JSON bertingkat, sehingga nested table dan isi sel tetap dapat direpresentasikan tanpa tabel persistensi terpisah untuk tiap row dan cell.
 
 ---
 
@@ -269,94 +269,21 @@ private static string SerializeTablePositionToJson(TablePositionProperties tblpP
 
 ## 4.7.3 Ekstraksi Row dan Cell
 
-### 4.7.3.1 TableRowProperties dan Header Row
+### 4.7.3.1 Struktur Row
 
-TableRowProperties (w:trPr) berisi row-level formatting. Properties utama yang diekstrak: `TableHeader` (w:tblHeader) yang menandakan row sebagai header yang repeat di setiap halaman, dan `CantSplit` (w:cantSplit) yang mencegah row split across pages. Dalam `TableRowFormatExtractor.ExtractFormat()` lines 23-62, properties diekstrak dengan style resolution. Toggle elements seperti TableHeader dan CantSplit menggunakan `OnOffOnlyValues` - kehadiran element tanpa Val berarti true. Untuk tugas akhir, header row penting untuk tabel yang panjang agar header tetap visible di setiap halaman.
+Pada implementasi aktif, setiap baris tabel direpresentasikan sebagai objek JSON yang berisi array `cells`. Struktur ini menjaga urutan row sebagaimana muncul pada dokumen sumber dan memudahkan traversal nested content tanpa menyimpan entitas row terpisah di database.
 
-```csharp
-// TableRowFormatExtractor.cs lines 23-62
-public DokumenFormatTableRow ExtractFormat(
-    TableRow row, int rowIndex = 0, int totalRows = 1, Table? table = null)
-{
-    var format = new DokumenFormatTableRow();
-    
-    var effectiveTrPr = (_styleResolver != null && table != null)
-        ? _styleResolver.ResolveEffectiveRowProperties(row, rowIndex, totalRows, table)
-        : row.GetFirstChild<TableRowProperties>();
-    
-    // Table Header Row
-    var tableHeader = effectiveTrPr.GetFirstChild<TableHeader>();
-    if (tableHeader != null)
-        format.DftrTblHeader = tableHeader.Val?.HasValue == true 
-            ? (tableHeader.Val.Value == OnOffOnlyValues.On) 
-            : true;
-    
-    // Can't Split Row
-    var cantSplit = effectiveTrPr.GetFirstChild<CantSplit>();
-    if (cantSplit != null)
-        format.DftrCantSplit = cantSplit.Val?.HasValue == true 
-            ? (cantSplit.Val.Value == OnOffOnlyValues.On) 
-            : true;
-    
-    return format;
-}
-```
+### 4.7.3.2 Struktur Cell
 
-### 4.7.3.2 GridSpan untuk Column Merge
+Setiap cell direpresentasikan sebagai objek JSON dengan properti `content`. Isi cell dapat berupa paragraf atau nested table, sehingga satu cell bertindak sebagai container konten mini yang tetap mempertahankan urutan baca.
 
-GridSpan (w:gridSpan) menentukan berapa grid columns yang di-span oleh cell (horizontal merge). Default adalah 1. Value > 1 berarti cell spans multiple columns. Dalam `TableCellFormatExtractor.ExtractFormat()` lines 46-52, GridSpan diekstrak sebagai ushort. Fallback default 1 di-apply pada line 103-104. GridSpan berbeda dari visual column count karena grid columns bisa lebih banyak dari actual cells. Untuk validasi tugas akhir, GridSpan penting untuk mendeteksi merged cells dalam header atau data tables.
+### 4.7.3.3 Paragraf di Dalam Cell
 
-```csharp
-// TableCellFormatExtractor.cs lines 46-52, 101-104
-// Grid Span (w:gridSpan)
-if (effectiveTcPr.GridSpan?.Val?.HasValue == true)
-{
-    var gridSpanValue = effectiveTcPr.GridSpan.Val.Value;
-    if (gridSpanValue > 0)
-        format.DftcGridSpan = (ushort)gridSpanValue;
-}
+Jika child cell berupa paragraf, extractor tetap melakukan deteksi tipe paragraf, ekstraksi konten inline, dan penyimpanan `dfp_id` ketika format paragraf berhasil dipersist. Dengan demikian, validasi isi tabel tetap menggunakan metadata paragraf yang sama seperti body biasa.
 
-// Fallback defaults
-if (!format.DftcGridSpan.HasValue)
-    format.DftcGridSpan = 1;
-```
+### 4.7.3.4 Nested Table
 
-### 4.7.3.3 VMerge untuk Row Merge
-
-VerticalMerge (w:vMerge) mengontrol vertical cell merging. Two values: `Restart` menandakan cell sebagai start of merge region, dan `Continue` (atau absence of Val when element exists) menandakan cell sebagai continuation. Dalam `TableCellFormatExtractor.ExtractFormat()` lines 54-63, kehadiran w:vMerge tanpa Val defaulted ke "continue". Cells dengan vMerge="continue" biasanya kosong secara visual karena content ditampilkan di restart cell. Untuk validasi, detecting vertically merged cells penting untuk memahami struktur data table.
-
-```csharp
-// TableCellFormatExtractor.cs lines 54-63
-// Vertical Merge (w:vMerge)
-var vMerge = effectiveTcPr.VerticalMerge;
-if (vMerge != null)
-{
-    // If w:vMerge exists without @w:val, it means "continue"
-    if (vMerge.Val?.HasValue == true)
-        format.DftcVMerge = ConvertVerticalMerge(vMerge.Val.Value);
-    else
-        format.DftcVMerge = "continue"; // Default when w:vMerge is present without value
-}
-```
-
-### 4.7.3.4 Vertical Alignment dalam Cell
-
-TableCellVerticalAlignment (w:vAlign) menentukan vertical alignment konten dalam cell: Top, Center, atau Bottom. Dalam `TableCellFormatExtractor` lines 65-67, value dikonversi ke lowercase string. Default adalah "top" jika tidak dispesifikasikan (lines 106-107). Vertical alignment penting untuk cells dengan varying content heights, terutama dalam tables dengan multiple rows di beberapa cells dan single row di cells lain.
-
-```csharp
-// TableCellFormatExtractor.cs lines 65-67, 91-99
-// Vertical Alignment (w:vAlign)
-if (effectiveTcPr.TableCellVerticalAlignment?.Val?.HasValue == true)
-    format.DftcVAlign = ConvertVerticalAlignment(effectiveTcPr.TableCellVerticalAlignment.Val.Value);
-
-private static string ConvertVerticalAlignment(TableVerticalAlignmentValues value)
-{
-    if (value == TableVerticalAlignmentValues.Top) return "top";
-    if (value == TableVerticalAlignmentValues.Center) return "center";
-    if (value == TableVerticalAlignmentValues.Bottom) return "bottom";
-    return "top"; // Default fallback
-}
-```
+Jika child cell berupa tabel lain, `TableExtractor` dipanggil secara rekursif untuk membentuk struktur `rows` dan `cells` baru pada level yang lebih dalam. Pendekatan ini membuat tabel bersarang tetap terwakili secara penuh di JSON hasil ekstraksi.
 
 ---
 
@@ -684,17 +611,17 @@ private static TableCellMargin MergeCellMarginsIndividual(TableCellMargin? baseM
 
 Model `DokumenFormatTable` (mapped ke `dokumen_format_table`) menyimpan table-level properties. Kolom meliputi: `dft_tbl_style_id` untuk style reference, `dft_tbl_w_type` dan `dft_tbl_w_twips`/`dft_tbl_w_pct50` untuk width, `dft_jc` untuk justification, `dft_tbl_ind_*` untuk indentation, `dft_tbl_layout_type` untuk layout mode, `dft_tbl_borders_json` untuk borders (JSON), `dft_tblppr_json` untuk positioning (JSON), dan `dft_raw_tblpr_xml` untuk debugging. Design menggunakan separate columns untuk different width types untuk type-safe storage.
 
-### 4.7.7.2 Model DokumenFormatTableRow
+### 4.7.7.2 Struktur JSON Row dan Cell
 
-Model `DokumenFormatTableRow` (mapped ke `dokumen_format_table_row`) menyimpan row-level properties. Kolom utama: `dftr_tbl_header` (boolean) untuk header row flag, `dftr_cant_split` (boolean) untuk cant-split flag, dan `dftr_raw_trpr_xml` untuk debugging. Design intentionally minimal karena row properties yang commonly used terbatas. Additional row properties seperti height bisa ditambahkan jika diperlukan untuk validasi lebih detail.
+Pada skema aktif, row dan cell tidak dipersist sebagai model database terpisah. Keduanya direpresentasikan langsung dalam JSON elemen tabel sebagai container hierarkis.
 
-### 4.7.7.3 Model DokumenFormatTableCell
+### 4.7.7.3 Referensi Format yang Tetap Disimpan
 
-Model `DokumenFormatTableCell` (mapped ke `dokumen_format_table_cell`) menyimpan cell-level properties. Kolom: `dftc_grid_span` (ushort) untuk horizontal merge, `dftc_v_merge` (enum) untuk vertical merge state, `dftc_v_align` (enum) untuk vertical alignment, dan `dftc_raw_tcpr_xml` untuk debugging. Untuk validasi tugas akhir, properties ini cukup untuk mendeteksi merged cells dan alignment, yang adalah aspects paling penting dari table structure validation.
+Persistensi format tetap dilakukan pada level tabel (`dft_id`) dan pada konten di dalam cell seperti paragraf (`dfp_id`) atau teks (`dftx_id`) bila diperlukan. Pendekatan ini menjaga struktur data tetap ringkas tanpa kehilangan referensi format yang relevan untuk validasi.
 
 ### 4.7.7.4 JSON Output Structure
 
-JSON output untuk table mengikuti struktur hierarkis yang mirroring XML structure.  Format: `{dft_id: N, content: {rows: [{dftr_id: N, cells: [{dftc_id: N, content: [...]}]}]}}`. Setiap level menyimpan format ID-nya dan nested content. Cell content berisi array of paragraph/table items. Structure ini memungkinkan navigation dan validation pada setiap level secara independen.
+JSON output untuk table mengikuti struktur hierarkis yang mirroring XML structure. Format utamanya: `{dft_id: N, content: {rows: [{cells: [{content: [...]}]}]}}`. Setiap cell menyimpan array item konten yang dapat berisi paragraf atau nested table.
 
 ---
 

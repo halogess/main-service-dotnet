@@ -51,12 +51,10 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
                 })
                 .ToListAsync(cancellationToken);
 
-        var noteRows = normalizedRefTipe == "dokumen"
-            ? await _db.DokumenNotes
-                .Where(note => note.DokumenId == refId)
-                .Select(note => note.DnoteJsonTree)
-                .ToListAsync(cancellationToken)
-            : new List<string?>();
+        var noteRows = await _db.DokumenNotes
+            .Where(note => note.DnoteRefTipe == normalizedRefTipe && note.DnoteRefId == refId)
+            .Select(note => note.DnoteJsonTree)
+            .ToListAsync(cancellationToken);
 
         var formatRefs = new JsonFormatReferenceSet();
         foreach (var row in elementRows)
@@ -91,17 +89,9 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
             .Where(visual => visual.DevRefTipe == normalizedRefTipe && visual.DevRefId == refId)
             .ToListAsync(cancellationToken);
 
-        var notes = normalizedRefTipe == "dokumen"
-            ? await _db.DokumenNotes
-                .Where(note => note.DokumenId == refId)
-                .ToListAsync(cancellationToken)
-            : new List<DokumenNote>();
-
-        var media = normalizedRefTipe == "dokumen"
-            ? await _db.DokumenMedias
-                .Where(item => item.DokumenId == (int)refId)
-                .ToListAsync(cancellationToken)
-            : new List<DokumenMedia>();
+        var notes = await _db.DokumenNotes
+            .Where(note => note.DnoteRefTipe == normalizedRefTipe && note.DnoteRefId == refId)
+            .ToListAsync(cancellationToken);
 
         var paragraphFormats = formatRefs.ParagraphFormatIds.Count == 0
             ? new List<DokumenFormatParagraf>()
@@ -121,28 +111,10 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
                 .Where(item => formatRefs.TableFormatIds.Contains(item.DftId))
                 .ToListAsync(cancellationToken);
 
-        var tableRowFormats = formatRefs.TableRowFormatIds.Count == 0
-            ? new List<DokumenFormatTableRow>()
-            : await _db.DokumenFormatTableRows
-                .Where(item => formatRefs.TableRowFormatIds.Contains(item.DftrId))
-                .ToListAsync(cancellationToken);
-
-        var tableCellFormats = formatRefs.TableCellFormatIds.Count == 0
-            ? new List<DokumenFormatTableCell>()
-            : await _db.DokumenFormatTableCells
-                .Where(item => formatRefs.TableCellFormatIds.Contains(item.DftcId))
-                .ToListAsync(cancellationToken);
-
         var drawingFormats = formatRefs.DrawingFormatIds.Count == 0
             ? new List<DokumenFormatDrawing>()
             : await _db.DokumenFormatDrawings
                 .Where(item => formatRefs.DrawingFormatIds.Contains(item.DfdrId))
-                .ToListAsync(cancellationToken);
-
-        var fieldFormats = formatRefs.FieldFormatIds.Count == 0
-            ? new List<DokumenFormatField>()
-            : await _db.DokumenFormatFields
-                .Where(item => formatRefs.FieldFormatIds.Contains(item.DffdId))
                 .ToListAsync(cancellationToken);
 
         if (visuals.Count > 0)
@@ -150,9 +122,6 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
 
         if (notes.Count > 0)
             _db.DokumenNotes.RemoveRange(notes);
-
-        if (media.Count > 0)
-            _db.DokumenMedias.RemoveRange(media);
 
         if (paragraphFormats.Count > 0)
             _db.DokumenFormatParagrafs.RemoveRange(paragraphFormats);
@@ -163,17 +132,8 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
         if (tableFormats.Count > 0)
             _db.DokumenFormatTables.RemoveRange(tableFormats);
 
-        if (tableRowFormats.Count > 0)
-            _db.DokumenFormatTableRows.RemoveRange(tableRowFormats);
-
-        if (tableCellFormats.Count > 0)
-            _db.DokumenFormatTableCells.RemoveRange(tableCellFormats);
-
         if (drawingFormats.Count > 0)
             _db.DokumenFormatDrawings.RemoveRange(drawingFormats);
-
-        if (fieldFormats.Count > 0)
-            _db.DokumenFormatFields.RemoveRange(fieldFormats);
 
         await _db.SaveChangesAsync(cancellationToken);
 
@@ -195,18 +155,17 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
             await _db.SaveChangesAsync(cancellationToken);
         }
 
-        if (sectionIds.Count > 0 || visuals.Count > 0 || notes.Count > 0 || media.Count > 0)
+        if (sectionIds.Count > 0 || visuals.Count > 0 || notes.Count > 0)
         {
             _logger.LogInformation(
-                "Reset extraction artifacts for {RefTipe} {RefId}: sections={SectionCount}, parts={PartCount}, elements={ElementCount}, notes={NoteCount}, visuals={VisualCount}, media={MediaCount}",
+                "Reset extraction artifacts for {RefTipe} {RefId}: sections={SectionCount}, parts={PartCount}, elements={ElementCount}, notes={NoteCount}, visuals={VisualCount}",
                 normalizedRefTipe,
                 refId,
                 sections.Count,
                 parts.Count,
                 elements.Count,
                 notes.Count,
-                visuals.Count,
-                media.Count);
+                visuals.Count);
         }
     }
 
@@ -245,17 +204,8 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
                         case "dft_id":
                             AddUInt(property.Value, refs.TableFormatIds);
                             break;
-                        case "dftr_id":
-                            AddUInt(property.Value, refs.TableRowFormatIds);
-                            break;
-                        case "dftc_id":
-                            AddUInt(property.Value, refs.TableCellFormatIds);
-                            break;
                         case "dfdr_id":
                             AddULong(property.Value, refs.DrawingFormatIds);
-                            break;
-                        case "dffd_id":
-                            AddULong(property.Value, refs.FieldFormatIds);
                             break;
                     }
 
@@ -323,12 +273,6 @@ public sealed class ExtractionArtifactCleanupService : IExtractionArtifactCleanu
 
         public HashSet<uint> TableFormatIds { get; } = new();
 
-        public HashSet<uint> TableRowFormatIds { get; } = new();
-
-        public HashSet<uint> TableCellFormatIds { get; } = new();
-
         public HashSet<ulong> DrawingFormatIds { get; } = new();
-
-        public HashSet<ulong> FieldFormatIds { get; } = new();
     }
 }

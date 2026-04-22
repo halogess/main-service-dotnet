@@ -1535,10 +1535,8 @@ CREATE TABLE dokumen_format_text (
   "content": {
     "rows": [
       {
-        "dftr_id": 20,
         "cells": [
           {
-            "dftc_id": 30,
             "content": [
               {"type":"paragraph","text":"Cell content","dfp_id":125}
             ]

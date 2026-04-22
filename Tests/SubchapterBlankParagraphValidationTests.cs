@@ -189,7 +189,6 @@ public class SubchapterBlankParagraphValidationTests
                     AturanId = 1,
                     AturanDetailKategori = "Isi Buku",
                     AturanDetailKey = "judul_subbab",
-                    AturanDetailStatus = 1,
                     AturanDetailJsonValue =
                         """
                         {
@@ -236,7 +235,6 @@ public class SubchapterBlankParagraphValidationTests
                     AturanId = 1,
                     AturanDetailKategori = "Isi Buku",
                     AturanDetailKey = "paragraf",
-                    AturanDetailStatus = 1,
                     AturanDetailJsonValue =
                         """
                         {

@@ -211,7 +211,7 @@ Catatan: Jika kolom Value berisi format `aturan.txt=...; rule.txt=...`, itu mena
 | Nomor Halaman | nomor_halaman_lampiran | first_page.text_style.spacing_before | 0 | fixed | db |
 | Paragraf | hanging_indent_after_list | kondisi | Jika override setelah list aktif, hanging indent harus sesuai nilai yang dihitung. | fixed | hardcoded |
 | Paragraf | left_indent_after_list | kondisi | Paragraf setelah list harus memiliki left indent sesuai aturan list/hanging yang dihitung dari item daftar terakhir. | fixed | hardcoded |
-| Paragraf | sentence_count | kondisi | Saran: minimal 3 kalimat per paragraf (IsRequired=false). | fixed | hardcoded |
+| Paragraf | sentence_count | kondisi | Saran: minimal 3 kalimat per paragraf (non-hard-constraint). | fixed | hardcoded |
 | Pengaturan Halaman | column_count | kondisi | Jumlah kolom harus 1. | fixed | hardcoded |
 | Pengaturan Halaman | different_odd_even | kondisi | Header/footer ganjil-genap harus nonaktif (false). | fixed | hardcoded |
 | Pengaturan Halaman | gutter | kondisi | Ukuran gutter harus 0 cm (default jika tidak ada rule di DB; bisa di-override). | fixed | hardcoded |

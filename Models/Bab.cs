@@ -40,4 +40,8 @@ public class Bab
 
     [Column("bab_jumlah_kesalahan")]
     public int? BabJumlahKesalahan { get; set; }
+
+    [Required]
+    [Column("bab_has_hard_constraint_violation")]
+    public bool BabHasHardConstraintViolation { get; set; }
 }

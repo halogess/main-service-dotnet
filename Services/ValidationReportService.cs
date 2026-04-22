@@ -192,6 +192,7 @@ public sealed class ValidationReportService : IValidationReportService
             .Where(m => m.MhsNrp == buku.MhsNrp)
             .Select(m => m.MhsNama)
             .FirstOrDefaultAsync(cancellationToken);
+        var aturanVersiValidasi = await ResolveBukuAturanVersiValidasiAsync(buku, cancellationToken);
 
         var babSummaries = babs
             .Select(b => new BukuValidationReportBabSummary
@@ -217,6 +218,7 @@ public sealed class ValidationReportService : IValidationReportService
             Skor = buku.BukuSkor,
             TotalKesalahan = buku.BukuJumlahKesalahan,
             IncludeCertificate = includeCertificate,
+            AturanVersiValidasi = aturanVersiValidasi,
             VerificationCode = GenerateVerificationCode(buku.BukuId, generatedAt),
             Summary = summary,
             Babs = babSummaries,
@@ -234,6 +236,24 @@ public sealed class ValidationReportService : IValidationReportService
         await _db.SaveChangesAsync(cancellationToken);
 
         return new ValidationReportResult(pdfBytes, BuildReportDownloadFileName(buku.MhsNrp, "buku", generatedAt));
+    }
+
+    private async Task<string?> ResolveBukuAturanVersiValidasiAsync(Buku buku, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(buku.BukuAturanVersiValidasi))
+            return buku.BukuAturanVersiValidasi.Trim();
+
+        var aturanVersi = await _db.Aturans
+            .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
+            .OrderByDescending(a => a.AturanCreatedAt)
+            .Select(a => a.AturanVersi)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(aturanVersi))
+            return null;
+
+        buku.BukuAturanVersiValidasi = aturanVersi.Trim();
+        return buku.BukuAturanVersiValidasi;
     }
 
     private static (string FullPath, string RelativePath) ResolveReportPath(Dokumen dokumen, int dokumenId)
@@ -327,7 +347,7 @@ public sealed class ValidationReportService : IValidationReportService
                     Page = firstPage,
                     FirstY = firstY,
                     SortPriority = isPageSettings ? 0 : 1,
-                    IsRequired = detail.KesalahanIsRequired
+                    IsHardConstraint = detail.KesalahanIsHardConstraint
                 });
             }
         }
@@ -344,8 +364,6 @@ public sealed class ValidationReportService : IValidationReportService
     private static ValidationReportSummary BuildSummary(IReadOnlyList<ValidationReportRow> rows)
     {
         var total = rows.Count;
-        var required = rows.Count(r => r.IsRequired);
-        var optional = total - required;
         var pages = rows
             .SelectMany(r => ParsePagesFromFormatted(r.Pages))
             .Distinct()
@@ -355,8 +373,6 @@ public sealed class ValidationReportService : IValidationReportService
         return new ValidationReportSummary
         {
             TotalDetails = total,
-            RequiredDetails = required,
-            OptionalDetails = optional,
             PagesText = FormatPageRanges(pages)
         };
     }
@@ -408,7 +424,7 @@ public sealed class ValidationReportService : IValidationReportService
                     Page = firstPage,
                     FirstY = firstY,
                     SortPriority = isPageSettings ? 0 : 1,
-                    IsRequired = detail.KesalahanIsRequired
+                    IsHardConstraint = detail.KesalahanIsHardConstraint
                 });
             }
         }
@@ -426,8 +442,6 @@ public sealed class ValidationReportService : IValidationReportService
     private static BukuValidationReportSummary BuildBukuSummary(IReadOnlyList<BukuValidationReportRow> rows)
     {
         var total = rows.Count;
-        var required = rows.Count(r => r.IsRequired);
-        var optional = total - required;
         var pages = rows
             .SelectMany(r => ParsePagesFromFormatted(r.Pages))
             .Distinct()
@@ -441,8 +455,6 @@ public sealed class ValidationReportService : IValidationReportService
         return new BukuValidationReportSummary
         {
             TotalDetails = total,
-            RequiredDetails = required,
-            OptionalDetails = optional,
             PagesText = FormatPageRanges(pages),
             AffectedBabCount = affectedBabCount
         };
@@ -719,14 +731,12 @@ public sealed record ValidationReportRow
     public int Page { get; init; }
     public double FirstY { get; init; } = double.MaxValue;
     public int SortPriority { get; init; } = 1;
-    public bool IsRequired { get; init; }
+    public bool IsHardConstraint { get; init; }
 }
 
 public sealed record ValidationReportSummary
 {
     public int TotalDetails { get; init; }
-    public int RequiredDetails { get; init; }
-    public int OptionalDetails { get; init; }
     public string PagesText { get; init; } = "-";
 }
 
@@ -767,14 +777,12 @@ public sealed record BukuValidationReportRow
     public int Page { get; init; }
     public double FirstY { get; init; } = double.MaxValue;
     public int SortPriority { get; init; } = 1;
-    public bool IsRequired { get; init; }
+    public bool IsHardConstraint { get; init; }
 }
 
 public sealed record BukuValidationReportSummary
 {
     public int TotalDetails { get; init; }
-    public int RequiredDetails { get; init; }
-    public int OptionalDetails { get; init; }
     public string PagesText { get; init; } = "-";
     public int AffectedBabCount { get; init; }
 }
@@ -790,6 +798,7 @@ public sealed record BukuValidationReportData
     public int? Skor { get; init; }
     public int? TotalKesalahan { get; init; }
     public bool IncludeCertificate { get; init; }
+    public string? AturanVersiValidasi { get; init; }
     public string? VerificationCode { get; init; }
     public BukuValidationReportSummary Summary { get; init; } = new();
     public IReadOnlyList<BukuValidationReportBabSummary> Babs { get; init; } = new List<BukuValidationReportBabSummary>();
@@ -799,6 +808,9 @@ public sealed record BukuValidationReportData
 internal sealed class ValidationReportDocument : IDocument
 {
     private static readonly CultureInfo IdCulture = new("id-ID");
+    private const string HardConstraintRowBackground = "#FDE2E2";
+    private const string HardConstraintTextColor = "#991B1B";
+    private const string HardConstraintNoteText = "Kesalahan yang ditandai dengan warna merah harus diperbaiki sebagai syarat lolos pra validasi format buku.";
     private readonly ValidationReportData _data;
 
     public ValidationReportDocument(ValidationReportData data)
@@ -845,8 +857,6 @@ internal sealed class ValidationReportDocument : IDocument
                 column.Item().Row(row =>
                 {
                     row.RelativeItem().Text($"Total kesalahan: {_data.Summary.TotalDetails}");
-                    row.RelativeItem().Text($"Wajib: {_data.Summary.RequiredDetails}");
-                    row.RelativeItem().Text($"Saran: {_data.Summary.OptionalDetails}");
                 });
 
                 column.Item().PaddingVertical(6);
@@ -857,7 +867,7 @@ internal sealed class ValidationReportDocument : IDocument
                     return;
                 }
 
-                column.Item().Text("Tabel Kesalahan Detail").SemiBold();
+                column.Item().Text("Detail kesalahan").SemiBold();
 
                 var rowsByPage = _data.Rows
                     .GroupBy(r => r.Page)
@@ -885,7 +895,6 @@ internal sealed class ValidationReportDocument : IDocument
                             columns.RelativeColumn(3);
                             columns.RelativeColumn(2);
                             columns.RelativeColumn(3);
-                            columns.ConstantColumn(45);
                         });
 
                         table.Header(header =>
@@ -894,7 +903,6 @@ internal sealed class ValidationReportDocument : IDocument
                             header.Cell().Element(HeaderCellStyle).Text("Text bermasalah");
                             header.Cell().Element(HeaderCellStyle).Text("Judul");
                             header.Cell().Element(HeaderCellStyle).Text("Penjelasan");
-                            header.Cell().Element(HeaderCellStyle).Text("Wajib");
                         });
 
                         for (var i = 0; i < orderedRows.Count; i++)
@@ -912,15 +920,33 @@ internal sealed class ValidationReportDocument : IDocument
                                     rowSpan++;
                                 }
 
-                                table.Cell().RowSpan((uint)rowSpan).Element(BodyCellStyle).Text(row.Category);
-                                table.Cell().RowSpan((uint)rowSpan).Element(BodyCellStyle).Text(row.ProblematicText);
+                                var groupHasHardConstraint = orderedRows
+                                    .Skip(i)
+                                    .Take(rowSpan)
+                                    .Any(item => item.IsHardConstraint);
+
+                                table.Cell().RowSpan((uint)rowSpan).Element(container => BodyCellStyle(container, groupHasHardConstraint)).Text(row.Category);
+                                table.Cell().RowSpan((uint)rowSpan).Element(container => BodyCellStyle(container, groupHasHardConstraint)).Text(row.ProblematicText);
                             }
 
-                            table.Cell().Element(BodyCellStyle).Text(row.Title);
-                            table.Cell().Element(BodyCellStyle).Text(row.Explanation);
-                            table.Cell().Element(BodyCellStyle).Text(row.IsRequired ? "Ya" : "Saran");
+                            table.Cell().Element(container => BodyCellStyle(container, row.IsHardConstraint)).Text(FormatDetailTitle(row.Title, row.IsHardConstraint));
+                            table.Cell().Element(container => BodyCellStyle(container, row.IsHardConstraint)).Text(row.Explanation);
                         }
                     });
+                }
+
+                if (_data.Rows.Any(row => row.IsHardConstraint))
+                {
+                    column.Item()
+                        .ExtendVertical()
+                        .AlignBottom()
+                        .PaddingTop(10)
+                        .Element(HardConstraintNoteStyle)
+                        .Text(text =>
+                        {
+                            text.Span("Catatan: ").SemiBold();
+                            text.Span(HardConstraintNoteText);
+                        });
                 }
             });
 
@@ -957,14 +983,23 @@ internal sealed class ValidationReportDocument : IDocument
             .DefaultTextStyle(x => x.FontSize(7).SemiBold());
     }
 
-    private static IContainer BodyCellStyle(IContainer container)
+    private static IContainer BodyCellStyle(IContainer container, bool isHardConstraint = false)
     {
-        return container
+        var styled = container
             .Border(1)
             .BorderColor(Colors.Grey.Lighten2)
             .PaddingVertical(3)
             .PaddingHorizontal(3)
             .DefaultTextStyle(x => x.FontSize(7));
+
+        if (isHardConstraint)
+        {
+            styled = styled
+                .Background(HardConstraintRowBackground)
+                .DefaultTextStyle(x => x.FontSize(7).FontColor(HardConstraintTextColor));
+        }
+
+        return styled;
     }
 
     private static IContainer InfoLabelStyle(IContainer container)
@@ -982,13 +1017,45 @@ internal sealed class ValidationReportDocument : IDocument
             .DefaultTextStyle(x => x.FontSize(7));
     }
 
+    private static IContainer HardConstraintNoteStyle(IContainer container)
+    {
+        return container
+            .Border(1)
+            .BorderColor(HardConstraintTextColor)
+            .Background(HardConstraintRowBackground)
+            .Padding(6)
+            .DefaultTextStyle(x => x.FontSize(8).FontColor(HardConstraintTextColor));
+    }
+
     private static string FormatPrintedDateTime(DateTime date)
         => date.ToString("dd MMMM yyyy HH.mm", IdCulture);
+
+    private static string FormatDetailTitle(string title, bool isHardConstraint)
+    {
+        var normalizedTitle = string.IsNullOrWhiteSpace(title) ? "-" : title.Trim();
+        return isHardConstraint
+            ? $"[Hard Constraint] {normalizedTitle}"
+            : normalizedTitle;
+    }
 }
 
 internal sealed class BukuValidationReportDocument : IDocument
 {
     private static readonly CultureInfo IdCulture = new("id-ID");
+    private const string HardConstraintRowBackground = "#FDE2E2";
+    private const string HardConstraintTextColor = "#991B1B";
+    private const string HardConstraintNoteText = "Kesalahan yang ditandai dengan warna merah harus diperbaiki sebagai syarat lolos pra validasi format buku.";
+    private static readonly string[] PreliminaryCertificateAspectItems =
+    [
+        "Judul Bab",
+        "Judul Subbab",
+        "Paragraf",
+        "Pengaturan Halaman",
+        "Nomor Halaman",
+        "Gambar dan Tabel",
+        "Daftar, Rumus, dan Kode Program",
+        "Footnote"
+    ];
     private readonly BukuValidationReportData _data;
 
     public BukuValidationReportDocument(BukuValidationReportData data)
@@ -1014,44 +1081,51 @@ internal sealed class BukuValidationReportDocument : IDocument
                     .Padding(18)
                     .Column(column =>
                     {
-                        column.Spacing(10);
-                        column.Item().AlignCenter().Text("SERTIFIKAT KELULUSAN FORMAT")
-                            .FontSize(28).SemiBold().FontColor(Colors.Blue.Darken2);
-                        column.Item().AlignCenter().Text("Certificate of Formatting Compliance")
-                            .Italic().FontSize(14);
+                        column.Spacing(8);
+                        column.Item().AlignCenter().Text("SERTIFIKAT PRA VALIDASI FORMAT")
+                            .FontSize(22).SemiBold().FontColor(Colors.Blue.Darken2);
+                        column.Item().AlignCenter().Text("Certificate of Preliminary Formatting Compliance")
+                            .Italic().FontSize(12);
                         column.Item().PaddingTop(4).LineHorizontal(1).LineColor(Colors.Blue.Darken2);
 
-                        column.Item().PaddingTop(8).AlignCenter().Text("Dengan ini menyatakan bahwa dokumen Tugas Akhir yang berjudul:");
+                        column.Item().PaddingTop(6).AlignCenter().Text("Dengan ini menyatakan bahwa dokumen Tugas Akhir yang berjudul:");
                         column.Item().AlignCenter().Text($"\"{FormatNullableForCertificate(_data.Judul)}\"")
-                            .FontSize(18).SemiBold().Italic();
+                            .FontSize(16).SemiBold().Italic();
 
-                        column.Item().AlignCenter().Text("atas nama:");
+                        column.Item().PaddingTop(2).AlignCenter().Text("atas nama:");
                         column.Item().AlignCenter().Text(FormatNullableForCertificate(_data.Nama))
-                            .FontSize(17).SemiBold();
+                            .FontSize(15).SemiBold();
                         column.Item().AlignCenter().Text($"NRP: {FormatNullableForCertificate(_data.Nrp)}")
-                            .FontSize(13);
+                            .FontSize(12);
 
-                        column.Item().PaddingTop(5).AlignCenter().Text("telah berhasil melewati proses validasi format otomatis pada:");
-                        column.Item().AlignCenter().Text(
-                                $"Tanggal: {_data.GeneratedAt.ToString("dd MMMM yyyy", IdCulture)}, Pukul: {_data.GeneratedAt.ToString("HH:mm", IdCulture)} WIB")
+                        column.Item().PaddingTop(4).AlignCenter().Text("telah berhasil melewati proses pra validasi format otomatis pada:");
+                        column.Item().AlignCenter().Text(FormatCertificateValidationDateTime(_data.GeneratedAt))
                             .SemiBold();
 
-                        column.Item().PaddingTop(5).AlignCenter().Text(text =>
+                        column.Item().PaddingTop(4).Text(text =>
                         {
                             text.Span("dan dinyatakan ");
-                            text.Span("MEMENUHI SYARAT").SemiBold();
-                            text.Span(" sesuai dengan pedoman penulisan yang berlaku (Panduan Edisi 2025).");
+                            text.Span("MEMENUHI SYARAT AWAL").SemiBold();
+                            text.Span(" untuk melanjutkan proses validasi format oleh korektor buku, sesuai dengan pedoman penulisan yang berlaku ");
+                            text.Span($"({FormatCertificateRuleVersion(_data.AturanVersiValidasi)}).");
                         });
 
-                        column.Item().PaddingTop(8).Text(text =>
+                        column.Item().PaddingTop(4).Text("Aspek yang Dipra Validasi Meliputi:")
+                            .SemiBold();
+                        column.Item().PaddingLeft(8).Column(list =>
                         {
-                            text.Span("Aspek yang Divalidasi Meliputi: ").SemiBold();
-                            text.Span("Ukuran Halaman, Margin, Header & Footer, Penomoran, Format Bab & Paragraf, ");
-                            text.Span("Format Gambar & Tabel, dan Struktur Sitasi.");
+                            list.Spacing(2);
+                            for (var i = 0; i < PreliminaryCertificateAspectItems.Length; i++)
+                            {
+                                list.Item().Text($"{i + 1}. {PreliminaryCertificateAspectItems[i]}").FontSize(10);
+                            }
                         });
 
-                        column.Item().AlignRight().Text($"Kode Verifikasi: {FormatNullableForCertificate(_data.VerificationCode)}")
-                            .FontSize(10);
+                        column.Item().PaddingTop(4).DefaultTextStyle(x => x.FontSize(10)).Text(text =>
+                        {
+                            text.Span("Perhatian: ").SemiBold();
+                            text.Span("Hasil pra validasi ini merupakan pemeriksaan awal secara otomatis terhadap kesesuaian format dokumen. Sertifikat ini bukan merupakan persetujuan akhir atas format naskah. Keputusan akhir tetap berada pada korektor buku setelah dilakukan pemeriksaan lanjutan sesuai pedoman yang berlaku.");
+                        });
                     });
             });
         }
@@ -1091,8 +1165,6 @@ internal sealed class BukuValidationReportDocument : IDocument
                 column.Item().Row(row =>
                 {
                     row.RelativeItem().Text($"Total kesalahan: {_data.Summary.TotalDetails}");
-                    row.RelativeItem().Text($"Wajib: {_data.Summary.RequiredDetails}");
-                    row.RelativeItem().Text($"Saran: {_data.Summary.OptionalDetails}");
                     row.RelativeItem().Text($"BAB terdampak: {_data.Summary.AffectedBabCount}");
                 });
 
@@ -1119,15 +1191,15 @@ internal sealed class BukuValidationReportDocument : IDocument
 
                     foreach (var bab in _data.Babs.OrderBy(b => NormalizeSortBabOrder(b.BabOrder)).ThenBy(b => b.BabId))
                     {
-                        table.Cell().Element(BookBodyCellStyle).Text(FormatBabOrder(bab.BabOrder));
-                        table.Cell().Element(BookBodyCellStyle).Text(string.IsNullOrWhiteSpace(bab.Filename) ? "-" : bab.Filename);
-                        table.Cell().Element(BookBodyCellStyle).Text(bab.Skor?.ToString(CultureInfo.InvariantCulture) ?? "-");
-                        table.Cell().Element(BookBodyCellStyle).Text(bab.SkorMinimal?.ToString(CultureInfo.InvariantCulture) ?? "-");
-                        table.Cell().Element(BookBodyCellStyle).Text((bab.JumlahKesalahan ?? 0).ToString(CultureInfo.InvariantCulture));
+                        table.Cell().Element(container => BookBodyCellStyle(container)).Text(FormatBabOrder(bab.BabOrder));
+                        table.Cell().Element(container => BookBodyCellStyle(container)).Text(string.IsNullOrWhiteSpace(bab.Filename) ? "-" : bab.Filename);
+                        table.Cell().Element(container => BookBodyCellStyle(container)).Text(bab.Skor?.ToString(CultureInfo.InvariantCulture) ?? "-");
+                        table.Cell().Element(container => BookBodyCellStyle(container)).Text(bab.SkorMinimal?.ToString(CultureInfo.InvariantCulture) ?? "-");
+                        table.Cell().Element(container => BookBodyCellStyle(container)).Text((bab.JumlahKesalahan ?? 0).ToString(CultureInfo.InvariantCulture));
                     }
                 });
 
-                column.Item().PaddingTop(8).Text("Tabel Kesalahan Detail").SemiBold();
+                column.Item().PaddingTop(8).Text("Detail kesalahan").SemiBold();
 
                 if (_data.Rows.Count == 0)
                 {
@@ -1166,7 +1238,6 @@ internal sealed class BukuValidationReportDocument : IDocument
                             columns.RelativeColumn(2);
                             columns.RelativeColumn(3);
                             columns.ConstantColumn(45);
-                            columns.ConstantColumn(45);
                         });
 
                         table.Header(header =>
@@ -1176,7 +1247,6 @@ internal sealed class BukuValidationReportDocument : IDocument
                             header.Cell().Element(BookHeaderCellStyle).Text("Judul");
                             header.Cell().Element(BookHeaderCellStyle).Text("Penjelasan");
                             header.Cell().Element(BookHeaderCellStyle).Text("Hal");
-                            header.Cell().Element(BookHeaderCellStyle).Text("Wajib");
                         });
 
                         for (var i = 0; i < orderedRows.Count; i++)
@@ -1194,16 +1264,34 @@ internal sealed class BukuValidationReportDocument : IDocument
                                     rowSpan++;
                                 }
 
-                                table.Cell().RowSpan((uint)rowSpan).Element(BookBodyCellStyle).Text(row.Category);
-                                table.Cell().RowSpan((uint)rowSpan).Element(BookBodyCellStyle).Text(row.ProblematicText);
+                                var groupHasHardConstraint = orderedRows
+                                    .Skip(i)
+                                    .Take(rowSpan)
+                                    .Any(item => item.IsHardConstraint);
+
+                                table.Cell().RowSpan((uint)rowSpan).Element(container => BookBodyCellStyle(container, groupHasHardConstraint)).Text(row.Category);
+                                table.Cell().RowSpan((uint)rowSpan).Element(container => BookBodyCellStyle(container, groupHasHardConstraint)).Text(row.ProblematicText);
                             }
 
-                            table.Cell().Element(BookBodyCellStyle).Text(row.Title);
-                            table.Cell().Element(BookBodyCellStyle).Text(row.Explanation);
-                            table.Cell().Element(BookBodyCellStyle).Text(row.Pages);
-                            table.Cell().Element(BookBodyCellStyle).Text(row.IsRequired ? "Ya" : "Saran");
+                            table.Cell().Element(container => BookBodyCellStyle(container, row.IsHardConstraint)).Text(FormatDetailTitle(row.Title, row.IsHardConstraint));
+                            table.Cell().Element(container => BookBodyCellStyle(container, row.IsHardConstraint)).Text(row.Explanation);
+                            table.Cell().Element(container => BookBodyCellStyle(container, row.IsHardConstraint)).Text(row.Pages);
                         }
                     });
+                }
+
+                if (_data.Rows.Any(row => row.IsHardConstraint))
+                {
+                    column.Item()
+                        .ExtendVertical()
+                        .AlignBottom()
+                        .PaddingTop(10)
+                        .Element(BookHardConstraintNoteStyle)
+                        .Text(text =>
+                        {
+                            text.Span("Catatan: ").SemiBold();
+                            text.Span(HardConstraintNoteText);
+                        });
                 }
             });
 
@@ -1223,6 +1311,12 @@ internal sealed class BukuValidationReportDocument : IDocument
 
     private static string FormatNullableForCertificate(string? value)
         => string.IsNullOrWhiteSpace(value) ? "-" : value.Trim();
+
+    private static string FormatCertificateValidationDateTime(DateTime date)
+        => $"Tanggal: {date.ToString("dd MMMM yyyy", IdCulture)}, Pukul: {date.ToString("HH.mm", IdCulture)} WIB";
+
+    private static string FormatCertificateRuleVersion(string? value)
+        => string.IsNullOrWhiteSpace(value) ? "versi aturan tidak tercatat" : value.Trim();
 
     private static string FormatBabOrder(byte? babOrder)
         => babOrder.HasValue ? babOrder.Value.ToString(CultureInfo.InvariantCulture) : "-";
@@ -1252,14 +1346,23 @@ internal sealed class BukuValidationReportDocument : IDocument
             .DefaultTextStyle(x => x.FontSize(7).SemiBold());
     }
 
-    private static IContainer BookBodyCellStyle(IContainer container)
+    private static IContainer BookBodyCellStyle(IContainer container, bool isHardConstraint = false)
     {
-        return container
+        var styled = container
             .Border(1)
             .BorderColor(Colors.Grey.Lighten2)
             .PaddingVertical(3)
             .PaddingHorizontal(3)
             .DefaultTextStyle(x => x.FontSize(7));
+
+        if (isHardConstraint)
+        {
+            styled = styled
+                .Background(HardConstraintRowBackground)
+                .DefaultTextStyle(x => x.FontSize(7).FontColor(HardConstraintTextColor));
+        }
+
+        return styled;
     }
 
     private static IContainer BookInfoLabelStyle(IContainer container)
@@ -1275,5 +1378,23 @@ internal sealed class BukuValidationReportDocument : IDocument
         return container
             .PaddingVertical(2)
             .DefaultTextStyle(x => x.FontSize(7));
+    }
+
+    private static IContainer BookHardConstraintNoteStyle(IContainer container)
+    {
+        return container
+            .Border(1)
+            .BorderColor(HardConstraintTextColor)
+            .Background(HardConstraintRowBackground)
+            .Padding(6)
+            .DefaultTextStyle(x => x.FontSize(8).FontColor(HardConstraintTextColor));
+    }
+
+    private static string FormatDetailTitle(string title, bool isHardConstraint)
+    {
+        var normalizedTitle = string.IsNullOrWhiteSpace(title) ? "-" : title.Trim();
+        return isHardConstraint
+            ? $"[Hard Constraint] {normalizedTitle}"
+            : normalizedTitle;
     }
 }

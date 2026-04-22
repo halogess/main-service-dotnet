@@ -15,8 +15,6 @@ public class TableExtractor
     private readonly ILogger _logger;
     private readonly KorektorBukuDbContext _db;
     private readonly TableFormatExtractor _tableFormatExtractor;
-    private readonly TableRowFormatExtractor _rowFormatExtractor;
-    private readonly TableCellFormatExtractor _cellFormatExtractor;
     private readonly ParagraphFormatExtractor? _paragraphFormatExtractor;
     private readonly Func<Paragraph, NumberingDefinitionsPart?, Dictionary<int, Dictionary<int, int>>?, JArray> _extractParagraphContent;
     private readonly Func<Paragraph, string> _detectParagraphType;
@@ -25,8 +23,6 @@ public class TableExtractor
         ILogger logger,
         KorektorBukuDbContext db,
         TableFormatExtractor tableFormatExtractor,
-        TableRowFormatExtractor rowFormatExtractor,
-        TableCellFormatExtractor cellFormatExtractor,
         ParagraphFormatExtractor? paragraphFormatExtractor,
         Func<Paragraph, NumberingDefinitionsPart?, Dictionary<int, Dictionary<int, int>>?, JArray> extractParagraphContent,
         Func<Paragraph, string> detectParagraphType)
@@ -34,8 +30,6 @@ public class TableExtractor
         _logger = logger;
         _db = db;
         _tableFormatExtractor = tableFormatExtractor;
-        _rowFormatExtractor = rowFormatExtractor;
-        _cellFormatExtractor = cellFormatExtractor;
         _paragraphFormatExtractor = paragraphFormatExtractor;
         _extractParagraphContent = extractParagraphContent;
         _detectParagraphType = detectParagraphType;
@@ -87,21 +81,11 @@ public class TableExtractor
     {
         var rows = new JArray();
         var tableRows = table.Elements<TableRow>().ToList();
-        int totalRows = tableRows.Count;
-        int totalCols = GetTableColumnCount(table);
-        
         for (int rowIndex = 0; rowIndex < tableRows.Count; rowIndex++)
         {
             var row = tableRows[rowIndex];
-            
-            // Extract and save row format
-            var rowFormat = _rowFormatExtractor.ExtractFormat(row, rowIndex, totalRows, table);
-            _db.DokumenFormatTableRows.Add(rowFormat);
-            await _db.SaveChangesAsync();
-            
             var rowJson = new JObject 
             { 
-                ["dftr_id"] = rowFormat.DftrId,
                 ["cells"] = new JArray() 
             };
             
@@ -109,12 +93,6 @@ public class TableExtractor
             for (int colIndex = 0; colIndex < cells.Count; colIndex++)
             {
                 var cell = cells[colIndex];
-                
-                // Extract and save cell format
-                var cellFormat = _cellFormatExtractor.ExtractFormat(
-                    cell, rowIndex, colIndex, totalRows, totalCols, table);
-                _db.DokumenFormatTableCells.Add(cellFormat);
-                await _db.SaveChangesAsync();
                 
                 var cellContent = new JArray();
                 
@@ -149,10 +127,9 @@ public class TableExtractor
                     }
                 }
                 
-                ((JArray)rowJson["cells"]!).Add(new JObject 
-                { 
-                    ["dftc_id"] = cellFormat.DftcId,
-                    ["content"] = cellContent 
+                ((JArray)rowJson["cells"]!).Add(new JObject
+                {
+                    ["content"] = cellContent
                 });
             }
             rows.Add(rowJson);

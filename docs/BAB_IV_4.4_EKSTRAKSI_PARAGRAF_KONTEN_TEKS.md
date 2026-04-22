@@ -459,7 +459,7 @@ private static void ApplyFallbackDefaults(DokumenFormatParagraf format)
 
 ### 4.4.8.1 Struktur Content Array
 
-Output ekstraksi paragraf adalah JArray yang berisi sequence of content items dalam urutan kemunculannya. Setiap item adalah JObject dengan minimal property `type` yang menentukan jenis konten. Supporting properties bergantung pada type: text memiliki `value`, image memiliki `rId`, math memiliki `text`, field memiliki `field_type` dan `value`. Format ID jika ada ditambahkan setelah type: `dftx_id` untuk text, `dfdr_id` untuk drawing, `dffd_id` untuk field. Array ini diserialisasi dan disimpan di kolom `dokumen_elemen_json_tree`.
+Output ekstraksi paragraf adalah JArray yang berisi sequence of content items dalam urutan kemunculannya. Setiap item adalah JObject dengan minimal property `type` yang menentukan jenis konten. Supporting properties bergantung pada type: text memiliki `value`, image memiliki `rId`, math memiliki `text`, field memiliki `field_type` dan `value`. Format ID jika ada ditambahkan setelah type: `dftx_id` untuk text, `dfdr_id` untuk drawing, dan `result_dftx_id` untuk hasil field yang memiliki format teks. Array ini diserialisasi dan disimpan di kolom `dokumen_elemen_json_tree`.
 
 ```json
 {
@@ -467,7 +467,7 @@ Output ekstraksi paragraf adalah JArray yang berisi sequence of content items da
     {"type": "text", "dftx_id": 123, "value": "This is normal text "},
     {"type": "text", "dftx_id": 124, "value": "and this is bold text."},
     {"type": "image", "dfdr_id": 45, "rId": "rId5"},
-    {"type": "field", "field_type": "PAGE", "dffd_id": 78, "result_dftx_id": 79, "value": "12"}
+    {"type": "field", "field_type": "PAGE", "result_dftx_id": 79, "value": "12"}
   ]
 }
 ```

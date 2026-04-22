@@ -39,8 +39,17 @@ public class PdfQueueBackgroundService : BackgroundService
 
                 if (queue != null)
                 {
+                    if (await QueueCancellationHelper.TryHandleCancelledResourceAsync(db, queue, stoppingToken))
+                    {
+                        _logger.LogInformation(
+                            "Skipping extraction for antrian ID: {AntrianId} because the resource was cancelled",
+                            queue.AntrianId);
+                        continue;
+                    }
+
                     string? bukuNrpForArchiveReady = null;
                     var shouldNotifyBukuArchiveReady = false;
+                    DokumenFailureNotification? pendingDokumenFailureNotification = null;
                     BukuFailureNotification? pendingBukuFailureNotification = null;
 
                     string filePath = queue.AntrianTipe == "buku" && queue.BabId.HasValue
@@ -59,7 +68,8 @@ public class PdfQueueBackgroundService : BackgroundService
                     if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                     {
                         var dokumen = await db.Dokumens.FindAsync(new object[] { (int)queue.DokumenId.Value }, stoppingToken);
-                        if (dokumen != null)
+                        if (dokumen != null &&
+                            !string.Equals(dokumen.DokumenStatus, "dibatalkan", StringComparison.OrdinalIgnoreCase))
                         {
                             dokumen.DokumenStatus = "diproses";
                             dokumen.DokumenUpdatedAt = DateTime.Now;
@@ -177,7 +187,8 @@ public class PdfQueueBackgroundService : BackgroundService
                                 if (allBabsCompleted && queue.BukuId.HasValue)
                                 {
                                     var buku = await db.Bukus.FindAsync(new object[] { (int)queue.BukuId.Value }, stoppingToken);
-                                    if (buku != null)
+                                    if (buku != null &&
+                                        !string.Equals(buku.BukuStatus, "dibatalkan", StringComparison.OrdinalIgnoreCase))
                                     {
                                         bukuNrpForArchiveReady = buku.MhsNrp;
                                         shouldNotifyBukuArchiveReady = true;
@@ -200,6 +211,14 @@ public class PdfQueueBackgroundService : BackgroundService
                         }
 
                         await db.SaveChangesAsync(stoppingToken);
+
+                        if (await QueueCancellationHelper.TryHandleCancelledResourceAsync(db, queue, stoppingToken))
+                        {
+                            _logger.LogInformation(
+                                "Stopping extraction handoff for antrian ID: {AntrianId} because the resource was cancelled mid-process",
+                                queue.AntrianId);
+                            continue;
+                        }
 
                         if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                         {
@@ -255,66 +274,69 @@ public class PdfQueueBackgroundService : BackgroundService
                     }
                     catch (FileNotFoundException ex)
                     {
-                        queue.AntrianExtractionStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = BuildQueueErrorMessage("File tidak ditemukan: ", ex.Message);
-                        await MarkAturanFailedAsync(db, queue, stoppingToken);
-                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                        var failureState = await HandleQueueFailureAsync(
                             db,
-                            queue.BukuId,
+                            queue,
+                            BuildQueueErrorMessage("File tidak ditemukan: ", ex.Message),
                             stoppingToken);
+                        pendingDokumenFailureNotification = failureState.DokumenFailureNotification;
+                        pendingBukuFailureNotification = failureState.BukuFailureNotification;
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (HttpRequestException ex)
                     {
-                        queue.AntrianExtractionStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = BuildQueueErrorMessage("Adobe API error: ", ex.Message);
-                        await MarkAturanFailedAsync(db, queue, stoppingToken);
-                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                        var failureState = await HandleQueueFailureAsync(
                             db,
-                            queue.BukuId,
+                            queue,
+                            BuildQueueErrorMessage("Adobe API error: ", ex.Message),
                             stoppingToken);
+                        pendingDokumenFailureNotification = failureState.DokumenFailureNotification;
+                        pendingBukuFailureNotification = failureState.BukuFailureNotification;
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (TimeoutException ex)
                     {
-                        queue.AntrianExtractionStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = BuildQueueErrorMessage("Konversi gagal: ", ex.Message);
-                        await MarkAturanFailedAsync(db, queue, stoppingToken);
-                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                        var failureState = await HandleQueueFailureAsync(
                             db,
-                            queue.BukuId,
+                            queue,
+                            BuildQueueErrorMessage("Konversi gagal: ", ex.Message),
                             stoppingToken);
+                        pendingDokumenFailureNotification = failureState.DokumenFailureNotification;
+                        pendingBukuFailureNotification = failureState.BukuFailureNotification;
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (InvalidOperationException ex)
                     {
-                        queue.AntrianExtractionStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = BuildQueueErrorMessage("Konversi gagal: ", ex.Message);
-                        await MarkAturanFailedAsync(db, queue, stoppingToken);
-                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                        var failureState = await HandleQueueFailureAsync(
                             db,
-                            queue.BukuId,
+                            queue,
+                            BuildQueueErrorMessage("Konversi gagal: ", ex.Message),
                             stoppingToken);
+                        pendingDokumenFailureNotification = failureState.DokumenFailureNotification;
+                        pendingBukuFailureNotification = failureState.BukuFailureNotification;
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
                     catch (Exception ex)
                     {
-                        queue.AntrianExtractionStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
-                        queue.AntrianErrorMessage = BuildQueueErrorMessage(string.Empty, ex.Message);
-                        await MarkAturanFailedAsync(db, queue, stoppingToken);
-                        pendingBukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+                        var failureState = await HandleQueueFailureAsync(
                             db,
-                            queue.BukuId,
+                            queue,
+                            BuildQueueErrorMessage(string.Empty, ex.Message),
                             stoppingToken);
+                        pendingDokumenFailureNotification = failureState.DokumenFailureNotification;
+                        pendingBukuFailureNotification = failureState.BukuFailureNotification;
                         _logger.LogError(ex, "Failed antrian ID: {AntrianId}", queue.AntrianId);
                     }
 
                     await db.SaveChangesAsync(stoppingToken);
+
+                    if (pendingDokumenFailureNotification is { } dokumenFailureNotification)
+                    {
+                        await wsService.NotifyDokumenStatusChanged(
+                            dokumenFailureNotification.Nrp,
+                            dokumenFailureNotification.DokumenId,
+                            "tidak_lolos");
+                    }
 
                     if (pendingBukuFailureNotification is { } bukuFailureNotification)
                     {
@@ -436,6 +458,30 @@ public class PdfQueueBackgroundService : BackgroundService
 
         aturan.AturanStatus = AturanStatusValues.Gagal;
         aturan.AturanUpdatedAt = DateTime.Now;
+    }
+
+    private static async Task<(DokumenFailureNotification? DokumenFailureNotification, BukuFailureNotification? BukuFailureNotification)> HandleQueueFailureAsync(
+        KorektorBukuDbContext db,
+        Antrian queue,
+        string errorMessage,
+        CancellationToken cancellationToken)
+    {
+        queue.AntrianExtractionStatus = "failed";
+        queue.AntrianUpdatedAt = DateTime.Now;
+        queue.AntrianErrorMessage = errorMessage;
+
+        await MarkAturanFailedAsync(db, queue, cancellationToken);
+
+        var dokumenFailureNotification = await DokumenFailureStatusHelper.TryMarkDokumenTidakLolosAsync(
+            db,
+            queue.DokumenId,
+            cancellationToken);
+        var bukuFailureNotification = await BukuFailureStatusHelper.TryMarkBukuTidakLolosAsync(
+            db,
+            queue.BukuId,
+            cancellationToken);
+
+        return (dokumenFailureNotification, bukuFailureNotification);
     }
 
     private static string BuildQueueErrorMessage(string prefix, string? detail)

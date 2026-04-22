@@ -36,8 +36,6 @@ public class ParagraphExtractor
     // Inline format extractors
     private readonly TextFormatExtractor _textFormatExtractor;
     private readonly DrawingFormatExtractor _drawingFormatExtractor;
-    private readonly FieldFormatExtractor _fieldFormatExtractor;
-    
     // Database context for saving formats (optional - set via SetDbContext)
     private KorektorBukuDbContext? _db;
     private ThemeFontResolver? _themeFontResolver;
@@ -84,7 +82,6 @@ public class ParagraphExtractor
         _drawingExtractor = drawingExtractor;
         _textFormatExtractor = new TextFormatExtractor();
         _drawingFormatExtractor = new DrawingFormatExtractor();
-        _fieldFormatExtractor = new FieldFormatExtractor();
     }
     
     /// <summary>
@@ -591,25 +588,13 @@ public class ParagraphExtractor
                 return;
             }
 
-            // Save field format to database (top-level only)
-            ulong? fieldFormatId = null;
-            if (_db != null && !string.IsNullOrEmpty(instrTextRaw))
-            {
-                var fieldFormat = _fieldFormatExtractor.ExtractFormat(instrTextRaw, resultText, context.IsLocked, context.IsDirty);
-                _db.DokumenFormatFields.Add(fieldFormat);
-                _db.SaveChanges();
-                fieldFormatId = fieldFormat.DffdId;
-            }
-
-            // Create field JSON item - format IDs first, then content
+            // Create field JSON item - content-first data only
             FlushText();
             var fieldItem = new JObject
             {
                 ["type"] = "field",
-                ["field_type"] = _fieldFormatExtractor.DetectFieldType(instrTextRaw)
+                ["field_type"] = DetectFieldType(instrTextRaw)
             };
-            if (fieldFormatId.HasValue)
-                fieldItem["dffd_id"] = fieldFormatId.Value;
 
             // Add result format ID if we captured first result run (save ALL, not just significant)
             if (context.FirstResultRun != null && _db != null && _styleResolver != null)
@@ -961,24 +946,12 @@ public class ParagraphExtractor
                     return;
                 }
                 
-                // Save field format
-                ulong? fieldFormatId = null;
-                if (_db != null && !string.IsNullOrEmpty(instrText))
-                {
-                    var fieldFormat = _fieldFormatExtractor.ExtractFromSimpleField(simpleField);
-                    _db.DokumenFormatFields.Add(fieldFormat);
-                    _db.SaveChanges();
-                    fieldFormatId = fieldFormat.DffdId;
-                }
-                
-                // Create field JSON item - format IDs first
+                // Create field JSON item
                 var fieldItem = new JObject
                 {
                     ["type"] = "field",
-                    ["field_type"] = _fieldFormatExtractor.DetectFieldType(instrText)
+                    ["field_type"] = DetectFieldType(instrText)
                 };
-                if (fieldFormatId.HasValue)
-                    fieldItem["dffd_id"] = fieldFormatId.Value;
                 
                 // Get result run format (save ALL, not just significant)
                 var resultRun = simpleField.Descendants<Run>().FirstOrDefault();
@@ -1117,5 +1090,31 @@ public class ParagraphExtractor
             result["content"] = content;
         
         return result;
+    }
+
+    private static string DetectFieldType(string instrText)
+    {
+        if (string.IsNullOrWhiteSpace(instrText))
+            return "UNKNOWN";
+
+        var trimmed = instrText.Trim();
+        var firstSpace = trimmed.IndexOf(' ');
+        var fieldName = (firstSpace > 0 ? trimmed[..firstSpace] : trimmed).ToUpperInvariant();
+
+        return fieldName switch
+        {
+            "PAGE" => "PAGE",
+            "NUMPAGES" => "NUMPAGES",
+            "SECTION" => "SECTION",
+            "SECTIONPAGES" => "SECTIONPAGES",
+            "SEQ" => "SEQ",
+            "REF" => "REF",
+            "PAGEREF" => "PAGEREF",
+            "HYPERLINK" => "HYPERLINK",
+            "TOC" => "TOC",
+            "DATE" => "DATE",
+            "TIME" => "TIME",
+            _ => "UNKNOWN"
+        };
     }
 }

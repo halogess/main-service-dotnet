@@ -56,7 +56,7 @@ public partial class ValidationService
         }
 
         var paragrafDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanId == aturan.AturanId)
             .Where(d => d.AturanDetailKategori == "Isi Buku")
             .Where(d => d.AturanDetailKey == "paragraf")
             .FirstOrDefaultAsync(cancellationToken);
@@ -98,7 +98,7 @@ public partial class ValidationService
 
         ListItemRule? listRule = null;
         var listItemDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanId == aturan.AturanId)
             .Where(d => d.AturanDetailKategori == "Isi Buku")
             .Where(d => d.AturanDetailKey == "item_daftar")
             .FirstOrDefaultAsync(cancellationToken);
@@ -535,7 +535,7 @@ public partial class ValidationService
         var expectedFontName = rule?.Font?.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontName?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -589,7 +589,7 @@ public partial class ValidationService
         var expectedFontSize = rule?.Font?.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
             if (runs.Count > 0)
             {
@@ -666,7 +666,7 @@ public partial class ValidationService
         var expectedAlignment = rule?.Paragraph?.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Alignment?.IsHardConstraint == true);
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(paragraphText, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
@@ -688,7 +688,7 @@ public partial class ValidationService
             }
         }
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(leftIndentOverrideCm.HasValue ? false : rule.Paragraph?.Indentation?.LeftIndent?.IsHardConstraint == true);
         var expectedLeftIndent = leftIndentOverrideCm ?? rule?.Paragraph?.Indentation?.LeftIndent?.Value ?? 0m;
         var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
             ? format.DfpIndLeftTwips.Value
@@ -719,7 +719,7 @@ public partial class ValidationService
         var expectedFirstLineIndent = firstLineIndentOverrideCm ?? rule?.Paragraph?.Indentation?.FirstLineIndent?.Value;
         if (expectedFirstLineIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(firstLineIndentOverrideCm.HasValue ? false : rule.Paragraph?.Indentation?.FirstLineIndent?.IsHardConstraint == true);
 
             var firstLineObservation = ObserveFirstLineIndent(format, rawParagraphText);
             if (Math.Abs(firstLineObservation.ActualCm - expectedFirstLineIndent.Value) <= 0.05m &&
@@ -749,7 +749,7 @@ public partial class ValidationService
 
         if (hangingIndentOverrideCm.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(false);
             var hangingTwips = format.DfpIndHangingTwips ?? 0;
             var hangingCm = hangingTwips / 1440.0m * 2.54m;
 
@@ -772,7 +772,7 @@ public partial class ValidationService
             }
         }
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Paragraph?.Indentation?.RightIndent?.IsHardConstraint == true);
         var expectedRightIndent = rule?.Paragraph?.Indentation?.RightIndent?.Value ?? 0m;
         var rightCm = GetRightIndentCm(format);
         if (Math.Abs(rightCm - expectedRightIndent) <= 0.05m)
@@ -797,7 +797,7 @@ public partial class ValidationService
         var spacingRule = rule?.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
@@ -823,7 +823,7 @@ public partial class ValidationService
         // Spacing Before
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -849,7 +849,7 @@ public partial class ValidationService
         // Spacing After
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 
@@ -889,7 +889,7 @@ public partial class ValidationService
         var minSentencesValue = rule?.StrukturKonten?.MinimalKalimat?.Value ?? 3m;
         var minSentences = Math.Max(0, (int)Math.Round(minSentencesValue, MidpointRounding.AwayFromZero));
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule?.StrukturKonten?.MinimalKalimat?.IsHardConstraint == true);
         if (sentences >= minSentences)
         {
             result.IncrementPassedChecks();
@@ -904,8 +904,7 @@ public partial class ValidationService
                 Expected = $"Minimal {minSentences} kalimat",
                 Actual = $"{sentences} kalimat",
                 Evidence = evidence,
-                Locations = locations,
-                IsRequired = false // Non-required, just a suggestion
+                Locations = locations
             });
         }
     }

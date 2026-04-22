@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json.Nodes;
 using ClosedXML.Excel;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
@@ -67,11 +68,56 @@ public class AturanCatalogContractTests
                     out var errorMessage),
                 errorMessage);
 
-            Assert.False(changed);
             Assert.Equal(detail.AturanDetailJsonValue, roundTripJson);
             Assert.True(
                 AturanDetailShapeValidator.TryValidate(detail.AturanDetailKey, roundTripJson!, out var shapeErrorMessage),
                 shapeErrorMessage);
+        }
+    }
+
+    [Fact]
+    public void CatalogTemplates_ShouldExposeExactEditablePolicy()
+    {
+        var details = CreateCanonicalCatalogDetails();
+
+        foreach (var detail in details)
+        {
+            var lockedPaths = ExtractLockedPaths(JsonNode.Parse(detail.AturanDetailJsonValue!)!);
+            var expectedLockedPaths = AturanDetailEditablePolicy
+                .GetLockedPaths(detail.AturanDetailKey)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.Equal(expectedLockedPaths, lockedPaths);
+        }
+    }
+
+    [Fact]
+    public void FrontendSeed_ShouldMatchBackendEditablePolicy()
+    {
+        var seedPath = FindFrontendSeedPath();
+        var root = JsonNode.Parse(File.ReadAllText(seedPath))!.AsObject();
+        var details = root["details"]!.AsArray();
+
+        var detailKeys = details
+            .Select(detail => detail?["key"]?.GetValue<string>())
+            .Where(key => !string.IsNullOrWhiteSpace(key))
+            .Select(key => key!)
+            .ToArray();
+
+        Assert.Equal(ExpectedDetailKeys, detailKeys);
+
+        foreach (var detail in details)
+        {
+            var key = detail!["key"]!.GetValue<string>();
+            var jsonValue = detail["json_value"]!;
+            var lockedPaths = ExtractLockedPaths(jsonValue);
+            var expectedLockedPaths = AturanDetailEditablePolicy
+                .GetLockedPaths(key)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.Equal(expectedLockedPaths, lockedPaths);
         }
     }
 
@@ -172,8 +218,7 @@ public class AturanCatalogContractTests
                 {
                     AturanDetailKategori = detail.AturanDetailKategori,
                     AturanDetailKey = detail.AturanDetailKey,
-                    AturanDetailJsonValue = canonicalJson,
-                    AturanDetailStatus = detail.AturanDetailStatus
+                    AturanDetailJsonValue = canonicalJson
                 };
             })
             .ToList();
@@ -196,5 +241,73 @@ public class AturanCatalogContractTests
         var result = method!.Invoke(null, [0u, false]);
         var details = Assert.IsAssignableFrom<IReadOnlyList<AturanDetail>>(result);
         return details;
+    }
+
+    private static string[] ExtractLockedPaths(JsonNode node)
+    {
+        var lockedPaths = new List<string>();
+        CollectLockedPaths(node, [], lockedPaths);
+        return lockedPaths
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static void CollectLockedPaths(JsonNode? node, IReadOnlyList<string> path, List<string> lockedPaths)
+    {
+        if (node is JsonArray array)
+        {
+            foreach (var item in array)
+                CollectLockedPaths(item, path, lockedPaths);
+            return;
+        }
+
+        if (node is not JsonObject jsonObject)
+            return;
+
+        if (jsonObject["is_editable"] is JsonValue editableValue &&
+            editableValue.TryGetValue<bool>(out var isEditable) &&
+            !isEditable)
+        {
+            lockedPaths.Add(string.Join('.', path));
+        }
+
+        foreach (var property in jsonObject)
+        {
+            if (property.Key is "is_editable" or "is_hard_constraint")
+                continue;
+
+            CollectLockedPaths(
+                property.Value,
+                property.Key == "value" ? path : AppendPath(path, property.Key),
+                lockedPaths);
+        }
+    }
+
+    private static IReadOnlyList<string> AppendPath(IReadOnlyList<string> path, string segment)
+    {
+        if (path.Count == 0)
+            return [segment];
+
+        var result = new string[path.Count + 1];
+        for (var index = 0; index < path.Count; index++)
+            result[index] = path[index];
+        result[^1] = segment;
+        return result;
+    }
+
+    private static string FindFrontendSeedPath()
+    {
+        for (var current = new DirectoryInfo(AppContext.BaseDirectory); current != null; current = current.Parent)
+        {
+            var candidate = Path.Combine(current.FullName, "cek-ta-react", "default-aturan-seed.json");
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        var fallback = Path.Combine(Path.GetPathRoot(AppContext.BaseDirectory) ?? string.Empty, "cek-ta-react", "default-aturan-seed.json");
+        if (File.Exists(fallback))
+            return fallback;
+
+        throw new FileNotFoundException("Tidak menemukan default-aturan-seed.json pada repo FE.");
     }
 }

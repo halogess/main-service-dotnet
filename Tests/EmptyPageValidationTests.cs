@@ -125,7 +125,6 @@ public class EmptyPageValidationTests
                       }
                     }
                     """,
-                AturanDetailStatus = 1
             });
         }
 
@@ -156,7 +155,6 @@ public class EmptyPageValidationTests
                       }
                     }
                     """,
-                AturanDetailStatus = 1
             });
         }
 

@@ -5,6 +5,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
 
 namespace _.Services;
 
@@ -14,17 +15,20 @@ public class AuthService : IAuthService
     private readonly IConfiguration _configuration;
     private readonly HttpClient _httpClient;
     private readonly ILogger<AuthService> _logger;
+    private readonly IWebHostEnvironment _environment;
 
     public AuthService(
         SttsDbContext sttsDbContext,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
-        ILogger<AuthService> logger)
+        ILogger<AuthService> logger,
+        IWebHostEnvironment environment)
     {
         _sttsDbContext = sttsDbContext;
         _configuration = configuration;
         _httpClient = httpClientFactory.CreateClient();
         _logger = logger;
+        _environment = environment;
     }
 
     public async Task<object?> Login(string username, string password)
@@ -101,6 +105,15 @@ public class AuthService : IAuthService
 
         try
         {
+            if (_environment.IsDevelopment())
+            {
+                trace.Parsed = true;
+                trace.Accepted = true;
+                trace.ResponsePreview = "External auth bypassed in Development";
+                _logger.LogInformation("External auth bypassed for {Username} because environment is Development", username);
+                return trace;
+            }
+
             var baseUrl = _configuration["Auth:ExternalApiUrl"];
             var token = _configuration["Auth:ExternalApiToken"];
             var appName = _configuration["Auth:AppName"];

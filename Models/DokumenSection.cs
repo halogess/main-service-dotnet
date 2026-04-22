@@ -21,13 +21,6 @@ public class DokumenSection
     public uint? DsecIndex { get; set; }
 
     /// <summary>
-    /// Section break type: 'nextPage', 'continuous', 'evenPage', 'oddPage'
-    /// </summary>
-    [Column("dsec_type")]
-    [MaxLength(50)]
-    public string? DsecType { get; set; }
-
-    /// <summary>
     /// Whether first page has different header/footer (Title Page)
     /// </summary>
     [Column("dsec_has_title_page")]

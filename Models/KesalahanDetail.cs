@@ -28,8 +28,8 @@ public class KesalahanDetail
     public string? KesalahanDetailSteps { get; set; }
 
     [Required]
-    [Column("kesalahan_is_required")]
-    public bool KesalahanIsRequired { get; set; } = true;
+    [Column("kesalahan_is_hard_constraint")]
+    public bool KesalahanIsHardConstraint { get; set; } = false;
 
     // Navigation property
     [ForeignKey("KesalahanId")]

@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using ValidasiTugasAkhir.MainService.Models;
 
 namespace ValidasiTugasAkhir.MainService.Services;
@@ -5,6 +7,10 @@ namespace ValidasiTugasAkhir.MainService.Services;
 internal static class AturanExportCatalog
 {
     private const string TemplateNote = "Template export default; aturan ini belum ada di DB.";
+    private static readonly JsonSerializerOptions SerializerOptions = new()
+    {
+        WriteIndented = false
+    };
 
     private sealed record RuleTemplate(string Kategori, string Key, string JsonValue);
 
@@ -86,8 +92,7 @@ internal static class AturanExportCatalog
                 AturanId = aturanId,
                 AturanDetailKategori = template.Kategori,
                 AturanDetailKey = template.Key,
-                AturanDetailJsonValue = template.JsonValue,
-                AturanDetailStatus = 1,
+                AturanDetailJsonValue = CreateCanonicalTemplateJson(template),
                 AturanDetailCatatan = appendTemplateNote ? TemplateNote : null
             })
             .ToList();
@@ -163,6 +168,15 @@ internal static class AturanExportCatalog
             return extra;
 
         return $"{note} | {extra}";
+    }
+
+    private static string CreateCanonicalTemplateJson(RuleTemplate template)
+    {
+        if (JsonNode.Parse(template.JsonValue) is not JsonObject root)
+            throw new InvalidOperationException($"Template aturan `{template.Key}` tidak valid.");
+
+        AturanDetailEditablePolicy.Apply(template.Key, root);
+        return root.ToJsonString(SerializerOptions);
     }
 
     private static string NormalizeKey(string? key)

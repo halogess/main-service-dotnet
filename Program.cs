@@ -57,6 +57,7 @@ builder.Services.AddScoped<IDokumenService, DokumenService>();
 builder.Services.AddScoped<IDokumenImportService, DokumenImportService>();
 builder.Services.AddScoped<IDokumenHistoryPurgeService, DokumenHistoryPurgeService>();
 builder.Services.AddScoped<IExtractionArtifactCleanupService, ExtractionArtifactCleanupService>();
+builder.Services.AddScoped<INonActiveBookHistoryPurgeService, NonActiveBookHistoryPurgeService>();
 builder.Services.AddScoped<IBukuService, BukuService>();
 builder.Services.AddScoped<IBukuArchiveService, BukuArchiveService>();
 builder.Services.AddScoped<IDocxExtractionService, DocxExtractionService>();

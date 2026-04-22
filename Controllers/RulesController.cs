@@ -25,13 +25,15 @@ public class RulesController : ControllerBase
     public async Task<IActionResult> GetAll()
     {
         var aturans = await _db.Aturans
+            .AsNoTracking()
             .OrderByDescending(a => a.AturanCreatedAt)
             .ToListAsync();
 
         var result = new List<object>();
         foreach (var a in aturans)
         {
-            var details = AturanDetailVisibility.FilterVisible(await _db.AturanDetails
+            var details = CanonicalizeDetailsForResponse(await _db.AturanDetails
+                .AsNoTracking()
                 .Where(d => d.AturanId == a.AturanId)
                 .ToListAsync());
 
@@ -51,7 +53,6 @@ public class RulesController : ControllerBase
                     aturan_detail_kategori = d.AturanDetailKategori,
                     aturan_detail_key = d.AturanDetailKey,
                     aturan_detail_json_value = d.AturanDetailJsonValue,
-                    aturan_detail_status = d.AturanDetailStatus,
                     aturan_detail_catatan = d.AturanDetailCatatan
                 })
             });
@@ -64,11 +65,14 @@ public class RulesController : ControllerBase
     [HttpGet("{id}")]
     public async Task<IActionResult> GetById(uint id)
     {
-        var aturan = await _db.Aturans.FindAsync(id);
+        var aturan = await _db.Aturans
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.AturanId == id);
         if (aturan == null)
             return NotFound(new { message = "Aturan tidak ditemukan" });
 
-        var details = AturanDetailVisibility.FilterVisible(await _db.AturanDetails
+        var details = CanonicalizeDetailsForResponse(await _db.AturanDetails
+            .AsNoTracking()
             .Where(d => d.AturanId == id)
             .ToListAsync());
 
@@ -88,7 +92,6 @@ public class RulesController : ControllerBase
                 aturan_detail_kategori = d.AturanDetailKategori,
                 aturan_detail_key = d.AturanDetailKey,
                 aturan_detail_json_value = d.AturanDetailJsonValue,
-                aturan_detail_status = d.AturanDetailStatus,
                 aturan_detail_catatan = d.AturanDetailCatatan
             })
         });
@@ -104,38 +107,32 @@ public class RulesController : ControllerBase
         if (await _db.Aturans.AnyAsync(a => a.AturanVersi == request.aturan_versi))
             return BadRequest(new { message = "aturan_versi sudah ada" });
 
-        var normalizedDetails = new List<(RulesDetailRequest Detail, string? NormalizedJson)>();
+        var normalizedDetails = new List<(RulesDetailRequest Detail, string CanonicalKey, string CanonicalKategori, string NormalizedJson)>();
         if (request.details != null)
         {
+            var requestedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var index = 0; index < request.details.Count; index++)
             {
                 var detail = request.details[index];
-                string? normalizedJson = null;
-                if (detail.aturan_detail_json_value != null)
-                {
-                    if (!AturanDetailCanonicalizer.TryCanonicalize(
+                var detailLabel = !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
+                    ? detail.aturan_detail_key
+                    : $"index {index}";
+                if (!TryNormalizeRequestDetail(
                         detail.aturan_detail_key,
                         detail.aturan_detail_json_value,
-                        out normalizedJson,
-                        out var canonicalChanged,
-                        out var errorMessage))
-                    {
-                        var detailLabel = !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
-                            ? detail.aturan_detail_key
-                            : $"index {index}";
-                        return BadRequest(new { message = $"json_value tidak valid untuk detail {detailLabel}: {errorMessage}" });
-                    }
-                }
-
-                if (!AturanDetailShapeValidator.TryValidate(detail.aturan_detail_key, normalizedJson, out var shapeErrorMessage))
+                        detailLabel,
+                        out var canonicalKey,
+                        out var canonicalKategori,
+                        out var normalizedJson,
+                        out var errorResponse))
                 {
-                    var detailLabel = !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
-                        ? detail.aturan_detail_key
-                        : $"index {index}";
-                    return BadRequest(new { message = $"json_value tidak sesuai schema untuk detail {detailLabel}: {shapeErrorMessage}" });
+                    return errorResponse!;
                 }
 
-                normalizedDetails.Add((detail, normalizedJson));
+                if (!requestedKeys.Add(canonicalKey))
+                    return BadRequest(new { message = $"key aturan `{canonicalKey}` duplikat dalam request." });
+
+                normalizedDetails.Add((detail, canonicalKey, canonicalKategori, normalizedJson!));
             }
         }
 
@@ -155,15 +152,14 @@ public class RulesController : ControllerBase
         // Create details if provided
         if (normalizedDetails.Count > 0)
         {
-            foreach (var (detailRequest, normalizedJson) in normalizedDetails)
+            foreach (var (detailRequest, canonicalKey, canonicalKategori, normalizedJson) in normalizedDetails)
             {
                 var detail = new AturanDetail
                 {
                     AturanId = aturan.AturanId,
-                    AturanDetailKategori = detailRequest.aturan_detail_kategori,
-                    AturanDetailKey = detailRequest.aturan_detail_key,
+                    AturanDetailKategori = canonicalKategori,
+                    AturanDetailKey = canonicalKey,
                     AturanDetailJsonValue = normalizedJson,
-                    AturanDetailStatus = detailRequest.aturan_detail_status ?? 1,
                     AturanDetailCatatan = detailRequest.aturan_detail_catatan
                 };
                 _db.AturanDetails.Add(detail);
@@ -182,7 +178,7 @@ public class RulesController : ControllerBase
         if (aturan == null)
             return NotFound(new { message = "Aturan tidak ditemukan" });
 
-        var normalizedDetails = new List<(RulesDetailUpdateRequest Detail, string? NormalizedJson)>();
+        var normalizedDetails = new List<(RulesDetailUpdateRequest Detail, string CanonicalKey, string CanonicalKategori, string NormalizedJson)>();
         var existingDetailIds = request.details?
             .Where(detail => detail.aturan_detail_id.HasValue && detail.aturan_detail_id.Value > 0)
             .Select(detail => detail.aturan_detail_id!.Value)
@@ -196,42 +192,35 @@ public class RulesController : ControllerBase
             : new Dictionary<uint, AturanDetail>();
         if (request.details != null)
         {
+            var requestedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             for (var index = 0; index < request.details.Count; index++)
             {
                 var detail = request.details[index];
                 existingDetailsById.TryGetValue(detail.aturan_detail_id ?? 0, out var existingDetail);
-                string? normalizedJson = null;
-                if (detail.aturan_detail_json_value != null)
+                var detailLabel = detail.aturan_detail_id.HasValue
+                    ? $"aturan_detail_id {detail.aturan_detail_id.Value}"
+                    : !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
+                        ? detail.aturan_detail_key
+                        : $"index {index}";
+                var requestedKey = detail.aturan_detail_key ?? existingDetail?.AturanDetailKey;
+                var requestedJson = detail.aturan_detail_json_value ?? existingDetail?.AturanDetailJsonValue;
+
+                if (!TryNormalizeRequestDetail(
+                        requestedKey,
+                        requestedJson,
+                        detailLabel,
+                        out var canonicalKey,
+                        out var canonicalKategori,
+                        out var normalizedJson,
+                        out var errorResponse))
                 {
-                    if (!AturanDetailCanonicalizer.TryCanonicalize(
-                        detail.aturan_detail_key ?? existingDetail?.AturanDetailKey,
-                        detail.aturan_detail_json_value,
-                        out normalizedJson,
-                        out var canonicalChanged,
-                        out var errorMessage))
-                    {
-                        var detailLabel = detail.aturan_detail_id.HasValue
-                            ? $"aturan_detail_id {detail.aturan_detail_id.Value}"
-                            : !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
-                                ? detail.aturan_detail_key
-                                : $"index {index}";
-                        return BadRequest(new { message = $"json_value tidak valid untuk detail {detailLabel}: {errorMessage}" });
-                    }
+                    return errorResponse!;
                 }
 
-                var effectiveKey = detail.aturan_detail_key ?? existingDetail?.AturanDetailKey;
-                var effectiveJson = normalizedJson ?? existingDetail?.AturanDetailJsonValue;
-                if (!AturanDetailShapeValidator.TryValidate(effectiveKey, effectiveJson, out var shapeErrorMessage))
-                {
-                    var detailLabel = detail.aturan_detail_id.HasValue
-                        ? $"aturan_detail_id {detail.aturan_detail_id.Value}"
-                        : !string.IsNullOrWhiteSpace(detail.aturan_detail_key)
-                            ? detail.aturan_detail_key
-                            : $"index {index}";
-                    return BadRequest(new { message = $"json_value tidak sesuai schema untuk detail {detailLabel}: {shapeErrorMessage}" });
-                }
+                if (!requestedKeys.Add(canonicalKey))
+                    return BadRequest(new { message = $"key aturan `{canonicalKey}` duplikat dalam request." });
 
-                normalizedDetails.Add((detail, normalizedJson));
+                normalizedDetails.Add((detail, canonicalKey, canonicalKategori, normalizedJson!));
             }
         }
 
@@ -252,7 +241,7 @@ public class RulesController : ControllerBase
         // Update details if provided
         if (normalizedDetails.Count > 0)
         {
-            foreach (var (detailRequest, normalizedJson) in normalizedDetails)
+            foreach (var (detailRequest, canonicalKey, canonicalKategori, normalizedJson) in normalizedDetails)
             {
                 if (detailRequest.aturan_detail_id.HasValue && detailRequest.aturan_detail_id.Value > 0)
                 {
@@ -260,14 +249,9 @@ public class RulesController : ControllerBase
                     var existing = await _db.AturanDetails.FindAsync(detailRequest.aturan_detail_id.Value);
                     if (existing != null && existing.AturanId == id)
                     {
-                        if (detailRequest.aturan_detail_kategori != null)
-                            existing.AturanDetailKategori = detailRequest.aturan_detail_kategori;
-                        if (detailRequest.aturan_detail_key != null)
-                            existing.AturanDetailKey = detailRequest.aturan_detail_key;
-                        if (detailRequest.aturan_detail_json_value != null)
-                            existing.AturanDetailJsonValue = normalizedJson;
-                        if (detailRequest.aturan_detail_status.HasValue)
-                            existing.AturanDetailStatus = detailRequest.aturan_detail_status.Value;
+                        existing.AturanDetailKategori = canonicalKategori;
+                        existing.AturanDetailKey = canonicalKey;
+                        existing.AturanDetailJsonValue = normalizedJson;
                         if (detailRequest.aturan_detail_catatan != null)
                             existing.AturanDetailCatatan = detailRequest.aturan_detail_catatan;
                     }
@@ -278,10 +262,9 @@ public class RulesController : ControllerBase
                     var newDetail = new AturanDetail
                     {
                         AturanId = id,
-                        AturanDetailKategori = detailRequest.aturan_detail_kategori,
-                        AturanDetailKey = detailRequest.aturan_detail_key,
+                        AturanDetailKategori = canonicalKategori,
+                        AturanDetailKey = canonicalKey,
                         AturanDetailJsonValue = normalizedJson,
-                        AturanDetailStatus = detailRequest.aturan_detail_status ?? 1,
                         AturanDetailCatatan = detailRequest.aturan_detail_catatan
                     };
                     _db.AturanDetails.Add(newDetail);
@@ -326,6 +309,64 @@ public class RulesController : ControllerBase
 
         return Ok(new { message = "Detail berhasil dihapus" });
     }
+
+    private static List<AturanDetail> CanonicalizeDetailsForResponse(IReadOnlyList<AturanDetail> details)
+        => AturanDetailContract.NormalizeDetailsForContract(details);
+
+    private static bool TryNormalizeRequestDetail(
+        string? requestedKey,
+        string? requestedJson,
+        string detailLabel,
+        out string canonicalKey,
+        out string canonicalKategori,
+        out string? normalizedJson,
+        out IActionResult? errorResponse)
+    {
+        canonicalKey = string.Empty;
+        canonicalKategori = string.Empty;
+        normalizedJson = null;
+        errorResponse = null;
+
+        if (!AturanDetailContract.IsCanonicalKey(requestedKey))
+        {
+            errorResponse = new BadRequestObjectResult(new
+            {
+                message = $"key aturan canonical wajib diisi untuk detail {detailLabel}."
+            });
+            return false;
+        }
+
+        canonicalKey = AturanDetailContract.NormalizeCanonicalKey(requestedKey);
+        canonicalKategori = AturanDetailContract.GetKategori(canonicalKey);
+        var sourceJson = string.IsNullOrWhiteSpace(requestedJson)
+            ? AturanDetailContract.GetDefaultJsonValue(canonicalKey)
+            : requestedJson;
+
+        if (!AturanDetailCanonicalizer.TryCanonicalize(
+                canonicalKey,
+                sourceJson,
+                out normalizedJson,
+                out var canonicalChanged,
+                out var errorMessage))
+        {
+            errorResponse = new BadRequestObjectResult(new
+            {
+                message = $"json_value tidak valid untuk detail {detailLabel}: {errorMessage}"
+            });
+            return false;
+        }
+
+        if (!AturanDetailShapeValidator.TryValidate(canonicalKey, normalizedJson, out var shapeErrorMessage))
+        {
+            errorResponse = new BadRequestObjectResult(new
+            {
+                message = $"json_value tidak sesuai schema untuk detail {detailLabel}: {shapeErrorMessage}"
+            });
+            return false;
+        }
+
+        return true;
+    }
 }
 
 // Request DTOs
@@ -352,7 +393,6 @@ public class RulesDetailRequest
     public string? aturan_detail_kategori { get; set; }
     public string? aturan_detail_key { get; set; }
     public string? aturan_detail_json_value { get; set; }
-    public sbyte? aturan_detail_status { get; set; }
     public string? aturan_detail_catatan { get; set; }
 }
 
@@ -362,6 +402,5 @@ public class RulesDetailUpdateRequest
     public string? aturan_detail_kategori { get; set; }
     public string? aturan_detail_key { get; set; }
     public string? aturan_detail_json_value { get; set; }
-    public sbyte? aturan_detail_status { get; set; }
     public string? aturan_detail_catatan { get; set; }
 }

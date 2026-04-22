@@ -433,7 +433,7 @@ public class TestingController : ControllerBase
             if (!System.IO.File.Exists(docxPath))
                 return NotFound(new { message = "File DOCX tidak ditemukan" });
 
-            // Delete existing elements and media
+            // Delete existing elements
             // Get all part IDs for this dokumen through sections
             var partIds = await _db.DokumenParts
                 .Where(p => p.Section != null && p.Section.DsecRefTipe == "dokumen" && p.Section.DsecRefId == dokumenId)
@@ -442,10 +442,7 @@ public class TestingController : ControllerBase
             
             var existingElements = _db.DokumenElemens.Where(e => e.DpartId.HasValue && partIds.Contains(e.DpartId.Value));
             _db.DokumenElemens.RemoveRange(existingElements);
-            
-            var existingMedia = _db.DokumenMedias.Where(m => m.DokumenId == dokumenId);
-            _db.DokumenMedias.RemoveRange(existingMedia);
-            
+
             await _db.SaveChangesAsync();
 
             // Re-extract

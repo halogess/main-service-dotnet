@@ -407,7 +407,6 @@ public class MediaBlockBlankParagraphValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "gambar",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {
@@ -434,7 +433,6 @@ public class MediaBlockBlankParagraphValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "tabel",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {
@@ -461,7 +459,6 @@ public class MediaBlockBlankParagraphValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "kode",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {
@@ -488,7 +485,6 @@ public class MediaBlockBlankParagraphValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "paragraf",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {

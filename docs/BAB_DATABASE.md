@@ -37,16 +37,16 @@ Tabel ini menyimpan data jurusan/program studi di kampus STTS.
 | Kolom | Tipe | Deskripsi | Penggunaan |
 |-------|------|-----------|------------|
 | `jur_kode` | varchar(2) | **PK** - Kode jurusan | Identifikasi jurusan |
-| `jur_nama` | varchar(50) | Nama lengkap jurusan | Ditampilkan di UI dan template |
+| `jur_nama` | varchar(50) | Nama lengkap jurusan | Ditampilkan di UI dan laporan |
 | `jur_singkat` | varchar(20) | Singkatan jurusan | Label ringkas |
-| `jur_gelar` | varchar(50) | Gelar yang diberikan (S.Kom, S.T) | Template dokumen pelengkap |
-| `jur_fakultas` | varchar(50) | Nama fakultas | Template dokumen pelengkap |
+| `jur_gelar` | varchar(50) | Gelar yang diberikan (S.Kom, S.T) | Metadata akademik |
+| `jur_fakultas` | varchar(50) | Nama fakultas | Metadata akademik |
 | `jur_status` | int | Status aktif/nonaktif | Filter jurusan aktif |
 
 **Fungsi dalam Sistem:**
-- Menentukan nama program studi di template dokumen
+- Menentukan nama program studi pada UI dan pelaporan
 - Statistik buku per jurusan
-- Menentukan gelar dan fakultas untuk template
+- Menyediakan metadata gelar dan fakultas untuk kebutuhan administratif
 
 ---
 
@@ -61,13 +61,13 @@ Tabel ini menyimpan data proposal tugas akhir mahasiswa.
 | `proposal_judul_baru` | varchar(300) | Judul tugas akhir | Ditampilkan dan divalidasi |
 | `proposal_tgl_doc` | datetime | Tanggal proposal | Informasi administratif |
 | `proposal_perpanjangan` | smallint | Status perpanjangan | Tracking administrasi |
-| `dosen_pembimbing` | varchar(6) | Kode dosen pembimbing 1 | Template dokumen pelengkap |
-| `dosen_co_pembimbing` | varchar(6) | Kode dosen co-pembimbing | Template dokumen pelengkap |
+| `dosen_pembimbing` | varchar(6) | Kode dosen pembimbing 1 | Metadata proposal |
+| `dosen_co_pembimbing` | varchar(6) | Kode dosen co-pembimbing | Metadata proposal |
 
 **Fungsi dalam Sistem:**
 - Mengambil judul tugas akhir untuk validasi
-- Menentukan dosen pembimbing untuk template
-- Auto-fill data di template dokumen pelengkap
+- Menentukan relasi pembimbing pada data proposal
+- Menyediakan metadata akademik untuk kebutuhan administratif
 
 ---
 
@@ -78,14 +78,14 @@ Tabel ini menyimpan data dosen yang terdaftar di kampus.
 | Kolom | Tipe | Deskripsi | Penggunaan |
 |-------|------|-----------|------------|
 | `dosen_kode` | varchar(10) | **PK** - Kode dosen | Identifikasi dosen |
-| `dosen_nama_sk` | varchar(255) | Nama lengkap dosen (sesuai SK) | Template dokumen |
+| `dosen_nama_sk` | varchar(255) | Nama lengkap dosen (sesuai SK) | Ditampilkan di UI dan laporan |
 | `dosen_status` | int | Status aktif/nonaktif | Filter dosen aktif |
 | `karyawan_nip` | varchar(15) | NIP karyawan terkait | Join dengan tabel karyawan |
 
 **Fungsi dalam Sistem:**
 - Menampilkan nama dosen pembimbing/penguji
-- Template dokumen (lembar pengesahan, dll)
-- Dropdown pemilihan dosen di admin
+- Menyediakan daftar dosen aktif untuk UI admin
+- Mendukung dropdown pemilihan dosen di admin
 
 ---
 
@@ -268,18 +268,22 @@ Menyimpan footnote dan endnote dalam dokumen.
 
 ---
 
-#### 2.2.5 Tabel `dokumen_media`
+#### 2.2.5 Tabel `dokumen_elemen_visual`
 
-Menyimpan file media (gambar) yang terdapat dalam dokumen.
+Menyimpan metadata visual hasil ekstraksi untuk kebutuhan penandaan lokasi elemen pada halaman.
 
 | Kolom | Tipe | Deskripsi | Penggunaan |
 |-------|------|-----------|------------|
-| `dokumen_media_id` | long | **PK** - ID media | Identifikasi media |
-| `dokumen_id` | int | FK ke dokumen | Relasi ke dokumen |
-| `dokumen_media_rid` | varchar(50) | Relationship ID dari OpenXML | Referensi internal |
-| `dokumen_media_filename` | varchar(255) | Nama file asli | Display |
-| `dokumen_media_filepath` | varchar(255) | Path file tersimpan | Akses file |
-| `dokumen_media_content_type` | varchar(100) | MIME type: `image/png`, `image/jpeg` | Tipe konten |
+| `dev_id` | ulong | **PK** - ID metadata visual | Identifikasi |
+| `dev_ref_tipe` | varchar(10) | Tipe referensi: `dokumen`, `bab`, `buku`, `aturan` | Kategorisasi sumber |
+| `dev_ref_id` | uint | ID referensi sumber | Relasi logis |
+| `dev_page` | uint | Nomor halaman visual | Navigasi preview |
+| `dokumen_elemen_id` | ulong | FK opsional ke elemen dokumen | Pelacakan elemen |
+| `dev_bbox_x0` / `dev_bbox_y0` | float | Koordinat kiri-atas bounding box | Highlight visual |
+| `dev_bbox_x1` / `dev_bbox_y1` | float | Koordinat kanan-bawah bounding box | Highlight visual |
+| `dev_label` | varchar(50) | Label visual | Klasifikasi |
+| `dev_text` | longtext | Teks terasosiasi | Evidence validasi |
+| `dev_label_struktural` | varchar(50) | Label struktur tambahan | Analisis visual |
 
 ---
 
@@ -346,25 +350,15 @@ Menyimpan format tabel dari OpenXML (w:tblPr).
 
 ---
 
-#### 2.3.4 Tabel `dokumen_format_table_row`
+#### 2.3.4 Catatan Struktur Tabel
 
-Menyimpan format baris tabel dari OpenXML (w:trPr).
-
-| Kolom | Tipe | Deskripsi |
-|-------|------|-----------|
-| `dftr_id` | uint | **PK** - ID format row |
-| `dftr_raw_trpr_xml` | longtext | Raw XML properties baris |
+Pada skema saat ini, struktur baris dan sel tabel direpresentasikan langsung di JSON elemen tabel pada `dokumen_elemen`. Persistensi format tabel difokuskan pada level tabel melalui `dokumen_format_table`, sedangkan node `rows` dan `cells` dipertahankan sebagai container hierarkis untuk isi tabel.
 
 ---
 
-#### 2.3.5 Tabel `dokumen_format_table_cell`
+#### 2.3.5 Catatan Field Dokumen
 
-Menyimpan format sel tabel dari OpenXML (w:tcPr).
-
-| Kolom | Tipe | Deskripsi |
-|-------|------|-----------|
-| `dftc_id` | uint | **PK** - ID format cell |
-| `dftc_raw_tcpr_xml` | longtext | Raw XML properties sel |
+Field Word seperti nomor halaman, sequence caption, dan referensi silang diserialisasi langsung ke `delemen_json_tree` sebagai item `field`. Metadata utama yang dipertahankan meliputi `field_type`, `value`, dan `result_dftx_id` bila hasil field memiliki format teks yang perlu direferensikan.
 
 ---
 
@@ -376,29 +370,7 @@ Menyimpan format gambar/drawing dari OpenXML (w:drawing).
 |-------|------|-----------|
 | `dfdr_id` | ulong | **PK** - ID format drawing |
 | `dfdr_is_inline` | bool | True jika inline, false jika floating |
-| `dfdr_graphic_type` | varchar(20) | Tipe: `picture`, `shape`, `chart` |
-| `dfdr_cx_emu` | ulong | Lebar dalam EMUs |
-| `dfdr_cy_emu` | ulong | Tinggi dalam EMUs |
-| `dfdr_rel_id` | varchar(64) | Relationship ID ke media |
-| `dfdr_anchor_json` | longtext | Anchor positioning (JSON) |
-| `dfdr_wrap_json` | longtext | Text wrapping properties (JSON) |
-| `dfdr_preset_shape` | varchar(50) | Preset shape type |
-| `dfdr_raw_drawing_xml` | longtext | Raw XML |
-
----
-
-#### 2.3.7 Tabel `dokumen_format_field`
-
-Menyimpan format field khusus dari OpenXML (w:fldChar, w:instrText).
-
-| Kolom | Tipe | Deskripsi |
-|-------|------|-----------|
-| `dffd_id` | ulong | **PK** - ID format field |
-| `dffd_field_type` | varchar(20) | Tipe: `PAGE`, `NUMPAGES`, `TOC`, `REF` |
-| `dffd_instr_text` | text | Field instruction code |
-| `dffd_result_text` | text | Displayed value |
-| `dffd_is_locked` | bool | Field terkunci |
-| `dffd_is_dirty` | bool | Field perlu recalculate |
+| `dfdr_cx_emu` | ulong | Lebar drawing dalam EMUs |
 
 ---
 
@@ -436,7 +408,6 @@ Menyimpan detail konfigurasi aturan dalam format JSON.
 | `aturan_detail_kategori` | varchar(255) | Kategori: `ukuran_kertas`, `margin`, `judul_bab`, `paragraf`, dll | Pengelompokan |
 | `aturan_detail_key` | varchar(255) | Key spesifik: `font`, `paragraph`, `spacing` | Sub-kategori |
 | `aturan_detail_json_value` | longtext | Nilai aturan dalam JSON | Konfigurasi lengkap |
-| `aturan_detail_status` | tinyint | Status aktif (1/0) | On/off per detail |
 | `aturan_detail_catatan` | varchar(255) | Catatan/keterangan | Dokumentasi |
 
 **Contoh JSON Value:**
@@ -485,62 +456,12 @@ Menyimpan detail kesalahan dengan penjelasan dan rekomendasi dari AI.
 | `kesalahan_detail_judul` | varchar(255) | Judul kesalahan (dari AI) | Display header |
 | `kesalahan_detail_penjelasan` | varchar(255) | Penjelasan lengkap (dari AI) | Panduan user |
 | `kesalahan_detail_steps` | longtext | Langkah perbaikan (JSON) | Tutorial perbaikan |
-| `kesalahan_is_required` | bool | Wajib diperbaiki atau tidak | Prioritas |
 
 ---
 
-### 2.6 Kategori: Template Dokumen
+### 2.6 Catatan Template Aturan
 
-Tabel-tabel dalam kategori ini menyimpan template dokumen pelengkap buku tugas akhir.
-
-#### 2.6.1 Tabel `template`
-
-Menyimpan template dokumen pelengkap buku.
-
-| Kolom | Tipe | Deskripsi | Penggunaan |
-|-------|------|-----------|------------|
-| `template_id` | uint | **PK** - ID template | Identifikasi |
-| `template_name` | varchar(255) | Nama template | Display |
-| `template_status` | varchar(50) | Status: `draft`, `active` | Filter template tersedia |
-| `template_docx_path` | varchar(500) | Path file DOCX | Generate dokumen |
-| `template_pdf_path` | varchar(500) | Path file PDF preview | Preview user |
-| `template_created_at` | datetime | Waktu pembuatan | Audit trail |
-
-**Relasi:**
-- 1 Template → banyak TemplateDetail
-
----
-
-#### 2.6.2 Tabel `template_detail`
-
-Menyimpan mapping field dalam template dokumen.
-
-| Kolom | Tipe | Deskripsi | Penggunaan |
-|-------|------|-----------|------------|
-| `template_detail_id` | uint | **PK** - ID detail | Identifikasi |
-| `template_id` | uint | FK ke template | Relasi ke template |
-| `template_detail_text` | varchar(100) | Teks placeholder yang di-highlight | Identifikasi placeholder |
-| `template_detail_field` | varchar(100) | Field mapping: `nama`, `nrp`, `judul` | Sumber data |
-| `template_detail_catatan` | varchar(100) | Catatan/keterangan | Dokumentasi |
-| `template_detail_optional` | bool | Opsional atau wajib | Validasi |
-
----
-
-#### 2.6.3 Tabel `template_generation`
-
-Menyimpan history dokumen yang di-generate dari template.
-
-| Kolom | Tipe | Deskripsi | Penggunaan |
-|-------|------|-----------|------------|
-| `template_generation_id` | uint | **PK** - ID generation | Identifikasi |
-| `template_id` | uint | FK ke template | Template yang digunakan |
-| `mhs_nrp` | uint | NRP mahasiswa | Pemilik dokumen |
-| `template_generation_docx_filepath` | varchar(255) | Path file DOCX hasil | Download |
-| `template_generation_pdf_filepath` | varchar(255) | Path file PDF hasil | Preview |
-| `template_generation_created_at` | datetime | Waktu generate | Audit trail |
-| `template_generation_updated_at` | datetime | Waktu update | Audit trail |
-
----
+Skema aplikasi saat ini tidak memiliki kategori tabel terpisah untuk dokumen isian yang di-generate. Referensi template yang aktif berada pada tabel aturan melalui path file template aturan dan detail konfigurasinya.
 
 ### 2.7 Kategori: Antrian dan Processing
 
@@ -751,14 +672,14 @@ Menyimpan log penggunaan Gemini AI untuk labeling dan rekomendasi.
 | Kategori | Tabel | Jumlah |
 |----------|-------|--------|
 | **Manajemen Buku & Dokumen** | `buku`, `bab`, `dokumen` | 3 |
-| **Struktur Dokumen** | `dokumen_section`, `dokumen_part`, `dokumen_elemen`, `dokumen_note`, `dokumen_media` | 5 |
-| **Format Dokumen** | `dokumen_format_paragraf`, `dokumen_format_text`, `dokumen_format_table`, `dokumen_format_table_row`, `dokumen_format_table_cell`, `dokumen_format_drawing`, `dokumen_format_field` | 7 |
+| **Struktur Dokumen** | `dokumen_section`, `dokumen_part`, `dokumen_elemen`, `dokumen_note`, `dokumen_elemen_visual` | 5 |
+| **Format Dokumen** | `dokumen_format_paragraf`, `dokumen_format_text`, `dokumen_format_table`, `dokumen_format_drawing` | 4 |
 | **Aturan Validasi** | `aturan`, `aturan_detail` | 2 |
 | **Hasil Validasi** | `kesalahan`, `kesalahan_detail` | 2 |
-| **Template Dokumen** | `template`, `template_detail`, `template_generation` | 3 |
 | **Antrian & Processing** | `antrian` | 1 |
 | **Credentials & API Keys** | `credential_adobe`, `credential_gemini` | 2 |
 | **Logging & Monitoring** | `adobe_api_logs`, `llm_api_logs` | 2 |
 
-**Total: 27 Tabel dalam 9 Kategori**
+**Total: 21 Tabel dalam 8 Kategori**
+
 

@@ -6,7 +6,7 @@ Bab ini menjelaskan alur kerja pengguna dalam sistem validasi dokumen tugas akhi
 
 ## 4.1 Alur Kerja Mahasiswa
 
-Mahasiswa adalah pengguna utama yang menggunakan sistem untuk memvalidasi dokumen tugas akhir dan mengakses template pendukung. Berikut adalah fitur-fitur yang tersedia untuk mahasiswa.
+Mahasiswa adalah pengguna utama yang menggunakan sistem untuk memvalidasi dokumen tugas akhir dan mengakses panduan format yang berlaku. Berikut adalah fitur-fitur yang tersedia untuk mahasiswa.
 
 ### 4.1.1 Dashboard Mahasiswa
 
@@ -157,7 +157,7 @@ Setelah buku lolos validasi:
 
 ### 4.1.5 Template dan Panduan
 
-Halaman untuk mengakses template format dokumen dan dokumen pendukung.
+Halaman untuk mengakses template panduan format dokumen dan aturan yang berlaku.
 
 #### 4.1.5.1 Template Panduan Format
 
@@ -165,27 +165,6 @@ Mahasiswa dapat mengakses template referensi:
 - **Preview Template**: Melihat contoh format dokumen yang benar
 - **Download Template**: Mengunduh file template DOCX
 - **Aturan Format**: Melihat detail aturan format yang berlaku
-
-#### 4.1.5.2 Template Dokumen Pelengkap Buku
-
-Sistem menyediakan template dokumen pelengkap:
-- **Daftar Template**: Berbagai jenis template (Lembar Pengesahan, Pernyataan, dll.)
-- **Status Template**: Aktif atau Non-aktif
-- **Preview Dokumen**: Melihat preview template sebelum generate
-
-#### 4.1.5.3 Generate Dokumen Otomatis
-
-Fitur untuk menghasilkan dokumen dengan data otomatis:
-- **Data dari SIAKAD**: Nama, NRP, jurusan, pembimbing diambil otomatis
-- **Pemilihan Penguji**: Memilih dosen penguji dari dropdown (jika diperlukan)
-- **Generate Dokumen**: Sistem menghasilkan dokumen dengan data yang terisi
-
-#### 4.1.5.4 Download Dokumen Hasil Generate
-
-Setelah dokumen di-generate:
-- **Preview Hasil**: Melihat preview dokumen yang dihasilkan
-- **Download DOCX**: Mengunduh dokumen dalam format DOCX
-- **Regenerate**: Menghasilkan ulang dokumen jika diperlukan
 
 ---
 
@@ -261,80 +240,6 @@ Konfigurasi batas kelulusan validasi:
 - **Skor Minimum**: Menetapkan persentase minimum untuk lolos
 - **Penyimpanan**: Menyimpan perubahan skor ke database
 - **Preview Impact**: Melihat dampak perubahan terhadap validasi
-
----
-
-### 4.2.3 Template Isian Dokumen
-
-Halaman untuk mengelola template dokumen yang bisa di-generate oleh mahasiswa.
-
-#### 4.2.3.1 Manajemen Template Isian
-
-Admin mengelola template dokumen isian:
-- **Daftar Template**: Melihat semua template yang tersedia
-- **Upload Template**: Mengunggah file template DOCX baru
-- **Rename Template**: Mengubah nama template
-- **Delete Template**: Menghapus template
-
-#### 4.2.3.2 Status Template
-
-Setiap template memiliki status:
-- **Draft**: Template masih dalam pembuatan/edit
-- **Ready**: Template sudah siap dan mapping selesai
-- **Active**: Template aktif dan dapat digunakan mahasiswa
-- **Inactive**: Template dinonaktifkan sementara
-
-#### 4.2.3.3 Konfigurasi Template
-
-Detail pengaturan template:
-- **Kategori**: Kategori dokumen (Pelengkap Buku, Administrasi, dll.)
-- **Tanggal Dibuat**: Waktu template diupload
-- **Jumlah Field**: Total placeholder yang perlu di-mapping
-- **Preview**: Melihat preview dokumen template
-
-#### 4.2.3.4 Aksi pada Template
-
-Aksi yang dapat dilakukan admin:
-- **Download**: Mengunduh file template asli
-- **Mapping Field**: Navigasi ke halaman mapping field
-- **Toggle Status**: Mengubah status aktif/nonaktif
-- **Delete**: Menghapus template dari sistem
-
----
-
-### 4.2.4 Template Field Mapping
-
-Halaman untuk mapping field placeholder dalam template ke sumber data.
-
-#### 4.2.4.1 Ekstraksi Placeholder
-
-Sistem mengekstrak placeholder dari template:
-- **Deteksi Otomatis**: Placeholder dengan format {{field_name}} terdeteksi otomatis
-- **Daftar Field**: Menampilkan semua placeholder yang ditemukan
-- **Grouping**: Placeholder dikelompokkan berdasarkan bagian dokumen
-
-#### 4.2.4.2 Drag-and-Drop Mapping
-
-Interface intuitif untuk mapping field:
-- **Field Tersedia**: Panel berisi field seperti nama, nrp, judul, pembimbing
-- **Target Placeholder**: Area target untuk meletakkan field
-- **Drag & Drop**: Menarik field ke placeholder yang sesuai
-- **Visual Feedback**: Indikator visual saat mapping berhasil
-
-#### 4.2.4.3 Kategori Field yang Tersedia
-
-Field dikelompokkan berdasarkan kategori:
-- **Dokumen**: TA/Tesis, Judul, Jenjang, Program Studi, Fakultas
-- **Waktu**: Tanggal, Bulan, Tahun
-- **Dosen**: Pembimbing, Co-Pembimbing, Penguji
-
-#### 4.2.4.4 Validasi dan Penyimpanan Mapping
-
-Proses validasi sebelum penyimpanan:
-- **Validasi Field**: Mengecek apakah semua field required sudah ter-mapping
-- **Catatan (Notes)**: Menambahkan catatan untuk field tertentu
-- **Preview Hasil**: Melihat preview dokumen dengan data contoh
-- **Simpan Mapping**: Menyimpan konfigurasi mapping ke database
 
 ---
 
@@ -453,8 +358,8 @@ Monitoring kesehatan layanan eksternal:
 
 | Role | Fitur Utama | Tujuan |
 |------|-------------|--------|
-| **Mahasiswa** | Dashboard, Cek Dokumen, Validasi Buku, Template | Memvalidasi format dokumen TA dan generate dokumen pendukung |
-| **Admin BAA** | Dashboard, Template Panduan, Template Isian, Riwayat, Hapus Riwayat, Service | Mengelola aturan validasi, monitoring, dan konfigurasi sistem |
+| **Mahasiswa** | Dashboard, Cek Dokumen, Validasi Buku, Template Panduan | Memvalidasi format dokumen TA sesuai aturan yang aktif |
+| **Admin BAA** | Dashboard, Template Panduan, Riwayat, Hapus Riwayat, Service | Mengelola aturan validasi, monitoring, dan konfigurasi sistem |
 
 ---
 

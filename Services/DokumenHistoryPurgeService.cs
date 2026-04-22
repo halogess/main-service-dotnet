@@ -20,7 +20,6 @@ public sealed class DokumenHistoryPurgeSummary
     public int TotalElemen { get; init; }
     public int TotalVisual { get; init; }
     public int TotalNote { get; init; }
-    public int TotalMedia { get; init; }
     public int TotalKesalahan { get; init; }
     public int TotalKesalahanDetail { get; init; }
     public int TotalAdobeLog { get; init; }
@@ -28,10 +27,7 @@ public sealed class DokumenHistoryPurgeSummary
     public int TotalParagraphFormat { get; init; }
     public int TotalTextFormat { get; init; }
     public int TotalTableFormat { get; init; }
-    public int TotalTableRowFormat { get; init; }
-    public int TotalTableCellFormat { get; init; }
     public int TotalDrawingFormat { get; init; }
-    public int TotalFieldFormat { get; init; }
     public int TotalStorageTargets { get; init; }
     public int ExistingStorageDirectories { get; init; }
 }
@@ -45,7 +41,6 @@ public sealed class DokumenHistoryPurgeResult
     public int DeletedElemen { get; init; }
     public int DeletedVisual { get; init; }
     public int DeletedNote { get; init; }
-    public int DeletedMedia { get; init; }
     public int DeletedKesalahan { get; init; }
     public int DeletedKesalahanDetail { get; init; }
     public int DeletedAdobeLog { get; init; }
@@ -53,10 +48,7 @@ public sealed class DokumenHistoryPurgeResult
     public int DeletedParagraphFormat { get; init; }
     public int DeletedTextFormat { get; init; }
     public int DeletedTableFormat { get; init; }
-    public int DeletedTableRowFormat { get; init; }
-    public int DeletedTableCellFormat { get; init; }
     public int DeletedDrawingFormat { get; init; }
-    public int DeletedFieldFormat { get; init; }
     public int StorageTargets { get; init; }
     public int DeletedStorageDirectories { get; init; }
     public IReadOnlyList<string> FailedStorageDirectories { get; init; } = Array.Empty<string>();
@@ -95,7 +87,6 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
             TotalElemen = context.ElementCount,
             TotalVisual = context.VisualCount,
             TotalNote = context.NoteCount,
-            TotalMedia = context.MediaCount,
             TotalKesalahan = context.KesalahanCount,
             TotalKesalahanDetail = context.KesalahanDetailCount,
             TotalAdobeLog = context.AdobeLogCount,
@@ -103,10 +94,7 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
             TotalParagraphFormat = context.FormatRefs.ParagraphFormatIds.Count,
             TotalTextFormat = context.FormatRefs.TextFormatIds.Count,
             TotalTableFormat = context.FormatRefs.TableFormatIds.Count,
-            TotalTableRowFormat = context.FormatRefs.TableRowFormatIds.Count,
-            TotalTableCellFormat = context.FormatRefs.TableCellFormatIds.Count,
             TotalDrawingFormat = context.FormatRefs.DrawingFormatIds.Count,
-            TotalFieldFormat = context.FormatRefs.FieldFormatIds.Count,
             TotalStorageTargets = context.StorageDirectories.Count,
             ExistingStorageDirectories = context.ExistingStorageDirectories
         };
@@ -115,6 +103,7 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
     public async Task<DokumenHistoryPurgeResult> PurgeAllAsync(CancellationToken cancellationToken = default)
     {
         var context = await BuildContextAsync(cancellationToken);
+        var dokumenIds = context.DokumenIds;
         var strategy = _db.Database.CreateExecutionStrategy();
 
         var dbResult = await strategy.ExecuteAsync(async () =>
@@ -158,15 +147,14 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
                 .ExecuteDeleteAsync(cancellationToken);
 
             var deletedVisual = await _db.DokumenElemenVisuals
-                .Where(visual => visual.DevRefTipe == "dokumen" ||
-                                 (visual.DokumenElemenId.HasValue && dokumenElementIds.Contains(visual.DokumenElemenId.Value)))
+                .Where(visual => ((visual.DevRefTipe == "dokumen" &&
+                                   visual.DevRefId.HasValue &&
+                                   dokumenIds.Contains(visual.DevRefId.Value)) ||
+                                  (visual.DokumenElemenId.HasValue && dokumenElementIds.Contains(visual.DokumenElemenId.Value))))
                 .ExecuteDeleteAsync(cancellationToken);
 
             var deletedNote = await _db.DokumenNotes
-                .ExecuteDeleteAsync(cancellationToken);
-
-            var deletedMedia = await _db.DokumenMedias
-                .Where(media => media.DokumenId != null)
+                .Where(note => note.DnoteRefTipe == "dokumen")
                 .ExecuteDeleteAsync(cancellationToken);
 
             var deletedParagraphFormat = await DeleteByChunkAsync(
@@ -181,21 +169,9 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
                 context.FormatRefs.TableFormatIds,
                 chunk => _db.DokumenFormatTables.Where(item => chunk.Contains(item.DftId)).ExecuteDeleteAsync(cancellationToken));
 
-            var deletedTableRowFormat = await DeleteByChunkAsync(
-                context.FormatRefs.TableRowFormatIds,
-                chunk => _db.DokumenFormatTableRows.Where(item => chunk.Contains(item.DftrId)).ExecuteDeleteAsync(cancellationToken));
-
-            var deletedTableCellFormat = await DeleteByChunkAsync(
-                context.FormatRefs.TableCellFormatIds,
-                chunk => _db.DokumenFormatTableCells.Where(item => chunk.Contains(item.DftcId)).ExecuteDeleteAsync(cancellationToken));
-
             var deletedDrawingFormat = await DeleteByChunkAsync(
                 context.FormatRefs.DrawingFormatIds,
                 chunk => _db.DokumenFormatDrawings.Where(item => chunk.Contains(item.DfdrId)).ExecuteDeleteAsync(cancellationToken));
-
-            var deletedFieldFormat = await DeleteByChunkAsync(
-                context.FormatRefs.FieldFormatIds,
-                chunk => _db.DokumenFormatFields.Where(item => chunk.Contains(item.DffdId)).ExecuteDeleteAsync(cancellationToken));
 
             var deletedElemen = await _db.DokumenElemens
                 .Where(element => element.DpartId.HasValue && dokumenPartIds.Contains(element.DpartId.Value))
@@ -227,7 +203,6 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
                 DeletedElemen = deletedElemen,
                 DeletedVisual = deletedVisual,
                 DeletedNote = deletedNote,
-                DeletedMedia = deletedMedia,
                 DeletedKesalahan = deletedKesalahan,
                 DeletedKesalahanDetail = deletedKesalahanDetail,
                 DeletedAdobeLog = deletedAdobeLog,
@@ -235,10 +210,7 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
                 DeletedParagraphFormat = deletedParagraphFormat,
                 DeletedTextFormat = deletedTextFormat,
                 DeletedTableFormat = deletedTableFormat,
-                DeletedTableRowFormat = deletedTableRowFormat,
-                DeletedTableCellFormat = deletedTableCellFormat,
                 DeletedDrawingFormat = deletedDrawingFormat,
-                DeletedFieldFormat = deletedFieldFormat,
                 StorageTargets = context.StorageDirectories.Count
             };
         });
@@ -271,7 +243,6 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
             DeletedElemen = dbResult.DeletedElemen,
             DeletedVisual = dbResult.DeletedVisual,
             DeletedNote = dbResult.DeletedNote,
-            DeletedMedia = dbResult.DeletedMedia,
             DeletedKesalahan = dbResult.DeletedKesalahan,
             DeletedKesalahanDetail = dbResult.DeletedKesalahanDetail,
             DeletedAdobeLog = dbResult.DeletedAdobeLog,
@@ -279,10 +250,7 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
             DeletedParagraphFormat = dbResult.DeletedParagraphFormat,
             DeletedTextFormat = dbResult.DeletedTextFormat,
             DeletedTableFormat = dbResult.DeletedTableFormat,
-            DeletedTableRowFormat = dbResult.DeletedTableRowFormat,
-            DeletedTableCellFormat = dbResult.DeletedTableCellFormat,
             DeletedDrawingFormat = dbResult.DeletedDrawingFormat,
-            DeletedFieldFormat = dbResult.DeletedFieldFormat,
             StorageTargets = dbResult.StorageTargets,
             DeletedStorageDirectories = deletedStorageDirectories,
             FailedStorageDirectories = failedStorageDirectories
@@ -295,6 +263,9 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
             .AsNoTracking()
             .Select(d => new DokumenStorageRow(d.DokumenId, d.MhsNrp))
             .ToListAsync(cancellationToken);
+        var dokumenIds = dokumens
+            .Select(d => (uint)d.DokumenId)
+            .ToArray();
 
         var queueRows = await _db.Antrians
             .AsNoTracking()
@@ -331,9 +302,13 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
         var formatRefs = new JsonFormatReferenceSet();
         foreach (var element in elements)
             CollectFormatIds(element.Json, formatRefs);
+        var elementIds = elements
+            .Select(element => element.DelemenId)
+            .ToArray();
 
         var notes = await _db.DokumenNotes
             .AsNoTracking()
+            .Where(note => note.DnoteRefTipe == "dokumen")
             .Select(note => new NoteJsonRow(note.DnoteId, note.DnoteJsonTree))
             .ToListAsync(cancellationToken);
 
@@ -350,21 +325,21 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
             .Where(k => k.KesalahanRefTipe == KesalahanRefTipe.dokumen)
             .Select(k => k.KesalahanId);
 
-        var visualCount = partIds.Count == 0
-            ? await _db.DokumenElemenVisuals
-                .AsNoTracking()
-                .CountAsync(visual => visual.DevRefTipe == "dokumen", cancellationToken)
-            : await _db.DokumenElemenVisuals
-                .AsNoTracking()
-                .CountAsync(visual => visual.DevRefTipe == "dokumen" ||
-                                      (visual.DokumenElemenId.HasValue && elements.Select(e => e.DelemenId).Contains(visual.DokumenElemenId.Value)),
-                    cancellationToken);
+        var visualCount = await _db.DokumenElemenVisuals
+            .AsNoTracking()
+            .CountAsync(
+                visual => ((visual.DevRefTipe == "dokumen" &&
+                            visual.DevRefId.HasValue &&
+                            dokumenIds.Contains(visual.DevRefId.Value)) ||
+                           (visual.DokumenElemenId.HasValue && elementIds.Contains(visual.DokumenElemenId.Value))),
+                cancellationToken);
 
         var storageDirectories = BuildStorageDirectories(dokumens);
 
         return new PurgeContext
         {
             DokumenCount = dokumens.Count,
+            DokumenIds = dokumenIds,
             AntrianCount = queueRows.Count,
             ActiveQueueCount = queueRows.Count(IsQueueActive),
             SectionCount = sectionIds.Count,
@@ -372,7 +347,6 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
             ElementCount = elements.Count,
             VisualCount = visualCount,
             NoteCount = notes.Count,
-            MediaCount = await _db.DokumenMedias.AsNoTracking().CountAsync(media => media.DokumenId != null, cancellationToken),
             KesalahanCount = await _db.Kesalahans.AsNoTracking().CountAsync(k => k.KesalahanRefTipe == KesalahanRefTipe.dokumen, cancellationToken),
             KesalahanDetailCount = await _db.KesalahanDetails.AsNoTracking().CountAsync(detail => dokumenKesalahanIds.Contains(detail.KesalahanId), cancellationToken),
             AdobeLogCount = await _db.AdobeApiLogs.AsNoTracking().CountAsync(log => log.AntrianId.HasValue && dokumenQueueIds.Contains(log.AntrianId.Value), cancellationToken),
@@ -463,17 +437,8 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
                         case "dft_id":
                             AddUInt(property.Value, refs.TableFormatIds);
                             break;
-                        case "dftr_id":
-                            AddUInt(property.Value, refs.TableRowFormatIds);
-                            break;
-                        case "dftc_id":
-                            AddUInt(property.Value, refs.TableCellFormatIds);
-                            break;
                         case "dfdr_id":
                             AddULong(property.Value, refs.DrawingFormatIds);
-                            break;
-                        case "dffd_id":
-                            AddULong(property.Value, refs.FieldFormatIds);
                             break;
                     }
 
@@ -529,6 +494,7 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
     private sealed class PurgeContext
     {
         public int DokumenCount { get; init; }
+        public required uint[] DokumenIds { get; init; }
         public int AntrianCount { get; init; }
         public int ActiveQueueCount { get; init; }
         public int SectionCount { get; init; }
@@ -536,7 +502,6 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
         public int ElementCount { get; init; }
         public int VisualCount { get; init; }
         public int NoteCount { get; init; }
-        public int MediaCount { get; init; }
         public int KesalahanCount { get; init; }
         public int KesalahanDetailCount { get; init; }
         public int AdobeLogCount { get; init; }
@@ -551,10 +516,7 @@ public sealed class DokumenHistoryPurgeService : IDokumenHistoryPurgeService
         public HashSet<uint> ParagraphFormatIds { get; } = new();
         public HashSet<uint> TextFormatIds { get; } = new();
         public HashSet<uint> TableFormatIds { get; } = new();
-        public HashSet<uint> TableRowFormatIds { get; } = new();
-        public HashSet<uint> TableCellFormatIds { get; } = new();
         public HashSet<ulong> DrawingFormatIds { get; } = new();
-        public HashSet<ulong> FieldFormatIds { get; } = new();
     }
 
     private sealed record DokumenStorageRow(int DokumenId, string? MhsNrp);

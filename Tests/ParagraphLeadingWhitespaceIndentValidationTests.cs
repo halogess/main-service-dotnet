@@ -145,7 +145,6 @@ public class ParagraphLeadingWhitespaceIndentValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "paragraf",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {

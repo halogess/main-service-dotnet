@@ -227,7 +227,6 @@ public class PageEndBlankLinesValidationTests
                 AturanDetailKategori = "Nomor Halaman",
                 AturanDetailKey = "nomor_halaman",
                 AturanDetailJsonValue = $"{{\"variation\":{{\"different_first_page\":{{\"enabled\":{{\"value\":{differentFirstPage.ToString().ToLowerInvariant()}}}}}}}}}",
-                AturanDetailStatus = 1
             });
         }
 

@@ -323,7 +323,6 @@ public class NomorHalamanValidationTests
                 AturanDetailKategori = "Nomor Halaman",
                 AturanDetailKey = "nomor_halaman",
                 AturanDetailJsonValue = """{"variation":{"different_first_page":{"enabled":{"value":true}}}}""",
-                AturanDetailStatus = 1
             });
         }
 

@@ -10,17 +10,13 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<Dokumen> Dokumens { get; set; }
     public DbSet<DokumenElemen> DokumenElemens { get; set; }
     public DbSet<DokumenElemenVisual> DokumenElemenVisuals { get; set; }
-    public DbSet<DokumenMedia> DokumenMedias { get; set; }
     public DbSet<DokumenSection> DokumenSections { get; set; }
     public DbSet<DokumenPart> DokumenParts { get; set; }
     public DbSet<DokumenNote> DokumenNotes { get; set; }
     public DbSet<DokumenFormatParagraf> DokumenFormatParagrafs { get; set; }
     public DbSet<DokumenFormatTable> DokumenFormatTables { get; set; }
-    public DbSet<DokumenFormatTableRow> DokumenFormatTableRows { get; set; }
-    public DbSet<DokumenFormatTableCell> DokumenFormatTableCells { get; set; }
     public DbSet<DokumenFormatText> DokumenFormatTexts { get; set; }
     public DbSet<DokumenFormatDrawing> DokumenFormatDrawings { get; set; }
-    public DbSet<DokumenFormatField> DokumenFormatFields { get; set; }
 
     public DbSet<AdobeCredential> AdobeCredentials { get; set; }
     public DbSet<AdobeApiLog> AdobeApiLogs { get; set; }
@@ -31,9 +27,6 @@ public class KorektorBukuDbContext : DbContext
     public DbSet<Kesalahan> Kesalahans { get; set; }
     public DbSet<KesalahanDetail> KesalahanDetails { get; set; }
     public DbSet<GeminiApiKey> GeminiApiKeys { get; set; }
-    public DbSet<Template> Templates { get; set; }
-    public DbSet<TemplateDetail> TemplateDetails { get; set; }
-    public DbSet<TemplateGeneration> TemplateGenerations { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -55,6 +48,9 @@ public class KorektorBukuDbContext : DbContext
 
             entity.Property(e => e.BukuPdfZipPath)
                 .HasMaxLength(100);
+
+            entity.Property(e => e.BukuAturanVersiValidasi)
+                .HasMaxLength(255);
         });
 
         modelBuilder.Entity<Bab>(entity =>
@@ -95,11 +91,6 @@ public class KorektorBukuDbContext : DbContext
             entity.Property(e => e.DevText).HasColumnType("longtext");
         });
 
-        modelBuilder.Entity<DokumenMedia>(entity =>
-        {
-            entity.HasKey(e => e.DokumenMediaId);
-        });
-
         modelBuilder.Entity<DokumenSection>(entity =>
         {
             entity.HasKey(e => e.DsecId);
@@ -121,6 +112,11 @@ public class KorektorBukuDbContext : DbContext
         modelBuilder.Entity<DokumenNote>(entity =>
         {
             entity.HasKey(e => e.DnoteId);
+            if (!isSqlite)
+            {
+                entity.Property(e => e.DnoteRefTipe)
+                    .HasColumnType("enum('dokumen','bab','aturan')");
+            }
             entity.Property(e => e.DnoteJsonTree).HasColumnType("longtext");
             entity.HasOne(e => e.Elemen)
                 .WithMany(e => e.Notes)
@@ -131,54 +127,22 @@ public class KorektorBukuDbContext : DbContext
         {
             entity.HasKey(e => e.DfpId);
             entity.Property(e => e.DfpNumprJson).HasColumnType("longtext");
-            entity.Property(e => e.DfpPbdrJson).HasColumnType("longtext");
-            entity.Property(e => e.DfpShdJson).HasColumnType("longtext");
             entity.Property(e => e.DfpTabsJson).HasColumnType("longtext");
-            entity.Property(e => e.DfpCnfStyleJson).HasColumnType("longtext");
-            entity.Property(e => e.DfpParaMarkRprJson).HasColumnType("longtext");
-            entity.Property(e => e.DfpPprChangeJson).HasColumnType("longtext");
-            entity.Property(e => e.DfpRawPprXml).HasColumnType("longtext");
         });
 
         modelBuilder.Entity<DokumenFormatTable>(entity =>
         {
             entity.HasKey(e => e.DftId);
-            entity.Property(e => e.DftTblBordersJson).HasColumnType("longtext");
-            entity.Property(e => e.DftTblpprJson).HasColumnType("longtext");
-            entity.Property(e => e.DftRawTblprXml).HasColumnType("longtext");
-        });
-
-        modelBuilder.Entity<DokumenFormatTableRow>(entity =>
-        {
-            entity.HasKey(e => e.DftrId);
-            entity.Property(e => e.DftrRawTrprXml).HasColumnType("longtext");
-        });
-
-        modelBuilder.Entity<DokumenFormatTableCell>(entity =>
-        {
-            entity.HasKey(e => e.DftcId);
-            entity.Property(e => e.DftcRawTcprXml).HasColumnType("longtext");
         });
 
         modelBuilder.Entity<DokumenFormatText>(entity =>
         {
             entity.HasKey(e => e.DftxId);
-            entity.Property(e => e.DftxRawRprXml).HasColumnType("longtext");
         });
 
         modelBuilder.Entity<DokumenFormatDrawing>(entity =>
         {
             entity.HasKey(e => e.DfdrId);
-            entity.Property(e => e.DfdrAnchorJson).HasColumnType("longtext");
-            entity.Property(e => e.DfdrWrapJson).HasColumnType("longtext");
-            entity.Property(e => e.DfdrRawDrawingXml).HasColumnType("longtext");
-        });
-
-        modelBuilder.Entity<DokumenFormatField>(entity =>
-        {
-            entity.HasKey(e => e.DffdId);
-            entity.Property(e => e.DffdInstrText).HasColumnType("text");
-            entity.Property(e => e.DffdResultText).HasColumnType("text");
         });
 
         modelBuilder.Entity<AdobeCredential>(entity =>
@@ -277,13 +241,6 @@ public class KorektorBukuDbContext : DbContext
                 .HasDefaultValueSql("CURRENT_TIMESTAMP");
             entity.Property(e => e.GeminiApiKeyUpdatedAt)
                 .ValueGeneratedOnAddOrUpdate();
-        });
-
-        modelBuilder.Entity<Template>(entity =>
-        {
-            entity.HasKey(e => e.TemplateId);
-            entity.Property(e => e.TemplateCreatedAt)
-                .HasDefaultValueSql("CURRENT_TIMESTAMP");
         });
     }
 }

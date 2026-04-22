@@ -169,6 +169,40 @@ public class AturanControllerExportTests
     }
 
     [Fact]
+    public void BuildWorkbook_ShouldNotExportNoteColumn()
+    {
+        IReadOnlyList<AturanDetail> details =
+        [
+            new AturanDetail
+            {
+                AturanDetailId = 14,
+                AturanId = 1,
+                AturanDetailKategori = "Isi Buku",
+                AturanDetailKey = "judul_bab",
+                AturanDetailJsonValue = """
+                                        {
+                                          "font": {
+                                            "font_name": { "value": "Times New Roman", "is_editable": true, "is_hard_constraint": false }
+                                          }
+                                        }
+                                        """
+            }
+        ];
+
+        var bytes = AturanExcelExportBuilder.BuildWorkbook("v1-export", details);
+
+        using var stream = new MemoryStream(bytes);
+        using var workbook = new XLWorkbook(stream);
+        var worksheet = workbook.Worksheet("Aturan");
+        var headers = worksheet.Row(1).CellsUsed().Select(cell => cell.GetString()).ToList();
+
+        Assert.Equal(
+            ["Elemen", "Kategori", "Sub Kategori", "Kriteria", "Value", "Hard Constraint"],
+            headers);
+        Assert.True(worksheet.Column(7).IsEmpty());
+    }
+
+    [Fact]
     public void BuildWorkbook_ShouldIncludeOnlyVisibleSyntheticValidationRulesOnAturanSheet()
     {
         IReadOnlyList<AturanDetail> details =

@@ -94,8 +94,7 @@ static async Task<List<AturanDetailRow>> LoadDetailsAsync(MySqlConnection connec
         SELECT aturan_detail_id,
                aturan_id,
                aturan_detail_key,
-               aturan_detail_json_value,
-               aturan_detail_status
+               aturan_detail_json_value
         FROM aturan_detail
         """
         + (aturanIds.Count == 0
@@ -123,8 +122,7 @@ static async Task<List<AturanDetailRow>> LoadDetailsAsync(MySqlConnection connec
             Id: reader.GetUInt32("aturan_detail_id"),
             AturanId: reader.GetUInt32("aturan_id"),
             Key: reader.IsDBNull(reader.GetOrdinal("aturan_detail_key")) ? null : reader.GetString(reader.GetOrdinal("aturan_detail_key")),
-            JsonValue: reader.IsDBNull(reader.GetOrdinal("aturan_detail_json_value")) ? null : reader.GetString(reader.GetOrdinal("aturan_detail_json_value")),
-            Status: reader.GetSByte("aturan_detail_status")));
+            JsonValue: reader.IsDBNull(reader.GetOrdinal("aturan_detail_json_value")) ? null : reader.GetString(reader.GetOrdinal("aturan_detail_json_value"))));
     }
 
     return rows;
@@ -234,5 +232,4 @@ internal sealed record AturanDetailRow(
     uint Id,
     uint AturanId,
     string? Key,
-    string? JsonValue,
-    sbyte Status);
+    string? JsonValue);

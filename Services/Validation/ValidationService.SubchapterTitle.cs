@@ -49,7 +49,7 @@ public partial class ValidationService
         }
 
         var subbabDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanId == aturan.AturanId)
             .Where(d => d.AturanDetailKategori == "Isi Buku")
             .Where(d => d.AturanDetailKey == "judul_subbab")
             .FirstOrDefaultAsync(cancellationToken);
@@ -175,7 +175,11 @@ public partial class ValidationService
             minimumSameLevelSubchapters,
             neighborContexts,
             expectedChapterNumber,
-            sequenceLocationsByElementId);
+            sequenceLocationsByElementId,
+            rule?.Numbering?.NumberFormat?.IsHardConstraint == true,
+            rule?.StrukturKonten?.MinimalSubbabLevelSama?.Value is { }
+                ? rule.StrukturKonten?.MinimalSubbabLevelSama?.IsHardConstraint == true
+                : rule?.StrukturKonten?.CegahSubbabTunggal?.IsHardConstraint == true);
 
         // --- Validate paragraph after subchapter (based on struktur_konten rule) ---
         var expectedParagraphAfterCount = rule?.StrukturKonten?.MinimalParagrafSetelah?.Value is { } configuredParagraphCount
@@ -185,6 +189,10 @@ public partial class ValidationService
         
         if (expectedParagraphAfterCount > 0 || preventBottomPosition)
         {
+            var paragraphAfterHardConstraint = rule?.StrukturKonten?.MinimalParagrafSetelah?.Value is { }
+                ? rule.StrukturKonten?.MinimalParagrafSetelah?.IsHardConstraint == true
+                : rule?.StrukturKonten?.MinimalSatuParagrafSetelah?.IsHardConstraint == true;
+            var bottomPositionHardConstraint = rule?.StrukturKonten?.CegahPosisiPalingBawah?.IsHardConstraint == true;
             await ValidateParagraphAfterSubchapterAsync(
                 result,
                 bodyElements,
@@ -195,6 +203,8 @@ public partial class ValidationService
                 neighborContexts,
                 expectedParagraphAfterCount,
                 preventBottomPosition,
+                paragraphAfterHardConstraint,
+                bottomPositionHardConstraint,
                 cancellationToken);
         }
 
@@ -206,6 +216,7 @@ public partial class ValidationService
 
         if (expectedBlankParagraphCount > 0)
         {
+            var blankParagraphHardConstraint = rule?.StrukturKonten?.JumlahBarisKosongSebelum?.IsHardConstraint == true;
             await ValidateBlankParagraphBeforeSubchapterAsync(
                 result,
                 bodyElements,
@@ -217,6 +228,7 @@ public partial class ValidationService
                 paragraphRule,
                 expectedBlankParagraphCount,
                 ignoreBlankParagraphAtPageTop,
+                blankParagraphHardConstraint,
                 cancellationToken);
         }
 
@@ -311,7 +323,7 @@ public partial class ValidationService
         var expectedFontName = rule?.Font?.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontName?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -365,7 +377,7 @@ public partial class ValidationService
         var expectedFontSize = rule?.Font?.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
             if (runs.Count > 0)
             {
@@ -425,7 +437,7 @@ public partial class ValidationService
         var expectedBold = rule?.Font?.FontStyle?.Bold?.Value;
         if (expectedBold.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontStyle?.Bold?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -479,7 +491,7 @@ public partial class ValidationService
         var expectedItalic = rule?.Font?.FontStyle?.Italic?.Value;
         if (expectedItalic.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontStyle?.Italic?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -533,7 +545,7 @@ public partial class ValidationService
         var expectedUnderline = rule?.Font?.FontStyle?.Underline?.Value;
         if (expectedUnderline.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontStyle?.Underline?.IsHardConstraint == true);
             if (runs.Count > 0)
             {
                 var mismatches = CollectRunMismatches(
@@ -613,7 +625,7 @@ public partial class ValidationService
         var expectedAlignment = rule?.Paragraph?.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Alignment?.IsHardConstraint == true);
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(evidence, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
@@ -638,7 +650,7 @@ public partial class ValidationService
         var expectedLeftIndent = rule?.Paragraph?.Indentation?.LeftIndent?.Value;
         if (expectedLeftIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Indentation?.LeftIndent?.IsHardConstraint == true);
             var leftCm = GetLeftIndentCm(format);
 
             if (Math.Abs(leftCm - expectedLeftIndent.Value) <= 0.05m)
@@ -663,7 +675,7 @@ public partial class ValidationService
         var expectedRightIndent = rule?.Paragraph?.Indentation?.RightIndent?.Value;
         if (expectedRightIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Paragraph?.Indentation?.RightIndent?.IsHardConstraint == true);
             var rightCm = GetRightIndentCm(format);
 
             if (Math.Abs(rightCm - expectedRightIndent.Value) <= 0.05m)
@@ -690,7 +702,9 @@ public partial class ValidationService
         var hangingMaxCm = rule?.Paragraph?.HangingMaxCm?.Value;
         if (hangingMinCm.HasValue || hangingMaxCm.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(
+                rule.Paragraph?.HangingMinCm?.IsHardConstraint == true ||
+                rule.Paragraph?.HangingMaxCm?.IsHardConstraint == true);
 
             // Get hanging indent in twips and convert to cm
             var hangingTwips = format.DfpIndHangingTwips ?? 0;
@@ -744,7 +758,7 @@ public partial class ValidationService
         var spacingRule = rule?.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
@@ -770,7 +784,7 @@ public partial class ValidationService
         // Spacing Before
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -796,7 +810,7 @@ public partial class ValidationService
         // Spacing After
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 
@@ -832,7 +846,7 @@ public partial class ValidationService
         var expectedCase = rule?.Numbering?.Case?.Value;
         if (!string.IsNullOrWhiteSpace(expectedCase) && !string.IsNullOrWhiteSpace(subchapterTitle))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Numbering?.Case?.IsHardConstraint == true);
             var isTitleCase = IsTitleCase(subchapterTitle);
 
             if (expectedCase.Equals("Title Case", StringComparison.OrdinalIgnoreCase) && isTitleCase)
@@ -1108,6 +1122,8 @@ public partial class ValidationService
         Dictionary<ulong, ElementNeighborContext> contextById,
         int expectedParagraphCount,
         bool validateBottomPosition,
+        bool paragraphAfterHardConstraint,
+        bool bottomPositionHardConstraint,
         CancellationToken cancellationToken)
     {
         // Build index mapping for body elements
@@ -1135,7 +1151,7 @@ public partial class ValidationService
             // --- Validate paragraph after subchapter (based on struktur_konten rule) ---
             if (expectedParagraphCount > 0)
             {
-                result.IncrementTotalChecks();
+                result.IncrementTotalChecks(paragraphAfterHardConstraint);
 
                 var paragraphCount = 0;
                 var cursor = subchapterIndex + 1;
@@ -1208,7 +1224,14 @@ public partial class ValidationService
             // --- Check if subchapter is at bottom of page (based on struktur_konten rule) ---
             if (validateBottomPosition)
             {
-                await ValidateSubchapterPositionAsync(result, subchapterId, plainText, locations, context, cancellationToken);
+                await ValidateSubchapterPositionAsync(
+                    result,
+                    subchapterId,
+                    plainText,
+                    locations,
+                    context,
+                    bottomPositionHardConstraint,
+                    cancellationToken);
             }
         }
     }
@@ -1224,6 +1247,7 @@ public partial class ValidationService
         ParagraphRule? paragraphRule,
         int expectedBlankParagraphCount,
         bool ignoreBlankParagraphAtPageTop,
+        bool blankParagraphHardConstraint,
         CancellationToken cancellationToken)
     {
         var elementIndexMap = new Dictionary<ulong, int>();
@@ -1261,7 +1285,7 @@ public partial class ValidationService
                 elementContentById,
                 visualSummaryById);
 
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(blankParagraphHardConstraint);
             if (blankElementIds.Count == expectedBlankParagraphCount)
             {
                 result.IncrementPassedChecks();
@@ -1603,6 +1627,7 @@ public partial class ValidationService
         string evidence,
         List<ErrorLocation> locations,
         ElementNeighborContext? context,
+        bool isHardConstraint,
         CancellationToken cancellationToken)
     {
         // Get page + Y1 position from dokumen_elemen_visual using raw SQL
@@ -1703,7 +1728,7 @@ public partial class ValidationService
                 await connection.CloseAsync();
         }
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         if (hasElementBelow)
         {
             result.IncrementPassedChecks();
@@ -1733,7 +1758,9 @@ public partial class ValidationService
         int minimumSameLevelSubchapters,
         Dictionary<ulong, ElementNeighborContext> contextById,
         int? expectedChapterNumber,
-        IReadOnlyDictionary<ulong, List<ErrorLocation>> locationsByElementId)
+        IReadOnlyDictionary<ulong, List<ErrorLocation>> locationsByElementId,
+        bool numberingHardConstraint,
+        bool sameLevelHardConstraint)
     {
         // Extract all subchapter numbers in document order.
         var numbersWithEvidence = new List<(ulong Id, int[] Parts, string Number, string Evidence)>();
@@ -1780,7 +1807,7 @@ public partial class ValidationService
         }
 
         var duplicateIds = new HashSet<ulong>();
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(numberingHardConstraint);
         var hasDuplicateError = false;
 
         foreach (var duplicateGroup in numbersWithEvidence
@@ -1813,7 +1840,7 @@ public partial class ValidationService
 
         if (expectedChapterNumber.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberingHardConstraint);
             var hasChapterMismatch = false;
             var expectedChapterText = expectedChapterNumber.Value.ToString(CultureInfo.InvariantCulture);
 
@@ -1883,7 +1910,7 @@ public partial class ValidationService
 
             hierarchicalNodes.Sort((left, right) => CompareSubchapterParts(left.Parts, right.Parts));
 
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberingHardConstraint || sameLevelHardConstraint);
             var hasSequenceError = false;
             var sequenceErrorIds = new HashSet<ulong>();
 

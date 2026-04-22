@@ -49,7 +49,7 @@ public partial class ValidationService
             return result;
 
         var formulaDetail = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanId == aturan.AturanId)
             .Where(d => d.AturanDetailKategori == "Isi Buku")
             .Where(d => d.AturanDetailKey == "rumus")
             .FirstOrDefaultAsync(cancellationToken);
@@ -325,7 +325,7 @@ public partial class ValidationService
 
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontName?.IsHardConstraint == true);
             var mismatches = CollectRunMismatches(
                 runs,
                 textFormatById,
@@ -353,7 +353,7 @@ public partial class ValidationService
 
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Font?.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
             var mismatches = CollectRunMismatches(
                 runs,
@@ -413,15 +413,15 @@ public partial class ValidationService
         if (format == null)
             return;
 
-        var expectedAlignments = new List<(string? Expected, string Message)>
+        var expectedAlignments = new List<(string? Expected, string Message, bool IsHardConstraint)>
         {
-            (rule.Paragraph?.Alignment?.Value, "Alignment rumus tidak sesuai"),
-            (rule.Position?.ParagraphAlignment?.Value, "Paragraph alignment rumus tidak sesuai"),
-            (rule.Position?.EquationAlignment?.Value, "Equation alignment rumus tidak sesuai")
+            (rule.Paragraph?.Alignment?.Value, "Alignment rumus tidak sesuai", rule.Paragraph?.Alignment?.IsHardConstraint == true),
+            (rule.Position?.ParagraphAlignment?.Value, "Paragraph alignment rumus tidak sesuai", rule.Position?.ParagraphAlignment?.IsHardConstraint == true),
+            (rule.Position?.EquationAlignment?.Value, "Equation alignment rumus tidak sesuai", rule.Position?.EquationAlignment?.IsHardConstraint == true)
         };
 
         var checkedAlignments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (expectedAlignment, message) in expectedAlignments)
+        foreach (var (expectedAlignment, message, isHardConstraint) in expectedAlignments)
         {
             if (string.IsNullOrWhiteSpace(expectedAlignment))
                 continue;
@@ -430,7 +430,7 @@ public partial class ValidationService
             if (!checkedAlignments.Add(normalizedExpected))
                 continue;
 
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(isHardConstraint);
             var actual = format.DfpJc ?? "unknown";
             var alignmentContext = CreateAlignmentContext(formulaText, locations, pageLayout);
             if (AreAlignmentsEquivalent(actual, expectedAlignment, alignmentContext))
@@ -462,7 +462,9 @@ public partial class ValidationService
 
         if (expectedFirstLineIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(
+                indentationRule?.FirstLineIndent?.IsHardConstraint == true ||
+                indentationRule?.FirstLineIndentCm?.IsHardConstraint == true);
             var firstLineObservation = ObserveFirstLineIndent(format, formulaText);
 
             if (Math.Abs(firstLineObservation.ActualCm - expectedFirstLineIndent.Value) <= 0.05m &&
@@ -495,7 +497,10 @@ public partial class ValidationService
 
         if (expectedLeftIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(
+                indentationRule?.LeftIndent?.IsHardConstraint == true ||
+                indentationRule?.LeftIndentCm?.IsHardConstraint == true ||
+                indentationRule?.LeftCm?.IsHardConstraint == true);
             if (Math.Abs(leftCm - expectedLeftIndent.Value) <= 0.05m)
             {
                 result.IncrementPassedChecks();
@@ -517,7 +522,7 @@ public partial class ValidationService
 
         if (expectedOverallIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Position?.OverallIndentCm?.IsHardConstraint == true);
             if (Math.Abs(leftCm - expectedOverallIndent.Value) <= 0.05m)
             {
                 result.IncrementPassedChecks();
@@ -538,7 +543,7 @@ public partial class ValidationService
         }
 
         var expectedRightIndent = rule.Paragraph?.Indentation?.RightIndent?.Value ?? 0m;
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Paragraph?.Indentation?.RightIndent?.IsHardConstraint == true);
         var rightCm = GetRightIndentCm(format);
         if (Math.Abs(rightCm - expectedRightIndent) <= 0.05m)
         {
@@ -561,7 +566,7 @@ public partial class ValidationService
         var spacingRule = rule.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
@@ -586,7 +591,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -613,7 +618,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 
@@ -702,7 +707,12 @@ public partial class ValidationService
         var preferRight = tabName.Equals("right", StringComparison.OrdinalIgnoreCase);
         var actualTab = FindFormulaTabStop(tabStops, expectedAlignment, preferRight);
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(
+            tabRule.Alignment?.IsHardConstraint == true ||
+            tabRule.LeaderStyle?.IsHardConstraint == true ||
+            tabRule.PositionCm?.IsHardConstraint == true ||
+            tabRule.DistanceFromEquationCm?.IsHardConstraint == true ||
+            tabRule.DependsOnEquationLength?.IsHardConstraint == true);
         if (actualTab == null)
         {
             result.Errors.Add(new ValidationError
@@ -721,7 +731,7 @@ public partial class ValidationService
 
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(tabRule.Alignment?.IsHardConstraint == true);
             if (string.Equals(actualTab.Alignment, expectedAlignment, StringComparison.OrdinalIgnoreCase))
             {
                 result.IncrementPassedChecks();
@@ -743,7 +753,7 @@ public partial class ValidationService
 
         if (!string.IsNullOrWhiteSpace(expectedLeader))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(tabRule.LeaderStyle?.IsHardConstraint == true);
             if (string.Equals(actualTab.LeaderStyle, expectedLeader, StringComparison.OrdinalIgnoreCase))
             {
                 result.IncrementPassedChecks();
@@ -765,7 +775,7 @@ public partial class ValidationService
 
         if (expectedPositionCm.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(tabRule.PositionCm?.IsHardConstraint == true);
             if (actualTab.PositionCm.HasValue && Math.Abs(actualTab.PositionCm.Value - expectedPositionCm.Value) <= 0.15m)
             {
                 result.IncrementPassedChecks();
@@ -786,7 +796,9 @@ public partial class ValidationService
         }
         else if (expectedDistanceCm.HasValue && dependsOnEquationLength)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(
+                tabRule.DistanceFromEquationCm?.IsHardConstraint == true ||
+                tabRule.DependsOnEquationLength?.IsHardConstraint == true);
             if (actualTab.PositionCm.HasValue && actualTab.PositionCm.Value + 0.15m >= expectedDistanceCm.Value)
             {
                 result.IncrementPassedChecks();
@@ -940,7 +952,7 @@ public partial class ValidationService
         if (string.IsNullOrWhiteSpace(expectedFormat))
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Numbering?.NumberFormat?.IsHardConstraint == true);
 
         var numberToken = ExtractFormulaNumberToken(content.PlainText);
         if (string.IsNullOrWhiteSpace(numberToken))
@@ -1027,7 +1039,10 @@ public partial class ValidationService
         if (!pageNumbersById.TryGetValue(formulaElement.ElementId, out var pageNumber) || pageNumber <= 0)
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(
+            rule.Position?.CegahMemenuhiHalaman?.IsHardConstraint == true ||
+            rule.StrukturHalaman?.CegahMemenuhiHalaman?.IsHardConstraint == true ||
+            rule.StrukturHalaman?.MinimalSatuParagrafDiHalaman?.IsHardConstraint == true);
         if (pagesWithNonFormulaParagraph.Contains(pageNumber))
         {
             result.IncrementPassedChecks();

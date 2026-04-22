@@ -528,13 +528,13 @@ public partial class GeminiService
         if (normalized.StartsWith("column"))
             return "page_settings";
         if (normalized == "different_odd_even")
-            return "page_numbering";
+            return "nomor_halaman";
         if (normalized == "different_first_page")
-            return "page_numbering";
+            return "nomor_halaman";
         if (normalized.StartsWith("page_number"))
-            return "page_numbering";
+            return "nomor_halaman";
         if (normalized.StartsWith("paper"))
-            return "paper";
+            return "page_settings";
 
         return normalized;
     }
@@ -551,6 +551,7 @@ public partial class GeminiService
         {
             "judul_bab" => "Aturan format judul bab (font, spacing, alignment, numbering)",
             "page_settings" => "Aturan pengaturan halaman (kertas, margin, header/footer, gutter, kolom, akhir halaman)",
+            "nomor_halaman" => "Aturan penomoran halaman",
             "paper" => "Aturan ukuran kertas dan orientasi",
             "paper_size" => "Aturan ukuran kertas",
             "margin" => "Aturan margin halaman",

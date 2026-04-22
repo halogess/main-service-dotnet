@@ -18,10 +18,6 @@ public class TextFormatExtractor
         var format = new DokumenFormatText();
         var rPr = run.RunProperties;
         
-        // Store raw XML for debugging
-        if (rPr != null)
-            format.DftxRawRprXml = rPr.OuterXml;
-        
         if (rPr == null)
             return format;
         
@@ -91,10 +87,6 @@ public class TextFormatExtractor
         
         // Get effective properties with full inheritance
         var effective = styleResolver.GetEffectiveRunProperties(run, paragraphProps);
-        
-        // Store raw XML of direct formatting for debugging
-        if (run.RunProperties != null)
-            format.DftxRawRprXml = run.RunProperties.OuterXml;
         
         // Map effective properties to format model
         format.DftxFontAscii = ResolvePreferredFont(effective, run, themeFontLangResolver, themeFontResolver);

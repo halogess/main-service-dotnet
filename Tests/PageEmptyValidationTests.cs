@@ -188,7 +188,6 @@ public class PageEmptyValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Pengaturan Halaman",
                 AturanDetailKey = "page_settings",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {
@@ -209,7 +208,6 @@ public class PageEmptyValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Nomor Halaman",
                 AturanDetailKey = "nomor_halaman",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {

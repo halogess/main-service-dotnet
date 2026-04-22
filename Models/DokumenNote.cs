@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 namespace ValidasiTugasAkhir.MainService.Models;
 
 /// <summary>
-/// Represents a footnote or endnote in a document (document-wide, not section-specific)
+/// Represents a footnote or endnote scoped to a specific extracted reference target.
 /// </summary>
 [Table("dokumen_note")]
 public class DokumenNote
@@ -13,11 +13,12 @@ public class DokumenNote
     [Column("dnote_id")]
     public uint DnoteId { get; set; }
 
-    /// <summary>
-    /// Link to the parent document
-    /// </summary>
-    [Column("dokumen_id")]
-    public uint DokumenId { get; set; }
+    [Column("dnote_ref_tipe")]
+    [MaxLength(16)]
+    public string DnoteRefTipe { get; set; } = "dokumen";
+
+    [Column("dnote_ref_id")]
+    public uint DnoteRefId { get; set; }
 
     /// <summary>
     /// Link to the element that contains the note reference
@@ -40,16 +41,17 @@ public class DokumenNote
     public string? DnoteType { get; set; } = "normal";
 
     /// <summary>
+    /// Visible note number/id from OpenXML for normal notes.
+    /// Separator-like notes may leave this null.
+    /// </summary>
+    [Column("dnote_number")]
+    public uint? DnoteNumber { get; set; }
+
+    /// <summary>
     /// Full structured content as JSON
     /// </summary>
     [Column("dnote_json_tree", TypeName = "longtext")]
     public string? DnoteJsonTree { get; set; }
-
-    /// <summary>
-    /// Raw XML of the note
-    /// </summary>
-    [Column("dnote_xml", TypeName = "longtext")]
-    public string DnoteXml { get; set; } = string.Empty;
 
     // Navigation properties
     public virtual DokumenElemen? Elemen { get; set; }

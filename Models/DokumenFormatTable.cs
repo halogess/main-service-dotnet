@@ -51,14 +51,4 @@ public class DokumenFormatTable
     [MaxLength(10)]
     public string? DftTblLayoutType { get; set; } // 'fixed', 'autofit'
 
-    // Complex Properties (JSON)
-    [Column("dft_tbl_borders_json", TypeName = "longtext")]
-    public string? DftTblBordersJson { get; set; }
-
-    [Column("dft_tblppr_json", TypeName = "longtext")]
-    public string? DftTblpprJson { get; set; } // Table positioning properties (for floating tables)
-
-    // Audit/debug
-    [Column("dft_raw_tblpr_xml", TypeName = "longtext")]
-    public string? DftRawTblprXml { get; set; }
 }

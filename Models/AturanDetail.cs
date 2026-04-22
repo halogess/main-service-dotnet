@@ -24,9 +24,6 @@ public class AturanDetail
     [Column("aturan_detail_json_value", TypeName = "longtext")]
     public string? AturanDetailJsonValue { get; set; }
 
-    [Column("aturan_detail_status")]
-    public sbyte AturanDetailStatus { get; set; } = 1;
-
     [Column("aturan_detail_catatan")]
     [MaxLength(255)]
     public string? AturanDetailCatatan { get; set; }

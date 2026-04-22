@@ -59,32 +59,26 @@ public partial class ValidationService
         if (aturan == null)
             return result;
 
-        // Get aturan details for page settings + nomor halaman
-        var aturanDetails = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
-            .Where(d => d.AturanDetailKategori == "Pengaturan Halaman" || d.AturanDetailKategori == "Nomor Halaman")
-            .ToListAsync(cancellationToken);
+        var aturanDetails = await LoadCanonicalDetailsAsync(
+            aturan.AturanId,
+            cancellationToken,
+            "page_settings",
+            "nomor_halaman");
 
-        // Parse rules
         PageSettingsRule? pageSettingsRule = null;
         NomorHalamanRule? nomorHalamanRule = null;
 
-        foreach (var detail in aturanDetails)
+        foreach (var detail in aturanDetails.Values)
         {
             try
             {
-                var kategori = (detail.AturanDetailKategori ?? string.Empty).Trim();
                 var key = (detail.AturanDetailKey ?? string.Empty).Trim().ToLowerInvariant();
 
-                if (kategori.Equals("Nomor Halaman", StringComparison.OrdinalIgnoreCase))
+                if (key == "nomor_halaman")
                 {
-                    if (key == "nomor_halaman")
-                    {
-                        nomorHalamanRule = JsonSerializer.Deserialize<NomorHalamanRule>(
-                            detail.AturanDetailJsonValue ?? "{}",
-                            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    }
-
+                    nomorHalamanRule = JsonSerializer.Deserialize<NomorHalamanRule>(
+                        detail.AturanDetailJsonValue ?? "{}",
+                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     continue;
                 }
 
@@ -254,7 +248,9 @@ public partial class ValidationService
 
         var expectedSize = expected.Size?.Trim().ToUpperInvariant();
         var expectedOrientation = (expected.Orientation ?? "PORTRAIT").Trim().ToUpperInvariant();
-        var isValid = expectedSize == actualSize && expectedOrientation == actualOrientation;
+        var sizeMismatch = expectedSize != actualSize;
+        var orientationMismatch = expectedOrientation != actualOrientation;
+        var isValid = !sizeMismatch && !orientationMismatch;
 
         if (isValid)
         {
@@ -269,6 +265,9 @@ public partial class ValidationService
                 Message = $"Ukuran kertas section {sectionNumber} (bagian {sectionType}) tidak sesuai",
                 Expected = FormatPaperSpec(expected),
                 Actual = actualDescriptor,
+                IsHardConstraint =
+                    (sizeMismatch && expectedPaper?.Size?.IsHardConstraint == true) ||
+                    (orientationMismatch && expectedPaper?.Orientation?.IsHardConstraint == true),
                 SectionIndex = sectionNumber,
                 Locations = BuildPageSettingsLocations("paper", section, sectionPageMap)
             });
@@ -324,10 +323,10 @@ public partial class ValidationService
             return;
 
         // Validate each margin
-        ValidateSingleMargin(result, "top", section, section.DsecMarginTopTwips, margins.Top?.Value, sectionNumber, sectionType, sectionPageMap);
-        ValidateSingleMargin(result, "bottom", section, section.DsecMarginBottomTwips, margins.Bottom?.Value, sectionNumber, sectionType, sectionPageMap);
-        ValidateSingleMargin(result, "left", section, section.DsecMarginLeftTwips, margins.Left?.Value, sectionNumber, sectionType, sectionPageMap);
-        ValidateSingleMargin(result, "right", section, section.DsecMarginRightTwips, margins.Right?.Value, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "top", section, section.DsecMarginTopTwips, margins.Top?.Value, margins.Top?.IsHardConstraint == true, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "bottom", section, section.DsecMarginBottomTwips, margins.Bottom?.Value, margins.Bottom?.IsHardConstraint == true, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "left", section, section.DsecMarginLeftTwips, margins.Left?.Value, margins.Left?.IsHardConstraint == true, sectionNumber, sectionType, sectionPageMap);
+        ValidateSingleMargin(result, "right", section, section.DsecMarginRightTwips, margins.Right?.Value, margins.Right?.IsHardConstraint == true, sectionNumber, sectionType, sectionPageMap);
     }
 
     private void ValidateSingleMargin(
@@ -336,6 +335,7 @@ public partial class ValidationService
         DokumenSection section,
         long? actualTwips,
         decimal? expectedCm,
+        bool isHardConstraint,
         int sectionNumber,
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
@@ -343,7 +343,7 @@ public partial class ValidationService
         if (!expectedCm.HasValue)
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
 
         var expectedTwips = expectedCm.Value * TwipsPerCm;
         var actualCm = actualTwips.HasValue ? actualTwips.Value / TwipsPerCm : 0;
@@ -373,6 +373,7 @@ public partial class ValidationService
         DokumenSection section,
         uint? actualTwips,
         decimal? expectedCm,
+        bool isHardConstraint,
         int sectionNumber,
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
@@ -383,6 +384,7 @@ public partial class ValidationService
             section,
             actualTwips.HasValue ? (long?)actualTwips.Value : null,
             expectedCm,
+            isHardConstraint,
             sectionNumber,
             sectionType,
             sectionPageMap);
@@ -400,7 +402,7 @@ public partial class ValidationService
         var expectedHeaderCm = rule.HeaderFromTop?.Value;
         if (expectedHeaderCm.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.HeaderFromTop?.IsHardConstraint == true);
             var expectedHeaderTwips = expectedHeaderCm.Value * TwipsPerCm;
             var actualHeaderCm = section.DsecHeaderMarginTwips.HasValue
                 ? section.DsecHeaderMarginTwips.Value / TwipsPerCm
@@ -430,7 +432,7 @@ public partial class ValidationService
         var expectedFooterCm = rule.FooterFromBottom?.Value;
         if (expectedFooterCm.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.FooterFromBottom?.IsHardConstraint == true);
             var expectedFooterTwips = expectedFooterCm.Value * TwipsPerCm;
             var actualFooterCm = section.DsecFooterMarginTwips.HasValue
                 ? section.DsecFooterMarginTwips.Value / TwipsPerCm
@@ -495,7 +497,7 @@ public partial class ValidationService
         Dictionary<uint, int> sectionPageMap)
     {
         // Validate gutter size
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Size?.IsHardConstraint == true);
         var expectedGutterCm = rule.Size?.Value ?? 0m;
         var expectedGutterTwips = expectedGutterCm * TwipsPerCm;
         var actualGutterCm = section.DsecGutterTwips.HasValue 
@@ -529,7 +531,7 @@ public partial class ValidationService
         var expectedPositionValue = rule.Position?.Value;
         if (!string.IsNullOrEmpty(expectedPositionValue))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Position?.IsHardConstraint == true);
             var actualPosition = section.DsecGutterPosition?.ToLower() ?? "left";
             var expectedPosition = expectedPositionValue.ToLowerInvariant();
 
@@ -561,7 +563,7 @@ public partial class ValidationService
         string sectionType,
         Dictionary<uint, int> sectionPageMap)
     {
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.IsHardConstraint);
         var actualColumns = (int)(section.DsecColumnCount ?? 1);
         var expectedColumns = rule.Value <= 0 ? 1 : rule.Value;
 
@@ -633,7 +635,7 @@ public partial class ValidationService
             if (contentBottomBoundary <= textAreaTop)
                 contentBottomBoundary = textAreaBottom;
 
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule?.MaxBarisKosong?.IsHardConstraint == true);
 
             var contentRows = pageGroup
                 .Where(row => HasMeaningfulBodyContent(row) && row.Y1.HasValue)
@@ -785,7 +787,7 @@ public partial class ValidationService
             if (section == null || !TryGetPageBoundsPoints(section, out var pageWidth, out var pageHeight))
                 continue;
 
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule?.CegahHalamanKosong?.IsHardConstraint == true);
 
             if (pageRows.Any(HasMeaningfulBodyContent))
             {

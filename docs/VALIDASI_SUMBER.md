@@ -85,6 +85,6 @@ Catatan import template admin:
 | Judul Subbab | urutan_sibling | Tidak boleh loncat nomor sibling (mis. 1.3 tanpa 1.2). | hardcoded/derived |
 | Paragraf | left_indent_after_list | Paragraf setelah list harus memiliki left indent sesuai aturan list/hanging yang dihitung dari item daftar terakhir. | hardcoded/derived |
 | Paragraf | hanging_indent_after_list | Jika override setelah list aktif, hanging indent harus sesuai nilai yang dihitung. | hardcoded/derived |
-| Paragraf | sentence_count | Saran: minimal 3 kalimat per paragraf (IsRequired=false). | hardcoded/derived |
+| Paragraf | sentence_count | Saran: minimal 3 kalimat per paragraf (non-hard-constraint). | hardcoded/derived |
 | Item Daftar | first_line_indent | First line indent item daftar harus 0 cm. | hardcoded/derived |
 | Caption Gambar | eksistensi | Jika aturan posisi ditetapkan, caption harus ada di sekitar gambar. | hardcoded/derived |

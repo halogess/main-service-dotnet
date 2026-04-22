@@ -40,6 +40,10 @@ public class Buku
     [MaxLength(100)]
     public string? BukuPdfZipPath { get; set; }
 
+    [Column("buku_aturan_versi_validasi")]
+    [MaxLength(255)]
+    public string? BukuAturanVersiValidasi { get; set; }
+
     [Column("buku_created_at")]
     public DateTime? BukuCreatedAt { get; set; }
 

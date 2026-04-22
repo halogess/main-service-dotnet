@@ -117,6 +117,28 @@ public class ValidationVisualLocationTests
         Assert.Equal(3, page);
     }
 
+    [Fact]
+    public async Task ValidateFootnoteAsync_ShouldPreferNoteVisualLocationOverAnchorParagraph()
+    {
+        using var fixture = new SqliteFootnoteValidationFixture();
+        fixture.SeedFootnoteLineSpacingMismatch();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeValidationServiceAsync<ValidationResult>(
+            service,
+            "ValidateFootnoteAsync",
+            10,
+            CancellationToken.None);
+
+        var error = Assert.Single(result.Errors, item => item.Field == "footnote_line_spacing");
+        Assert.Equal((ulong)555, error.DokumenElemenId);
+
+        var location = Assert.Single(error.Locations);
+        Assert.Equal(2, location.HalamanKe);
+        Assert.NotNull(location.Bbox);
+        AssertBboxEqual(location.Bbox!, 100m, 120m, 180m, 150m);
+    }
+
     private static ValidationService CreateValidationService(KorektorBukuDbContext db)
         => new(db, NullLogger<ValidationService>.Instance);
 
@@ -243,6 +265,133 @@ public class ValidationVisualLocationTests
                 DevRefTipe = refType,
                 DevRefId = refId
             });
+        }
+
+        public void Dispose()
+        {
+            Db.Dispose();
+            Connection.Dispose();
+        }
+    }
+
+    private sealed class SqliteFootnoteValidationFixture : IDisposable
+    {
+        public SqliteFootnoteValidationFixture()
+        {
+            Connection = new SqliteConnection("Data Source=:memory:");
+            Connection.Open();
+
+            var options = new DbContextOptionsBuilder<KorektorBukuDbContext>()
+                .UseSqlite(Connection)
+                .Options;
+
+            Db = new KorektorBukuDbContext(options);
+            Db.Database.EnsureCreated();
+        }
+
+        public SqliteConnection Connection { get; }
+
+        public KorektorBukuDbContext Db { get; }
+
+        public void SeedFootnoteLineSpacingMismatch()
+        {
+            Db.Dokumens.Add(new Dokumen
+            {
+                DokumenId = 10,
+                MhsNrp = "12345678",
+                DokumenFilename = "uji-footnote.docx",
+                DokumenStatus = "selesai"
+            });
+
+            Db.Aturans.Add(new Aturan
+            {
+                AturanId = 1,
+                AturanVersi = "test",
+                AturanStatus = AturanStatusValues.Aktif,
+                AturanCreatedAt = DateTime.UtcNow
+            });
+
+            Db.AturanDetails.Add(new AturanDetail
+            {
+                AturanDetailId = 1,
+                AturanId = 1,
+                AturanDetailKategori = "Referensi",
+                AturanDetailKey = "footnote",
+                AturanDetailJsonValue =
+                    """
+                    {
+                      "footnote_text": {
+                        "paragraph": {
+                          "spacing": {
+                            "line_spacing": { "value": 1, "is_editable": true }
+                          }
+                        }
+                      }
+                    }
+                    """
+            });
+
+            Db.DokumenFormatParagrafs.Add(new DokumenFormatParagraf
+            {
+                DfpId = 77,
+                DfpJc = "left",
+                DfpSpacingLineTwips = 360,
+                DfpSpacingLineRule = "auto",
+                DfpSpacingBeforeTwips = 0,
+                DfpSpacingAfterTwips = 0
+            });
+
+            Db.DokumenElemens.Add(new DokumenElemen
+            {
+                DelemenId = 555,
+                DelemenType = "paragraph",
+                DelemenJsonTree = """{"content":[{"type":"text","value":"Paragraf dengan footnote"}]}""",
+                DelemenXml = "<w:p/>"
+            });
+
+            Db.DokumenNotes.Add(new DokumenNote
+            {
+                DnoteId = 99,
+                DnoteRefTipe = "dokumen",
+                DnoteRefId = 10,
+                DelemenId = 555,
+                DnoteKind = "footnote",
+                DnoteType = "normal",
+                DnoteNumber = 1,
+                DnoteJsonTree = """{"content":[{"type":"paragraph","dfp_id":77,"content":[{"type":"text","value":"Catatan kaki"}]}]}"""
+            });
+
+            Db.DokumenElemenVisuals.AddRange(
+                new DokumenElemenVisual
+                {
+                    DevId = 1,
+                    DevRefTipe = "dokumen",
+                    DevRefId = 10,
+                    DevPage = 2,
+                    DokumenElemenId = 555,
+                    DevBboxX0 = 10,
+                    DevBboxY0 = 20,
+                    DevBboxX1 = 220,
+                    DevBboxY1 = 80,
+                    DevLabel = "text",
+                    DevLabelStruktural = "paragraf"
+                },
+                new DokumenElemenVisual
+                {
+                    DevId = 2,
+                    DevRefTipe = "dokumen",
+                    DevRefId = 10,
+                    DevPage = 2,
+                    DokumenElemenId = 99,
+                    DevBboxX0 = 100,
+                    DevBboxY0 = 120,
+                    DevBboxX1 = 180,
+                    DevBboxY1 = 150,
+                    DevLabel = "footnote",
+                    DevLabelStruktural = "footnote"
+                });
+
+            Db.SaveChanges();
         }
 
         public void Dispose()

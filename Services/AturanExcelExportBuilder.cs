@@ -18,8 +18,7 @@ public static class AturanExcelExportBuilder
         "Sub Kategori",
         "Kriteria",
         "Value",
-        "Hard Constraint",
-        "Note"
+        "Hard Constraint"
     ];
 
     private const double ValueColumnWidth = 14d;
@@ -73,7 +72,6 @@ public static class AturanExcelExportBuilder
                 valueCell.Value = row.ValueText;
             }
             worksheet.Cell(excelRow, 6).Value = row.HardConstraint;
-            worksheet.Cell(excelRow, 7).Value = row.Note;
         }
 
         var usedRange = worksheet.Range(1, 1, Math.Max(rows.Count + 1, 2), Headers.Length);
@@ -85,7 +83,6 @@ public static class AturanExcelExportBuilder
         worksheet.Column(5).Width = ValueColumnWidth;
         worksheet.Column(5).Style.Alignment.WrapText = true;
         worksheet.Column(6).Width = Math.Max(worksheet.Column(6).Width, 16);
-        worksheet.Column(7).Width = Math.Max(worksheet.Column(7).Width, 28);
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);

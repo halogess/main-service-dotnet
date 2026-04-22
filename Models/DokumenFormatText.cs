@@ -35,7 +35,4 @@ public class DokumenFormatText
     [MaxLength(10)]
     public string? DftxUnderline { get; set; } // 'none', 'single', 'double', 'dotted', 'dash', 'wavy'
 
-    // Audit/debug - raw XML
-    [Column("dftx_raw_rpr_xml", TypeName = "longtext")]
-    public string? DftxRawRprXml { get; set; }
 }

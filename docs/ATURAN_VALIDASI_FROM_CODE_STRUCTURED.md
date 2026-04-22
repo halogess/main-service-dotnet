@@ -1,6 +1,10 @@
 ﻿# Aturan Validasi (Struktur: Kategori/Kriteria/Subkriteria)
 
-Sumber nilai DB diambil dari `rule.txt` (terbaru). Hardcoded diambil dari `docs/VALIDASI_SUMBER.md` + inspeksi kode.
+> Catatan 15 April 2026:
+> `aturan.txt` / `rule.txt` legacy tidak lagi authoritative untuk `is_editable`.
+> Sumber kanonik runtime adalah FE shape pada `AturanExportCatalog`, policy `AturanDetailEditablePolicy`, dan seed FE `E:\\cek-ta-react\\default-aturan-seed.json`.
+
+Sumber nilai DB historis di bawah tetap dipertahankan sebagai dokumentasi audit, bukan kontrak editability runtime. Hardcoded diambil dari `docs/VALIDASI_SUMBER.md` + inspeksi kode.
 
 ## DB (rule.txt)
 
@@ -227,7 +231,7 @@ Sumber nilai DB diambil dari `rule.txt` (terbaru). Hardcoded diambil dari `docs/
 | Judul Subbab | Urutan Sibling | kondisi | Tidak boleh loncat nomor sibling (mis. 1.3 tanpa 1.2). | False | Hardcoded |
 | Paragraf | Hanging Indent After List | kondisi | Jika override setelah list aktif, hanging indent harus sesuai nilai yang dihitung. | False | Hardcoded |
 | Paragraf | Left Indent After List | kondisi | Paragraf setelah list harus memiliki left indent sesuai aturan list/hanging yang dihitung dari item daftar terakhir. | False | Hardcoded |
-| Paragraf | Sentence Count | kondisi | Saran: minimal 3 kalimat per paragraf (IsRequired=false). | False | Hardcoded |
+| Paragraf | Sentence Count | kondisi | Saran: minimal 3 kalimat per paragraf (non-hard-constraint). | False | Hardcoded |
 | Pengaturan Halaman | Column Count | kondisi | Jumlah kolom harus 1. | False | Hardcoded |
 | Pengaturan Halaman | Different Odd Even | kondisi | Header/footer ganjil-genap harus nonaktif (false). | False | Hardcoded |
 | Pengaturan Halaman | Gutter | kondisi | Ukuran gutter harus 0 cm (default jika tidak ada rule di DB; bisa di-override). | False | Hardcoded |

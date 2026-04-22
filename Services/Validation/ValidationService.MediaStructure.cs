@@ -58,11 +58,8 @@ public partial class ValidationService
         string warningContext,
         CancellationToken cancellationToken)
     {
-        var paragraphDetail = await _db.AturanDetails
-            .Where(detail => detail.AturanId == aturanId && detail.AturanDetailStatus == 1)
-            .Where(detail => detail.AturanDetailKategori == "Isi Buku")
-            .Where(detail => detail.AturanDetailKey == "paragraf")
-            .FirstOrDefaultAsync(cancellationToken);
+        var details = await LoadCanonicalDetailsAsync(aturanId, cancellationToken, "paragraf");
+        details.TryGetValue("paragraf", out var paragraphDetail);
 
         if (paragraphDetail == null)
             return null;
@@ -124,7 +121,7 @@ public partial class ValidationService
                 elementContentById,
                 visualSummaryById);
 
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(structureRule?.JumlahBarisKosongSebelum?.IsHardConstraint == true);
             if (blankBeforeIds.Count == settings.BlankParagraphsBefore)
             {
                 result.IncrementPassedChecks();
@@ -170,7 +167,7 @@ public partial class ValidationService
                 elementContentById,
                 visualSummaryById);
 
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(structureRule?.JumlahBarisKosongSetelah?.IsHardConstraint == true);
             if (blankAfterIds.Count == settings.BlankParagraphsAfter)
             {
                 result.IncrementPassedChecks();
@@ -569,7 +566,7 @@ public partial class ValidationService
         var expectedFontName = paragraphRule.Font?.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(paragraphRule.Font?.FontName?.IsHardConstraint == true);
             var actuals = textFormats
                 .Select(format => format.DftxFontAscii ?? "unknown")
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -597,7 +594,7 @@ public partial class ValidationService
         var expectedFontSize = paragraphRule.Font?.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(paragraphRule.Font?.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
             var actuals = textFormats
                 .Select(format => format.DftxSizeHalfpt.HasValue ? (decimal?)format.DftxSizeHalfpt.Value : null)
@@ -643,7 +640,7 @@ public partial class ValidationService
         var spacingRule = paragraphRule.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actual = GetLineSpacing(format);
 
@@ -668,7 +665,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingBeforeTwips);
 
@@ -695,7 +692,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actual = TwipsToPoints(format.DfpSpacingAfterTwips);
 

@@ -28,7 +28,9 @@ public partial class ValidationService
         string Label,
         string PartPosition,
         string Location,
-        string Alignment);
+        string Alignment,
+        bool LocationIsHardConstraint,
+        bool AlignmentIsHardConstraint);
 
     private sealed class PageNumberElementRow
     {
@@ -266,7 +268,7 @@ public partial class ValidationService
         CancellationToken cancellationToken)
     {
         var expectedNumberFormat = NormalizeWordPageNumberFormat(rule.Numbering?.NumberFormat?.Value) ?? "decimal";
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Numbering?.NumberFormat?.IsHardConstraint == true);
         var actualFormat = NormalizeWordPageNumberFormat(section.DsecPageNumFormat) ?? "decimal";
         if (string.Equals(actualFormat, expectedNumberFormat, StringComparison.OrdinalIgnoreCase))
         {
@@ -295,7 +297,7 @@ public partial class ValidationService
 
         if (isFirstPhysicalPageSection)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.Variation?.DifferentFirstPage?.Enabled?.IsHardConstraint == true);
             if (section.DsecHasTitlePage == expectedDifferentFirstPage || useManualFirstPageFallback)
             {
                 result.IncrementPassedChecks();
@@ -316,7 +318,7 @@ public partial class ValidationService
         }
 
         var expectedDifferentOddEven = rule.Variation?.DifferentOddEven?.Enabled?.Value ?? false;
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(rule.Variation?.DifferentOddEven?.Enabled?.IsHardConstraint == true);
         if (section.DsecDifferentOddEven == expectedDifferentOddEven)
         {
             result.IncrementPassedChecks();
@@ -403,7 +405,7 @@ public partial class ValidationService
         var activeParagraphsInSlot = pageParagraphsInSlot;
         var activeParagraphsInPosition = pageParagraphsInPosition;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(slot.LocationIsHardConstraint);
         if (activeParagraphsInSlot.Count == 1)
         {
             result.IncrementPassedChecks();
@@ -443,7 +445,7 @@ public partial class ValidationService
         var expectedAlignment = NormalizeAlignmentValue(slot.Alignment);
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(slot.AlignmentIsHardConstraint);
             var alignments = activeParagraphsInSlot
                 .Select(paragraph => NormalizeAlignmentValue(paragraph.ParagraphFormat?.DfpJc))
                 .Where(alignment => !string.IsNullOrWhiteSpace(alignment))
@@ -475,7 +477,7 @@ public partial class ValidationService
         var expectedNoExtraParagraphs = rule.StrukturKonten?.CegahBarisTambahan?.Value ?? false;
         if (expectedNoExtraParagraphs)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(rule.StrukturKonten?.CegahBarisTambahan?.IsHardConstraint == true);
             var meaningfulParagraphCount = slotParagraphs.Count(paragraph => paragraph.IsMeaningful);
             if (activeParagraphsInSlot.Count == 1 && meaningfulParagraphCount == 1)
             {
@@ -712,6 +714,7 @@ public partial class ValidationService
             "page_number_font_name",
             $"Font nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             fontRule.FontName?.Value,
+            fontRule.FontName?.IsHardConstraint == true,
             runs,
             textFormats,
             (format, expected) => !string.Equals(format.DftxFontAscii ?? "unknown", expected, StringComparison.OrdinalIgnoreCase),
@@ -727,6 +730,7 @@ public partial class ValidationService
                 "page_number_font_size",
                 $"Ukuran font nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
                 expectedFontSize.Value.ToString(CultureInfo.InvariantCulture),
+                fontRule.FontSize?.IsHardConstraint == true,
                 runs,
                 textFormats,
                 (format, expected) =>
@@ -748,6 +752,7 @@ public partial class ValidationService
             "page_number_bold",
             $"Bold nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             fontRule.FontStyle?.Bold?.Value is bool expectedBold ? expectedBold.ToString().ToLowerInvariant() : null,
+            fontRule.FontStyle?.Bold?.IsHardConstraint == true,
             runs,
             textFormats,
             (format, expected) => !format.DftxBold.HasValue || format.DftxBold.Value.ToString().ToLowerInvariant() != expected,
@@ -760,6 +765,7 @@ public partial class ValidationService
             "page_number_italic",
             $"Italic nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             fontRule.FontStyle?.Italic?.Value is bool expectedItalic ? expectedItalic.ToString().ToLowerInvariant() : null,
+            fontRule.FontStyle?.Italic?.IsHardConstraint == true,
             runs,
             textFormats,
             (format, expected) => !format.DftxItalic.HasValue || format.DftxItalic.Value.ToString().ToLowerInvariant() != expected,
@@ -772,6 +778,7 @@ public partial class ValidationService
             "page_number_underline",
             $"Underline nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             fontRule.FontStyle?.Underline?.Value is bool expectedUnderline ? expectedUnderline.ToString().ToLowerInvariant() : null,
+            fontRule.FontStyle?.Underline?.IsHardConstraint == true,
             runs,
             textFormats,
             (format, expected) =>
@@ -800,6 +807,7 @@ public partial class ValidationService
         string field,
         string message,
         string? expected,
+        bool isHardConstraint,
         IReadOnlyList<TextRunInfo> runs,
         IReadOnlyDictionary<uint, DokumenFormatText> textFormats,
         Func<DokumenFormatText, string, bool> isMismatch,
@@ -810,7 +818,7 @@ public partial class ValidationService
         if (string.IsNullOrWhiteSpace(expected))
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         if (textFormats.Count == 0)
         {
             result.Errors.Add(new ValidationError
@@ -899,6 +907,7 @@ public partial class ValidationService
             $"Left indent nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             paragraphFormats,
             paragraphRule.Indentation?.LeftIndent?.Value,
+            paragraphRule.Indentation?.LeftIndent?.IsHardConstraint == true,
             GetLeftIndentCm,
             locations);
 
@@ -908,6 +917,7 @@ public partial class ValidationService
             $"Right indent nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             paragraphFormats,
             paragraphRule.Indentation?.RightIndent?.Value,
+            paragraphRule.Indentation?.RightIndent?.IsHardConstraint == true,
             GetRightIndentCm,
             locations);
 
@@ -917,6 +927,7 @@ public partial class ValidationService
             $"First line indent nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             paragraphs,
             paragraphRule.Indentation?.FirstLineIndent?.Value,
+            paragraphRule.Indentation?.FirstLineIndent?.IsHardConstraint == true,
             locations);
 
         ValidatePageNumberSpacingComponent(
@@ -925,6 +936,7 @@ public partial class ValidationService
             $"Line spacing nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             paragraphFormats,
             paragraphRule.Spacing?.LineSpacing?.Value,
+            paragraphRule.Spacing?.LineSpacing?.IsHardConstraint == true,
             format => GetLineSpacing(format),
             locations,
             string.Empty);
@@ -935,6 +947,7 @@ public partial class ValidationService
             $"Spacing before nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             paragraphFormats,
             paragraphRule.Spacing?.Before?.Value,
+            paragraphRule.Spacing?.Before?.IsHardConstraint == true,
             format => TwipsToPoints(format.DfpSpacingBeforeTwips),
             locations,
             " pt");
@@ -945,6 +958,7 @@ public partial class ValidationService
             $"Spacing after nomor halaman slot {slotLabel} section {sectionNumber} (bagian isi) tidak sesuai",
             paragraphFormats,
             paragraphRule.Spacing?.After?.Value,
+            paragraphRule.Spacing?.After?.IsHardConstraint == true,
             format => TwipsToPoints(format.DfpSpacingAfterTwips),
             locations,
             " pt");
@@ -956,13 +970,14 @@ public partial class ValidationService
         string message,
         IReadOnlyList<DokumenFormatParagraf> paragraphFormats,
         decimal? expected,
+        bool isHardConstraint,
         Func<DokumenFormatParagraf, decimal> selector,
         IReadOnlyList<ErrorLocation> locations)
     {
         if (!expected.HasValue || paragraphFormats.Count == 0)
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         var actualValues = paragraphFormats.Select(selector).ToList();
         if (actualValues.All(actual => IsWithinTolerance(actual, expected.Value, 0.05m)))
         {
@@ -987,6 +1002,7 @@ public partial class ValidationService
         string message,
         IReadOnlyList<PageNumberParagraphInfo> paragraphs,
         decimal? expected,
+        bool isHardConstraint,
         IReadOnlyList<ErrorLocation> locations)
     {
         if (!expected.HasValue || paragraphs.Count == 0)
@@ -1000,7 +1016,7 @@ public partial class ValidationService
         if (observations.Count == 0)
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         if (observations.All(observation =>
                 IsWithinTolerance(observation.ActualCm, expected.Value, 0.05m) &&
                 !observation.HasLeadingManualIndent))
@@ -1030,6 +1046,7 @@ public partial class ValidationService
         string message,
         IReadOnlyList<DokumenFormatParagraf> paragraphFormats,
         decimal? expected,
+        bool isHardConstraint,
         Func<DokumenFormatParagraf, decimal?> selector,
         IReadOnlyList<ErrorLocation> locations,
         string unitSuffix)
@@ -1037,7 +1054,7 @@ public partial class ValidationService
         if (!expected.HasValue || paragraphFormats.Count == 0)
             return;
 
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(isHardConstraint);
         var actualValues = paragraphFormats.Select(selector).ToList();
         if (actualValues.All(actual => actual.HasValue && IsWithinTolerance(actual.Value, expected.Value, 0.05m)))
         {
@@ -1092,7 +1109,9 @@ public partial class ValidationService
             Label: defaultLabel,
             PartPosition: "default",
             Location: NormalizePageNumberPartType(rule.Variation?.Default?.Position?.Location?.Value),
-            Alignment: NormalizeAlignmentValue(rule.Variation?.Default?.Position?.Alignment?.Value)));
+            Alignment: NormalizeAlignmentValue(rule.Variation?.Default?.Position?.Alignment?.Value),
+            LocationIsHardConstraint: rule.Variation?.Default?.Position?.Location?.IsHardConstraint == true,
+            AlignmentIsHardConstraint: rule.Variation?.Default?.Position?.Alignment?.IsHardConstraint == true));
 
         if (includeFirstSlot && (rule.Variation?.DifferentFirstPage?.Enabled?.Value ?? false))
         {
@@ -1101,7 +1120,9 @@ public partial class ValidationService
                 Label: "First",
                 PartPosition: "first",
                 Location: NormalizePageNumberPartType(rule.Variation?.DifferentFirstPage?.First?.Position?.Location?.Value),
-                Alignment: NormalizeAlignmentValue(rule.Variation?.DifferentFirstPage?.First?.Position?.Alignment?.Value)));
+                Alignment: NormalizeAlignmentValue(rule.Variation?.DifferentFirstPage?.First?.Position?.Alignment?.Value),
+                LocationIsHardConstraint: rule.Variation?.DifferentFirstPage?.First?.Position?.Location?.IsHardConstraint == true,
+                AlignmentIsHardConstraint: rule.Variation?.DifferentFirstPage?.First?.Position?.Alignment?.IsHardConstraint == true));
         }
 
         if (oddEvenEnabled)
@@ -1111,7 +1132,9 @@ public partial class ValidationService
                 Label: "Even",
                 PartPosition: "even",
                 Location: NormalizePageNumberPartType(rule.Variation?.DifferentOddEven?.Even?.Position?.Location?.Value),
-                Alignment: NormalizeAlignmentValue(rule.Variation?.DifferentOddEven?.Even?.Position?.Alignment?.Value)));
+                Alignment: NormalizeAlignmentValue(rule.Variation?.DifferentOddEven?.Even?.Position?.Alignment?.Value),
+                LocationIsHardConstraint: rule.Variation?.DifferentOddEven?.Even?.Position?.Location?.IsHardConstraint == true,
+                AlignmentIsHardConstraint: rule.Variation?.DifferentOddEven?.Even?.Position?.Alignment?.IsHardConstraint == true));
         }
 
         return slots;

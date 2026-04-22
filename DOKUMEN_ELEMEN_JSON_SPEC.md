@@ -1,266 +1,185 @@
-# Dokumentasi Format JSON - dokumen_elemen_json_tree
+# Dokumentasi Format JSON `dokumen_elemen_json_tree`
 
 ## Overview
-Kolom `dokumen_elemen_json_tree` menyimpan konten elemen dokumen dalam format JSON compact (tanpa whitespace).
-Type elemen sudah tersimpan di kolom `dokumen_elemen_type`, sehingga JSON hanya berisi data konten.
 
-**Prinsip penyimpanan:** Setiap elemen disimpan sebagai row terpisah. Paragraph yang mengandung formula atau image akan di-split menjadi beberapa row untuk menjaga urutan yang benar.
+Kolom `dokumen_elemen_json_tree` menyimpan konten elemen dokumen dalam bentuk JSON. Tipe elemen utamanya tetap disimpan terpisah di kolom `delemen_type`, sehingga JSON fokus pada data konten dan referensi format.
 
----
-
-## 1. Text (Paragraph & Heading)
-
-**Type:** `paragraph`, `h1`, `h2`, `h3`, `h4`, `h5`, `h6`, `h7`, `h8`, `h9`, `title`, `subtitle`
-
-**Format:**
-```json
-{"text":"Plain text content"}
-```
-
-**Contoh:**
-
-| dokumen_elemen_type | dokumen_elemen_json_tree |
-|---------------------|--------------------------|
-| `paragraph` | `{"text":"Ini adalah paragraf biasa."}` |
-| `h1` | `{"text":"BAB I PENDAHULUAN"}` |
-| `h2` | `{"text":"1.1 Latar Belakang"}` |
-| `title` | `{"text":"TUGAS AKHIR"}` |
-
-**Note:** Line break (`\n`), tab (`\t`) disimpan langsung dalam text string.
+Prinsip utama:
+- satu elemen dokumen = satu row pada `dokumen_elemen`;
+- format yang relevan direferensikan lewat ID seperti `dfp_id`, `dftx_id`, `dft_id`, atau `dfdr_id`;
+- nested content, terutama tabel, direpresentasikan langsung sebagai JSON bertingkat.
 
 ---
 
-## 2. Mathematical Formula
+## 1. Paragraph, Heading, dan List
 
-**Type:** `math`
+**Tipe umum:** `paragraph`, `h1`-`h9`, `title`, `subtitle`, `list-item-*`
 
-**Format:**
+**Format umum:**
+
 ```json
-{"text":"x2+y2=z2","xml":"<m:oMath>...</m:oMath>"}
+{
+  "dfp_id": 123,
+  "content": [
+    { "type": "text", "dftx_id": 456, "value": "Contoh teks" }
+  ]
+}
 ```
 
-**Properties:**
-- `text`: Plain text representation (tanpa formatting superscript/subscript)
-- `xml`: OMML (Office Math Markup Language) lengkap untuk rendering
-
-**Contoh:**
-
-| dokumen_elemen_type | dokumen_elemen_json_tree |
-|---------------------|--------------------------|
-| `math` | `{"text":"x2","xml":"<m:oMath><m:sSup>...</m:sSup></m:oMath>"}` |
-| `math` | `{"text":"a+b=c","xml":"<m:oMath>...</m:oMath>"}` |
-
-**Paragraph dengan formula akan di-split:**
-
-| sequence | type | json_tree |
-|----------|------|-----------|
-| 1 | `paragraph` | `{"text":"Rumus pythagoras adalah "}` |
-| 2 | `math` | `{"text":"a2+b2=c2","xml":"..."}` |
-| 3 | `paragraph` | `{"text":" yang digunakan untuk segitiga siku-siku."}` |
+`dfp_id` bersifat opsional dan hanya muncul bila format paragraf berhasil dipersist.
 
 ---
 
-## 3. Image
+## 2. Text Item
 
-**Type:** `image`
-
-**Format:**
 ```json
-{"rId":"rId5"}
+{ "type": "text", "dftx_id": 456, "value": "Contoh teks" }
 ```
 
-**Lookup image:** Query tabel `dokumen_media` dengan `dokumen_media_rid = "rId5"`
-
-**Paragraph dengan image akan di-split:**
-
-| sequence | type | json_tree |
-|----------|------|-----------|
-| 1 | `paragraph` | `{"text":"Lihat gambar berikut: "}` |
-| 2 | `image` | `{"rId":"rId5"}` |
-| 3 | `paragraph` | `{"text":" adalah contoh diagram."}` |
+Properti penting:
+- `dftx_id`: referensi ke `dokumen_format_text`;
+- `value`: isi teks yang sudah dinormalisasi extractor.
 
 ---
 
-## 4. Page Break & Column Break
+## 3. Field Item
 
-**Type:** `pageBreak`, `columnBreak`
-
-**Format:**
 ```json
-{}
+{
+  "type": "field",
+  "field_type": "PAGE",
+  "result_dftx_id": 457,
+  "value": "12"
+}
 ```
 
-Empty object, type sudah menjelaskan jenis break.
+Properti penting:
+- `field_type`: tipe field Word yang terdeteksi;
+- `value`: hasil tampilan field;
+- `result_dftx_id`: referensi format teks hasil field bila ada.
+
+Tidak ada tabel field terpisah pada schema aktif.
 
 ---
 
-## 5. List Item
+## 4. Image, Shape, dan Chart
 
-**Type:** `list-item-{numId}-{ilvl}`
+**Contoh image:**
 
-Contoh: `list-item-1-0`, `list-item-2-1`
-
-**Format:**
 ```json
-{"text":"Item pertama dalam list"}
+{ "type": "image", "dfdr_id": 45, "rId": "rId5" }
 ```
 
-**Contoh:**
+Properti penting:
+- `dfdr_id`: referensi ke `dokumen_format_drawing` bila format drawing berhasil disimpan;
+- `rId`: relationship ID ke media pada package DOCX.
 
-| dokumen_elemen_type | dokumen_elemen_json_tree |
-|---------------------|--------------------------|
-| `list-item-1-0` | `{"text":"Item level 0"}` |
-| `list-item-1-1` | `{"text":"Sub-item level 1"}` |
+Tidak ada tabel media biner terpisah pada schema aktif. Lookup gambar mengikuti artifact hasil ekstraksi atau relasi package saat diperlukan.
+
+---
+
+## 5. Math
+
+```json
+{ "type": "math", "text": "x^2 + y^2 = z^2" }
+```
+
+Extractor mempertahankan representasi teks formula yang cukup untuk kebutuhan validasi dan evidence.
 
 ---
 
 ## 6. Table
 
-**Type:** `table`
+Elemen bertipe `table` menyimpan struktur bertingkat berikut:
 
-**Format:**
-```json
-{"rows":[{"cells":["Cell 1","Cell 2"]},{"cells":["Cell 3","Cell 4"]}]}
-```
-
-**Struktur:**
-- `rows`: Array of row objects
-- `cells`: Array of plain text strings
-
-**Contoh tabel 2x3:**
 ```json
 {
-  "rows": [
-    {"cells": ["Header 1","Header 2","Header 3"]},
-    {"cells": ["Data 1","Data 2","Data 3"]}
-  ]
+  "dft_id": 10,
+  "content": {
+    "rows": [
+      {
+        "cells": [
+          {
+            "content": [
+              {
+                "type": "paragraph",
+                "dfp_id": 40,
+                "content": [
+                  { "type": "text", "dftx_id": 41, "value": "Isi sel" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
+Catatan:
+- `dft_id` mereferensikan `dokumen_format_table`;
+- row dan cell tidak memiliki tabel persistensi terpisah;
+- nested table dapat muncul lagi sebagai item `type: "table"` di dalam `content` cell.
+
 ---
 
-## 7. Section Break
+## 7. Contoh Dokumen Ringkas
 
-**Type:** `sectionBreak`
-
-**Format:**
 ```json
-{}
-```
-
-Empty object karena tidak ada konten.
-
----
-
-## 8. Unknown Elements
-
-**Type:** `{LocalName}` (nama element XML)
-
-**Format:**
-```json
-{"xml":"<w:element>...</w:element>"}
-```
-
-Menyimpan raw XML untuk elemen yang tidak dikenali.
-
----
-
-## 9. Element Types Summary
-
-| Type | Properties | Description |
-|------|-----------|-------------|
-| `paragraph`, `h1`-`h9`, `title`, `subtitle`, `list-item-*` | `text` | Plain text content |
-| `math` | `text`, `xml` | Formula (plain text + OMML) |
-| `image` | `rId` | Image reference |
-| `table` | `rows` | Table with cells |
-| `sectionBreak`, `pageBreak`, `columnBreak` | - | Empty object |
-| `{unknown}` | `xml` | Raw XML |
-
----
-
-## Contoh Lengkap Dokumen
-
-| sequence | type | json_tree |
-|----------|------|-----------|
-| 1 | `title` | `{"text":"LAPORAN TUGAS AKHIR"}` |
-| 2 | `h1` | `{"text":"BAB I\nPENDAHULUAN"}` |
-| 3 | `h2` | `{"text":"1.1 Latar Belakang"}` |
-| 4 | `paragraph` | `{"text":"Penelitian ini membahas..."}` |
-| 5 | `paragraph` | `{"text":"Rumus yang digunakan adalah "}` |
-| 6 | `math` | `{"text":"E=mc2","xml":"<m:oMath>..."}` |
-| 7 | `paragraph` | `{"text":" yang ditemukan Einstein."}` |
-| 8 | `paragraph` | `{"text":"Lihat gambar: "}` |
-| 9 | `image` | `{"rId":"rId3"}` |
-| 10 | `list-item-1-0` | `{"text":"Poin pertama"}` |
-| 11 | `list-item-1-0` | `{"text":"Poin kedua"}` |
-| 12 | `table` | `{"rows":[{"cells":["A","B"]},{"cells":["C","D"]}]}` |
-| 13 | `pageBreak` | `{}` |
-| 14 | `sectionBreak` | `{}` |
-
----
-
-## Parsing Guidelines
-
-### Mendapatkan plain text:
-```python
-import json
-
-# Text elements
-if elem['dokumen_elemen_type'] in ['paragraph', 'h1', 'h2', 'title']:
-    data = json.loads(elem['dokumen_elemen_json_tree'])
-    text = data['text']
-
-# Math elements
-if elem['dokumen_elemen_type'] == 'math':
-    data = json.loads(elem['dokumen_elemen_json_tree'])
-    plain_text = data['text']  # "x2+y2=z2"
-    omml_xml = data['xml']     # Full OMML for rendering
-```
-
-### Mendapatkan images:
-```python
-if elem['dokumen_elemen_type'] == 'image':
-    data = json.loads(elem['dokumen_elemen_json_tree'])
-    rid = data['rId']
-    # Query: SELECT * FROM dokumen_media WHERE dokumen_media_rid = rid
-```
-
-### Render HTML:
-```python
-html = []
-for elem in elements:
-    etype = elem['dokumen_elemen_type']
-    data = json.loads(elem['dokumen_elemen_json_tree'])
-    
-    if etype == 'h1':
-        html.append(f"<h1>{data['text']}</h1>")
-    elif etype == 'paragraph':
-        html.append(f"<p>{data['text']}</p>")
-    elif etype == 'math':
-        html.append(f"<span class='math'>{data['text']}</span>")
-    elif etype == 'image':
-        html.append(f"<img src='/media/{data['rId']}'>")
-    elif etype == 'table':
-        rows = data['rows']
-        html.append("<table>")
-        for row in rows:
-            html.append("<tr>")
-            for cell in row['cells']:
-                html.append(f"<td>{cell}</td>")
-            html.append("</tr>")
-        html.append("</table>")
-
-return ''.join(html)
+[
+  {
+    "type": "paragraph",
+    "json": {
+      "dfp_id": 10,
+      "content": [
+        { "type": "text", "dftx_id": 11, "value": "Pendahuluan" }
+      ]
+    }
+  },
+  {
+    "type": "paragraph",
+    "json": {
+      "dfp_id": 12,
+      "content": [
+        { "type": "text", "dftx_id": 13, "value": "Lihat gambar berikut: " },
+        { "type": "image", "dfdr_id": 14, "rId": "rId5" }
+      ]
+    }
+  },
+  {
+    "type": "table",
+    "json": {
+      "dft_id": 20,
+      "content": {
+        "rows": [
+          {
+            "cells": [
+              {
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "dfp_id": 21,
+                    "content": [
+                      { "type": "text", "dftx_id": 22, "value": "Header" }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+]
 ```
 
 ---
 
-## Notes
+## 8. Ringkasan
 
-- JSON disimpan dalam format **compact** (no whitespace) menggunakan `Formatting.None`
-- Type elemen **tidak** disimpan di JSON (sudah ada di kolom `dokumen_elemen_type`)
-- Sequence menentukan urutan elemen dari atas ke bawah dokumen
-- **Paragraph dengan formula/image akan di-split** menjadi beberapa row untuk menjaga urutan
-- Line break (`\n`) dan tab (`\t`) disimpan langsung dalam text string
-- Formula disimpan dengan 2 format: `text` (plain) dan `xml` (OMML untuk rendering)
-- Table cells disimpan sebagai plain text array (tidak support nested elements)
+`dokumen_elemen_json_tree` pada schema aktif dirancang untuk:
+- menyimpan nested content secara eksplisit;
+- mempertahankan referensi ke format yang benar-benar dipakai;
+- menghindari tabel tambahan yang tidak lagi digunakan.

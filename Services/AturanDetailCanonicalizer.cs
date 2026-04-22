@@ -69,6 +69,7 @@ public static class AturanDetailCanonicalizer
             ApplyLegacyAliases(key, currentRoot);
 
             var canonicalRoot = MergeObject(templateRoot, currentRoot, []);
+            AturanDetailEditablePolicy.Apply(key, canonicalRoot);
             canonicalJson = canonicalRoot.ToJsonString(SerializerOptions);
             changed = paragraphChanged || !string.Equals(normalizedJson, canonicalJson, StringComparison.Ordinal);
 
@@ -82,6 +83,16 @@ public static class AturanDetailCanonicalizer
             errorMessage = $"json_value tidak valid: {ex.Message}";
             return false;
         }
+    }
+
+    public static string? CanonicalizeOrOriginal(string? detailKey, string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson))
+            return rawJson;
+
+        return TryCanonicalize(detailKey, rawJson, out var canonicalJson, out var _, out var _)
+            ? canonicalJson
+            : rawJson;
     }
 
     private static IReadOnlyDictionary<string, string> BuildTemplateMap()

@@ -2,9 +2,9 @@
 
 ## 1. Pendahuluan
 
-REST API Service merupakan komponen backend yang menyediakan antarmuka pemrograman aplikasi (Application Programming Interface) berbasis arsitektur REST (Representational State Transfer) untuk mendukung operasi CRUD (Create, Read, Update, Delete) dan integrasi dengan aplikasi frontend. Service ini dibangun menggunakan ASP.NET Core 9.0 dengan berbagai endpoint yang terorganisir berdasarkan domain fungsional.
+REST API Service merupakan komponen backend yang menyediakan antarmuka pemrograman aplikasi berbasis REST untuk mendukung operasi CRUD, autentikasi, pemrosesan dokumen, dan integrasi frontend pada sistem validasi tugas akhir.
 
-REST API Service berperan sebagai jembatan antara aplikasi frontend (React/Vite) dengan database dan service-service lainnya dalam sistem validasi tugas akhir. Service ini menangani autentikasi pengguna, manajemen data master, pengelolaan dokumen, serta konfigurasi aturan validasi.
+Service ini dibangun menggunakan ASP.NET Core 9.0 dan berperan sebagai jembatan antara frontend, database, dan service-service pendukung seperti validasi, konversi PDF, email, dan WebSocket.
 
 ## 2. Arsitektur REST API
 
@@ -21,39 +21,39 @@ REST API Service berperan sebagai jembatan antara aplikasi frontend (React/Vite)
 
 ### 2.2 Struktur Controller
 
-REST API Service menggunakan pola arsitektur Controller-Service-Repository yang memisahkan tanggung jawab masing-masing komponen:
+REST API Service menggunakan pola Controller-Service-Repository yang memisahkan tanggung jawab masing-masing komponen.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     Frontend (React)                         │
-└─────────────────────────┬───────────────────────────────────┘
-                          │ HTTP Request
-┌─────────────────────────▼───────────────────────────────────┐
-│                      Controllers                             │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │   Auth   │ │ Mahasiswa│ │   Buku   │ │   Dokumen    │   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘   │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │  Dosen   │ │ Jurusan  │ │ Template │ │   Aturan     │   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘   │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│                       Services                               │
-│  (AuthService, BukuService, DokumenService, AturanService)  │
-└─────────────────────────┬───────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────┐
-│                  Database Context                            │
-│     (KorektorBukuDbContext, SttsDbContext)                  │
-└─────────────────────────────────────────────────────────────┘
+```text
+Frontend (React)
+  |
+  | HTTP Request
+  v
+Controllers
+  |- AuthController
+  |- MahasiswaController
+  |- BukuController
+  |- DokumenController
+  |- DosenController
+  |- JurusanController
+  |- AturanController
+  |- RulesController
+  v
+Services
+  |- AuthService
+  |- BukuService
+  |- DokumenService
+  |- AturanService
+  v
+Database Context
+  |- KorektorBukuDbContext
+  |- SttsDbContext
 ```
 
 ## 3. Endpoint API
 
 ### 3.1 Authentication API (`/api/auth`)
 
-API autentikasi menangani proses login, refresh token, dan informasi pengguna yang sedang aktif. Sistem menggunakan JWT dengan mekanisme refresh token yang disimpan dalam HTTP-only cookie untuk keamanan.
+API autentikasi menangani proses login, refresh token, dan informasi pengguna yang sedang aktif.
 
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
@@ -61,8 +61,8 @@ API autentikasi menangani proses login, refresh token, dan informasi pengguna ya
 | POST | `/api/auth/refresh` | Memperbarui access token menggunakan refresh token |
 | GET | `/api/auth/me` | Mendapatkan informasi pengguna yang sedang login |
 
-**Fitur Keamanan:**
-- Access token dengan masa berlaku terbatas (default: 15 menit)
+**Fitur keamanan:**
+- Access token dengan masa berlaku terbatas
 - Refresh token disimpan dalam HTTP-only cookie
 - Secure cookie pada environment production
 - Role-based access control (Admin/Mahasiswa)
@@ -92,10 +92,10 @@ API buku mengelola data buku tugas akhir yang diupload oleh mahasiswa termasuk u
 | GET | `/api/buku/can-upload` | Memeriksa apakah mahasiswa dapat mengupload |
 | GET | `/api/buku/judul` | Mendapatkan judul buku berdasarkan NRP |
 | POST | `/api/buku/{id}/batal` | Membatalkan buku yang sudah diupload |
-| GET | `/api/buku/stats` | Mendapatkan statistik buku (total, pending, selesai) |
+| GET | `/api/buku/stats` | Mendapatkan statistik buku |
 | GET | `/api/buku/per-jurusan` | Mendapatkan statistik buku per jurusan |
 | GET | `/api/buku/{id}` | Mendapatkan detail buku berdasarkan ID |
-| GET | `/api/buku/admin` | Mendapatkan daftar buku untuk admin (dengan filter) |
+| GET | `/api/buku/admin` | Mendapatkan daftar buku untuk admin |
 | GET | `/api/buku/mahasiswa` | Mendapatkan daftar buku untuk mahasiswa yang login |
 
 ---
@@ -112,7 +112,7 @@ API dokumen mengelola dokumen-dokumen pendukung buku tugas akhir seperti BAB I, 
 | GET | `/api/dokumen/stats` | Mendapatkan statistik dokumen |
 | GET | `/api/dokumen` | Mendapatkan daftar dokumen |
 | GET | `/api/dokumen/{id}` | Mendapatkan detail dokumen dengan hasil validasi |
-| GET | `/api/dokumen/{id}/image/{imageName}` | Mendapatkan gambar dari dokumen |
+| GET | `/api/dokumen/{id}/image/{imageName}` | Mendapatkan gambar hasil konversi dokumen |
 
 ---
 
@@ -122,7 +122,7 @@ API dosen menyediakan akses ke data dosen aktif dari database STTS.
 
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
-| GET | `/api/dosen` | Mendapatkan daftar dosen aktif (join dengan tabel karyawan) |
+| GET | `/api/dosen` | Mendapatkan daftar dosen aktif |
 
 ---
 
@@ -132,69 +132,43 @@ API jurusan menyediakan akses ke data jurusan yang aktif.
 
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
-| GET | `/api/jurusan` | Mendapatkan daftar jurusan aktif (Admin only) |
+| GET | `/api/jurusan` | Mendapatkan daftar jurusan aktif |
 
 ---
 
-### 3.7 Template API (`/api/template`)
-
-API template mengelola template dokumen pelengkap buku tugas akhir seperti lembar pengesahan, lembar pernyataan, dan dokumen administratif lainnya. API ini juga menyediakan fitur generate otomatis dokumen berdasarkan data mahasiswa.
-
-| Method | Endpoint | Deskripsi |
-|--------|----------|-----------|
-| GET | `/api/template` | Mendapatkan semua template (Admin: semua, Mahasiswa: aktif saja) |
-| GET | `/api/template/{id}` | Mendapatkan detail template dengan field mapping |
-| POST | `/api/template` | Upload template baru (dengan ekstraksi highlighted text) |
-| PATCH | `/api/template/{id}` | Update template (nama, status, details) |
-| DELETE | `/api/template/{id}` | Menghapus template |
-| GET | `/api/template/details` | Mendapatkan semua template details |
-| DELETE | `/api/template/details/{id}` | Menghapus template detail |
-| PATCH | `/api/template/details/{id}` | Update template detail |
-| GET | `/api/template/{id}/pdf` | Download/view file PDF template |
-| GET | `/api/template/{id}/docx` | Download file DOCX template |
-| POST | `/api/template/{id}/generate` | Generate dokumen terisi berdasarkan data mahasiswa |
-
-**Fitur Generate Template:**
-- Mengganti highlighted text dengan data dinamis
-- Mendukung format tanggal Indonesia (1 Januari 2024)
-- Konversi case otomatis (Title Case, UPPERCASE)
-- Integrasi dengan data proposal, pembimbing, dan penguji
-
----
-
-### 3.8 Aturan API (`/api/aturan`)
+### 3.7 Aturan API (`/api/aturan`)
 
 API aturan mengelola konfigurasi aturan validasi dokumen tugas akhir termasuk aturan untuk format halaman, paragraf, gambar, tabel, dan elemen lainnya.
 
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
-| GET | `/api/aturan` | Mendapatkan semua aturan (Admin only) |
-| GET | `/api/aturan/{id}` | Mendapatkan aturan dengan details |
-| GET | `/api/aturan/aktif` | Mendapatkan aturan yang aktif (Public) |
+| GET | `/api/aturan` | Mendapatkan semua aturan |
+| GET | `/api/aturan/{id}` | Mendapatkan aturan dengan detail |
+| GET | `/api/aturan/aktif` | Mendapatkan aturan yang aktif |
 | POST | `/api/aturan` | Membuat aturan baru |
 | PATCH | `/api/aturan/{id}` | Update aturan |
 | PATCH | `/api/aturan/{id}/detail` | Update detail aturan |
 
 ---
 
-### 3.9 Rules API (`/api/rules`)
+### 3.8 Rules API (`/api/rules`)
 
 API rules merupakan endpoint development untuk testing konfigurasi aturan tanpa autentikasi.
 
 | Method | Endpoint | Deskripsi |
 |--------|----------|-----------|
-| GET | `/api/rules` | Mendapatkan semua aturan dengan details |
+| GET | `/api/rules` | Mendapatkan semua aturan dengan detail |
 | GET | `/api/rules/{id}` | Mendapatkan aturan spesifik |
-| POST | `/api/rules` | Membuat aturan dengan details |
-| PATCH | `/api/rules/{id}` | Update aturan dengan details |
-| DELETE | `/api/rules/{id}` | Hapus aturan dan details |
+| POST | `/api/rules` | Membuat aturan dengan detail |
+| PATCH | `/api/rules/{id}` | Update aturan dengan detail |
+| DELETE | `/api/rules/{id}` | Hapus aturan dan detail |
 | DELETE | `/api/rules/{id}/detail/{detailId}` | Hapus detail spesifik |
 
 ---
 
 ## 4. Database Connection
 
-REST API Service terhubung ke dua database:
+REST API Service terhubung ke dua database.
 
 ### 4.1 Database Korektor Buku (`KorektorBukuDbContext`)
 
@@ -202,9 +176,8 @@ Database utama yang menyimpan data sistem validasi tugas akhir:
 - **Buku** - Data buku tugas akhir
 - **Dokumen** - Dokumen BAB buku
 - **DokumenValidasi** - Hasil validasi dokumen
-- **Template** - Template dokumen pelengkap
 - **Aturan** - Konfigurasi aturan validasi
-- Data ekstraksi dokumen (section, paragraf, tabel, gambar)
+- **Data ekstraksi dokumen** - Section, paragraf, tabel, gambar, note, dan metadata visual
 
 ### 4.2 Database STTS (`SttsDbContext`)
 
@@ -213,7 +186,7 @@ Database institut yang menyimpan data master:
 - **Dosen** - Data dosen
 - **Jurusan** - Data jurusan/program studi
 - **Proposal** - Data proposal tugas akhir
-- **Bimbingan** - Data pembimbing dan penguji
+- **Karyawan** - Status kepegawaian yang dipakai pada filter dosen aktif
 
 ---
 
@@ -221,7 +194,7 @@ Database institut yang menyimpan data master:
 
 ### 5.1 WebSocket Service
 
-REST API Service juga menyediakan WebSocket untuk komunikasi real-time dengan frontend. WebSocket digunakan untuk:
+WebSocket digunakan untuk:
 - Notifikasi progress upload dokumen
 - Update status konversi PDF
 - Notifikasi hasil validasi real-time
@@ -229,11 +202,11 @@ REST API Service juga menyediakan WebSocket untuk komunikasi real-time dengan fr
 
 ### 5.2 PDF Conversion Service
 
-Service konversi PDF menggunakan Adobe PDF Services API untuk mengkonversi dokumen DOCX menjadi PDF dan mengekstrak gambar halaman dokumen.
+Service konversi PDF menggunakan Adobe PDF Services API untuk mengonversi dokumen DOCX menjadi PDF dan mengekstrak gambar halaman dokumen.
 
 ### 5.3 Email Service
 
-Service email untuk mengirim notifikasi kepada mahasiswa mengenai status validasi dan hasil koreksi dokumen.
+Service email digunakan untuk mengirim notifikasi kepada mahasiswa mengenai status validasi dan hasil koreksi dokumen.
 
 ---
 
@@ -243,19 +216,17 @@ Service email untuk mengirim notifikasi kepada mahasiswa mengenai status validas
 
 - **JWT Token**: Access token dengan algoritma HS256
 - **Refresh Token**: Disimpan dalam HTTP-only cookie
-- **Token Expiry**: Access token (15 menit), Refresh token (7 hari)
+- **Token Expiry**: Access token dan refresh token memiliki masa berlaku terpisah
 
 ### 6.2 Authorization
 
 Role-based access control dengan dua peran:
-- **Admin (BAA)**: Akses penuh ke semua endpoint
+- **Admin (BAA)**: Akses penuh ke semua endpoint administratif
 - **Mahasiswa**: Akses terbatas ke data sendiri
 
 ### 6.3 CORS
 
-Cross-Origin Resource Sharing dikonfigurasi untuk mengizinkan akses dari:
-- `http://localhost:5173` (Development frontend)
-- `http://localhost:8000` (Alternative frontend)
+Cross-Origin Resource Sharing dikonfigurasi untuk mengizinkan akses dari origin frontend yang diatur pada konfigurasi aplikasi.
 
 ---
 
@@ -269,8 +240,6 @@ Cross-Origin Resource Sharing dikonfigurasi untuk mengizinkan akses dari:
 | DokumenController | 7 | Manajemen dokumen |
 | DosenController | 1 | Data dosen |
 | JurusanController | 1 | Data jurusan |
-| TemplateController | 11 | Template dokumen |
 | AturanController | 6 | Aturan validasi |
-| RulesController | 6 | Dev aturan |
-| **Total** | **50** | - |
-
+| RulesController | 6 | Endpoint development aturan |
+| **Total** | **39** | - |

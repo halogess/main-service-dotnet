@@ -28,18 +28,6 @@ public static class SectionExtractor
             DsecIndex = (uint)sectionIndex
         };
         
-        // Section Type (break type)
-        var sectionType = sectPr.GetFirstChild<SectionType>();
-        if (sectionType?.Val?.Value != null)
-        {
-            section.DsecType = sectionType.Val.Value.ToString().ToLower();
-            // Values: nextPage, continuous, evenPage, oddPage, nextColumn
-        }
-        else
-        {
-            section.DsecType = "nextPage"; // Default
-        }
-        
         // Title Page (first page different header/footer)
         var titlePage = sectPr.GetFirstChild<TitlePage>();
         section.DsecHasTitlePage = titlePage != null && (titlePage.Val?.Value ?? true);

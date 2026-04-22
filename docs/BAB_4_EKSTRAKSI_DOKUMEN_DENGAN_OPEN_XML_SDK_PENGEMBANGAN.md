@@ -415,13 +415,12 @@ Desain ini memungkinkan validasi tabel dari dua sisi:
 Jika style resolver aktif, extractor mengambil effective properties agar hasil sesuai tampilan Word.
 
 ### 4.6.3 Ekstraksi Row dan Cell
-Pada level row:
-- `TableRowFormatExtractor` menyimpan `tblHeader` dan `cantSplit`.
+Pada implementasi aktif, struktur row dan cell disimpan langsung sebagai JSON bertingkat:
+- tiap row berisi array `cells`;
+- tiap cell berisi array `content`;
+- format paragraf atau teks di dalam cell tetap dapat direferensikan melalui `dfp_id` dan `dftx_id` sesuai jenis item.
 
-Pada level cell:
-- `TableCellFormatExtractor` menyimpan `gridSpan`, `vMerge`, `vAlign`.
-
-Index row/column dipertahankan agar conditional table style dapat diterapkan secara tepat (first row, last row, banded row, dll).
+Index row/column tetap dipertahankan agar traversal nested table dan pembacaan isi sel konsisten.
 
 Penyimpanan terpisah row/cell format memberi keuntungan:
 - mudah audit perubahan;
@@ -495,15 +494,8 @@ Objek floating (anchor) tidak selalu berada di urutan baca yang sama dengan urut
 
 Pendekatan ini bukan simulasi layout sempurna seperti Word renderer, tetapi cukup efektif untuk menjaga urutan logis extraction pada pipeline validasi.
 
-### 4.7.4 Ekstraksi Media dari Package
-Proyek menyediakan `MediaExtractor` untuk menyalin binary image dari DOCX package ke filesystem berdasarkan `rId`.
-
-Dalam pipeline utama saat ini, extraction inti menyimpan referensi media (bukan selalu menyalin binary). Strategi ini memberi fleksibilitas deployment:
-1. reference-only (hemat storage);
-2. reference + binary (untuk visual analytics);
-3. selective binary extraction (berdasarkan kebutuhan modul).
-
-Untuk konteks buku TA, penting dipahami bahwa menyimpan `rId` bukan kekurangan, melainkan desain agar proses validasi tetap ringan dan cepat.
+### 4.7.4 Referensi Media dari Package
+Dalam pipeline utama saat ini, extraction inti menyimpan referensi media (`rId`) dan format drawing. Strategi ini menjaga ekstraksi tetap ringan, sambil tetap memungkinkan relationship ke image part ditelusuri bila dibutuhkan pada tahap analisis lanjutan.
 
 ---
 
@@ -586,10 +578,7 @@ Skema hasil ekstraksi dibagi menjadi tiga kelompok:
    - `dokumen_format_paragraf`
    - `dokumen_format_text`
    - `dokumen_format_table`
-   - `dokumen_format_table_row`
-   - `dokumen_format_table_cell`
    - `dokumen_format_drawing`
-   - `dokumen_format_field`
 
 **Gambar 4.4. Relasi Inti Struktur Hasil Ekstraksi**
 
@@ -610,7 +599,7 @@ Kolom `delemen_json_tree` berfungsi sebagai container konten semiterstruktur. Co
   "dfp_id": 123,
   "content": [
     { "type": "text", "dftx_id": 456, "value": "Contoh teks" },
-    { "type": "field", "dffd_id": 33, "result_dftx_id": 457, "value": "1" }
+    { "type": "field", "field_type": "PAGE", "result_dftx_id": 457, "value": "1" }
   ]
 }
 ```
@@ -623,10 +612,8 @@ Untuk tabel:
   "content": {
     "rows": [
       {
-        "dftr_id": 20,
         "cells": [
           {
-            "dftc_id": 30,
             "content": [
               {
                 "type": "paragraph",

@@ -140,7 +140,6 @@ public class TableWidthValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "tabel",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {

@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
 
@@ -56,9 +55,6 @@ public partial class ValidationService
             return result;
         }
 
-        if (IsBabScopedValidation())
-            return result;
-
         var aturan = await _db.Aturans
             .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
@@ -68,7 +64,7 @@ public partial class ValidationService
             return result;
 
         var footnoteDetails = await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+            .Where(d => d.AturanId == aturan.AturanId)
             .Where(d => d.AturanDetailKey == "footnote")
             .Where(d => d.AturanDetailKategori == "Referensi" || d.AturanDetailKategori == "Isi Buku")
             .ToListAsync(cancellationToken);
@@ -119,8 +115,11 @@ public partial class ValidationService
             return result;
         }
 
+        var (noteRefType, noteRefId) = ResolveSectionRefForValidation(dokumenId);
         var rawNotes = await _db.DokumenNotes
-            .Where(n => n.DokumenId == (uint)dokumenId && n.DnoteKind == "footnote")
+            .Where(n => n.DnoteRefTipe == noteRefType &&
+                        n.DnoteRefId == noteRefId &&
+                        n.DnoteKind == "footnote")
             .OrderBy(n => n.DnoteId)
             .Select(n => new
             {
@@ -128,15 +127,32 @@ public partial class ValidationService
                 n.DelemenId,
                 n.DnoteType,
                 n.DnoteJsonTree,
-                n.DnoteXml
+                n.DnoteNumber
             })
             .ToListAsync(cancellationToken);
 
         if (rawNotes.Count == 0)
             return result;
 
+        var paragraphFormatIds = rawNotes
+            .SelectMany(n => ExtractFootnoteParagraphFormatIds(n.DnoteJsonTree))
+            .Distinct()
+            .ToList();
+
+        var paragraphFormatById = paragraphFormatIds.Count > 0
+            ? await _db.DokumenFormatParagrafs
+                .Where(format => paragraphFormatIds.Contains(format.DfpId))
+                .ToDictionaryAsync(format => format.DfpId, cancellationToken)
+            : new Dictionary<uint, DokumenFormatParagraf>();
+
         var footnotes = rawNotes
-            .Select(n => BuildFootnoteEntry(n.DnoteId, n.DelemenId, n.DnoteType, n.DnoteJsonTree, n.DnoteXml))
+            .Select(n => BuildFootnoteEntry(
+                n.DnoteId,
+                n.DelemenId,
+                n.DnoteType,
+                n.DnoteJsonTree,
+                n.DnoteNumber,
+                paragraphFormatById))
             .ToList();
 
         var normalFootnotes = footnotes
@@ -161,20 +177,17 @@ public partial class ValidationService
         ValidateFootnoteSeparator(result, rule, footnotes);
 
         var locationsByElementId = new Dictionary<ulong, List<ErrorLocation>>();
+        var locationsByNoteRowId = new Dictionary<uint, List<ErrorLocation>>();
 
         foreach (var footnote in normalFootnotes)
         {
-            var locations = new List<ErrorLocation>();
-            if (footnote.ElementId.HasValue)
-            {
-                if (!locationsByElementId.TryGetValue(footnote.ElementId.Value, out var cachedLocations))
-                {
-                    cachedLocations = await BuildElementLocationsAsync(footnote.ElementId.Value, cancellationToken);
-                    locationsByElementId[footnote.ElementId.Value] = cachedLocations;
-                }
-
-                locations = cachedLocations;
-            }
+            var locations = await BuildFootnoteLocationsAsync(
+                footnote,
+                noteRefType,
+                noteRefId,
+                locationsByNoteRowId,
+                locationsByElementId,
+                cancellationToken);
 
             var evidence = BuildFootnoteEvidence(footnote);
             var errorStart = result.Errors.Count;
@@ -190,23 +203,131 @@ public partial class ValidationService
         return result;
     }
 
+    private async Task<List<ErrorLocation>> BuildFootnoteLocationsAsync(
+        FootnoteEntryInfo footnote,
+        string noteRefType,
+        uint noteRefId,
+        Dictionary<uint, List<ErrorLocation>> locationsByNoteRowId,
+        Dictionary<ulong, List<ErrorLocation>> locationsByElementId,
+        CancellationToken cancellationToken)
+    {
+        if (footnote.RowId > 0)
+        {
+            if (!locationsByNoteRowId.TryGetValue(footnote.RowId, out var noteLocations))
+            {
+                noteLocations = await LoadFootnoteNoteLocationsAsync(
+                    footnote.RowId,
+                    noteRefType,
+                    noteRefId,
+                    cancellationToken);
+                locationsByNoteRowId[footnote.RowId] = noteLocations;
+            }
+
+            if (noteLocations.Count > 0)
+                return noteLocations;
+        }
+
+        if (!footnote.ElementId.HasValue)
+            return new List<ErrorLocation>();
+
+        if (!locationsByElementId.TryGetValue(footnote.ElementId.Value, out var cachedLocations))
+        {
+            cachedLocations = await BuildElementLocationsAsync(footnote.ElementId.Value, cancellationToken);
+            locationsByElementId[footnote.ElementId.Value] = cachedLocations;
+        }
+
+        return cachedLocations;
+    }
+
+    private async Task<List<ErrorLocation>> LoadFootnoteNoteLocationsAsync(
+        uint noteRowId,
+        string noteRefType,
+        uint noteRefId,
+        CancellationToken cancellationToken)
+    {
+        var visualRows = await _db.DokumenElemenVisuals
+            .AsNoTracking()
+            .Where(visual =>
+                visual.DokumenElemenId == noteRowId &&
+                visual.DevRefTipe == noteRefType &&
+                visual.DevRefId == noteRefId &&
+                (visual.DevLabel == "footnote" || visual.DevLabelStruktural == "footnote"))
+            .Select(visual => new
+            {
+                visual.DevPage,
+                visual.DevBboxX0,
+                visual.DevBboxY0,
+                visual.DevBboxX1,
+                visual.DevBboxY1
+            })
+            .ToListAsync(cancellationToken);
+
+        if (visualRows.Count == 0)
+            return new List<ErrorLocation>();
+
+        var pages = new HashSet<int>();
+        var pageBboxMap = new Dictionary<int, ErrorBbox>();
+
+        foreach (var row in visualRows)
+        {
+            if (!row.DevPage.HasValue)
+                continue;
+
+            var page = (int)row.DevPage.Value;
+            pages.Add(page);
+
+            if (!row.DevBboxX0.HasValue ||
+                !row.DevBboxY0.HasValue ||
+                !row.DevBboxX1.HasValue ||
+                !row.DevBboxY1.HasValue)
+            {
+                continue;
+            }
+
+            var bbox = new ErrorBbox
+            {
+                X0 = Convert.ToDecimal(row.DevBboxX0.Value),
+                Y0 = Convert.ToDecimal(row.DevBboxY0.Value),
+                X1 = Convert.ToDecimal(row.DevBboxX1.Value),
+                Y1 = Convert.ToDecimal(row.DevBboxY1.Value)
+            };
+
+            if (pageBboxMap.TryGetValue(page, out var existing))
+            {
+                pageBboxMap[page] = new ErrorBbox
+                {
+                    X0 = Math.Min(existing.X0, bbox.X0),
+                    Y0 = Math.Min(existing.Y0, bbox.Y0),
+                    X1 = Math.Max(existing.X1, bbox.X1),
+                    Y1 = Math.Max(existing.Y1, bbox.Y1)
+                };
+                continue;
+            }
+
+            pageBboxMap[page] = bbox;
+        }
+
+        return CreateLocations(pages, pageBboxMap);
+    }
+
     private static FootnoteEntryInfo BuildFootnoteEntry(
         uint rowId,
         ulong? elementId,
         string? noteType,
         string? noteJsonTree,
-        string? noteXml)
+        uint? noteNumber,
+        IReadOnlyDictionary<uint, DokumenFormatParagraf> paragraphFormatById)
     {
         var entry = new FootnoteEntryInfo
         {
             RowId = rowId,
             ElementId = elementId,
             NoteType = string.IsNullOrWhiteSpace(noteType) ? "normal" : noteType,
-            NoteNumber = TryExtractNoteNumber(noteXml),
+            NoteNumber = noteNumber.HasValue ? (int)noteNumber.Value : null,
             Content = ParseFootnoteContent(noteJsonTree)
         };
 
-        entry.Paragraphs.AddRange(ParseFootnoteParagraphs(noteXml));
+        entry.Paragraphs.AddRange(ParseFootnoteParagraphs(noteJsonTree, paragraphFormatById));
         return entry;
     }
 
@@ -225,7 +346,7 @@ public partial class ValidationService
         var expectedNumberFormat = NormalizeWhitespace(numberingRule.NumberFormat?.Value ?? string.Empty).ToLowerInvariant();
         if (expectedNumberFormat is "arabic" or "arab")
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberingRule.NumberFormat?.IsHardConstraint == true);
             var allNumbersDetected = footnotes.All(n => n.NoteNumber.HasValue);
             if (allNumbersDetected)
             {
@@ -247,7 +368,7 @@ public partial class ValidationService
         var expectedType = NormalizeWhitespace(numberingRule.Type?.Value ?? string.Empty).ToLowerInvariant();
         if (expectedType == "continuous")
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(numberingRule.Type?.IsHardConstraint == true);
 
             var noteNumbers = footnotes.Select(n => n.NoteNumber).ToList();
             var valid = true;
@@ -313,7 +434,7 @@ public partial class ValidationService
         var expectedAlignment = separatorRule.Paragraph?.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(separatorRule.Paragraph?.Alignment?.IsHardConstraint == true);
             if (paragraphs.All(p => AreAlignmentsEquivalent(p.Alignment, expectedAlignment)))
             {
                 result.IncrementPassedChecks();
@@ -335,7 +456,7 @@ public partial class ValidationService
         var expectedLeftIndent = separatorRule.Paragraph?.Indentation?.LeftIndent?.Value;
         if (expectedLeftIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(separatorRule.Paragraph?.Indentation?.LeftIndent?.IsHardConstraint == true);
             if (paragraphs.All(p => Math.Abs(p.LeftIndentCm - expectedLeftIndent.Value) <= 0.05m))
             {
                 result.IncrementPassedChecks();
@@ -356,7 +477,7 @@ public partial class ValidationService
         var expectedFirstLineIndent = separatorRule.Paragraph?.Indentation?.FirstLineIndent?.Value;
         if (expectedFirstLineIndent.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(separatorRule.Paragraph?.Indentation?.FirstLineIndent?.IsHardConstraint == true);
             if (paragraphs.All(p => Math.Abs(p.FirstLineIndentCm - expectedFirstLineIndent.Value) <= 0.05m))
             {
                 result.IncrementPassedChecks();
@@ -377,7 +498,7 @@ public partial class ValidationService
         var spacingRule = separatorRule.Paragraph?.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actuals = paragraphs.Select(p => p.LineSpacing).ToList();
             if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expected) <= 0.05m))
@@ -399,7 +520,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actuals = paragraphs.Select(p => p.SpacingBeforePt).ToList();
             if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expected) <= 0.05m))
@@ -421,7 +542,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actuals = paragraphs.Select(p => p.SpacingAfterPt).ToList();
             if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expected) <= 0.05m))
@@ -443,7 +564,7 @@ public partial class ValidationService
 
         if (separatorRule.CegahTabAwal?.Value == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(separatorRule.CegahTabAwal?.IsHardConstraint == true);
             if (separatorFootnotes.All(n => !n.Content.StartsWithTab))
             {
                 result.IncrementPassedChecks();
@@ -480,7 +601,7 @@ public partial class ValidationService
         var expectedFontName = fontRule.FontName?.Value;
         if (!string.IsNullOrWhiteSpace(expectedFontName))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(fontRule.FontName?.IsHardConstraint == true);
             var mismatches = CollectRunMismatches(
                 runs,
                 textFormatById,
@@ -509,7 +630,7 @@ public partial class ValidationService
         var expectedFontSize = fontRule.FontSize?.Value;
         if (expectedFontSize.HasValue)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(fontRule.FontSize?.IsHardConstraint == true);
             var expectedHalfPt = expectedFontSize.Value * 2m;
 
             var mismatches = CollectRunMismatches(
@@ -558,7 +679,7 @@ public partial class ValidationService
         var expectedAlignment = paragraphRule.Alignment?.Value;
         if (!string.IsNullOrWhiteSpace(expectedAlignment))
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(paragraphRule.Alignment?.IsHardConstraint == true);
             if (footnote.Paragraphs.All(p => AreAlignmentsEquivalent(p.Alignment, expectedAlignment)))
             {
                 result.IncrementPassedChecks();
@@ -582,7 +703,7 @@ public partial class ValidationService
         var spacingRule = paragraphRule.Spacing;
         if (spacingRule?.LineSpacing?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.LineSpacing?.IsHardConstraint == true);
             var expected = spacingRule.LineSpacing.Value.Value;
             var actuals = footnote.Paragraphs.Select(p => p.LineSpacing).ToList();
 
@@ -607,7 +728,7 @@ public partial class ValidationService
 
         if (spacingRule?.Before?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.Before?.IsHardConstraint == true);
             var expected = spacingRule.Before.Value.Value;
             var actuals = footnote.Paragraphs.Select(p => p.SpacingBeforePt).ToList();
             if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expected) <= 0.05m))
@@ -631,7 +752,7 @@ public partial class ValidationService
 
         if (spacingRule?.After?.Value.HasValue == true)
         {
-            result.IncrementTotalChecks();
+            result.IncrementTotalChecks(spacingRule.After?.IsHardConstraint == true);
             var expected = spacingRule.After.Value.Value;
             var actuals = footnote.Paragraphs.Select(p => p.SpacingAfterPt).ToList();
             if (actuals.All(a => a.HasValue && Math.Abs(a.Value - expected) <= 0.05m))
@@ -666,7 +787,7 @@ public partial class ValidationService
 
         // Best-effort interpretation with available extraction data:
         // when enabled, footnote text should not start with a tab.
-        result.IncrementTotalChecks();
+        result.IncrementTotalChecks(structureRule.SatuEnterSebelum?.IsHardConstraint == true);
         if (!footnote.Content.StartsWithTab)
         {
             result.IncrementPassedChecks();
@@ -843,108 +964,86 @@ public partial class ValidationService
         return false;
     }
 
-    private static List<FootnoteParagraphFormatInfo> ParseFootnoteParagraphs(string? noteXml)
+    private static List<uint> ExtractFootnoteParagraphFormatIds(string? noteJsonTree)
     {
-        var paragraphs = new List<FootnoteParagraphFormatInfo>();
-        if (string.IsNullOrWhiteSpace(noteXml))
-            return paragraphs;
+        var paragraphFormatIds = new HashSet<uint>();
+        if (string.IsNullOrWhiteSpace(noteJsonTree))
+            return paragraphFormatIds.ToList();
 
         try
         {
-            var doc = XDocument.Parse(noteXml);
-            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-
-            foreach (var paragraph in doc.Descendants(w + "p"))
+            using var doc = JsonDocument.Parse(noteJsonTree);
+            if (!doc.RootElement.TryGetProperty("content", out var contentElement) ||
+                contentElement.ValueKind != JsonValueKind.Array)
             {
-                var pPr = paragraph.Element(w + "pPr");
-                var spacing = pPr?.Element(w + "spacing");
-                var indent = pPr?.Element(w + "ind");
+                return paragraphFormatIds.ToList();
+            }
 
-                var alignment = pPr?.Element(w + "jc")?.Attribute(w + "val")?.Value
-                                ?? pPr?.Element(w + "jc")?.Attribute("val")?.Value
-                                ?? "left";
+            foreach (var paragraph in contentElement.EnumerateArray())
+            {
+                if (paragraph.ValueKind != JsonValueKind.Object)
+                    continue;
 
-                var beforeTwips = TryParseUIntAttribute(spacing, w + "before");
-                var afterTwips = TryParseUIntAttribute(spacing, w + "after");
-                var lineTwips = TryParseUIntAttribute(spacing, w + "line");
-                var lineRule = spacing?.Attribute(w + "lineRule")?.Value
-                               ?? spacing?.Attribute("lineRule")?.Value;
-
-                var leftTwips = TryParseUIntAttribute(indent, w + "left") ?? TryParseUIntAttribute(indent, w + "start");
-                var firstLineTwips = TryParseUIntAttribute(indent, w + "firstLine");
-                var hangingTwips = TryParseUIntAttribute(indent, w + "hanging");
-
-                decimal firstLineIndentCm = 0m;
-                if (firstLineTwips.HasValue && firstLineTwips.Value > 0)
+                if (paragraph.TryGetProperty("dfp_id", out var dfpEl) &&
+                    dfpEl.TryGetUInt32(out var dfpId))
                 {
-                    firstLineIndentCm = firstLineTwips.Value / 1440m * 2.54m;
+                    paragraphFormatIds.Add(dfpId);
                 }
-                else if (hangingTwips.HasValue && hangingTwips.Value > 0)
-                {
-                    firstLineIndentCm = -(hangingTwips.Value / 1440m * 2.54m);
-                }
-
-                decimal? lineSpacing = 1m;
-                if (lineTwips.HasValue)
-                {
-                    lineSpacing = string.IsNullOrWhiteSpace(lineRule) ||
-                                  string.Equals(lineRule, "auto", StringComparison.OrdinalIgnoreCase)
-                        ? lineTwips.Value / 240m
-                        : null;
-                }
-
-                paragraphs.Add(new FootnoteParagraphFormatInfo
-                {
-                    Alignment = alignment,
-                    LeftIndentCm = leftTwips.HasValue ? leftTwips.Value / 1440m * 2.54m : 0m,
-                    FirstLineIndentCm = firstLineIndentCm,
-                    SpacingBeforePt = beforeTwips.HasValue ? beforeTwips.Value / 20m : 0m,
-                    SpacingAfterPt = afterTwips.HasValue ? afterTwips.Value / 20m : 0m,
-                    LineSpacing = lineSpacing
-                });
             }
         }
         catch
         {
-            // Ignore XML parse failures for robust validation pipeline.
+            // Ignore malformed historical rows.
+        }
+
+        return paragraphFormatIds.ToList();
+    }
+
+    private static List<FootnoteParagraphFormatInfo> ParseFootnoteParagraphs(
+        string? noteJsonTree,
+        IReadOnlyDictionary<uint, DokumenFormatParagraf> paragraphFormatById)
+    {
+        var paragraphs = new List<FootnoteParagraphFormatInfo>();
+        foreach (var paragraphFormatId in ExtractFootnoteParagraphFormatIds(noteJsonTree))
+        {
+            if (!paragraphFormatById.TryGetValue(paragraphFormatId, out var format))
+                continue;
+
+            var firstLineIndentCm = 0m;
+            if (format.DfpIndFirstLineTwips.HasValue && format.DfpIndFirstLineTwips.Value > 0)
+            {
+                firstLineIndentCm = format.DfpIndFirstLineTwips.Value / 1440m * 2.54m;
+            }
+            else if (format.DfpIndHangingTwips.HasValue && format.DfpIndHangingTwips.Value > 0)
+            {
+                firstLineIndentCm = -(format.DfpIndHangingTwips.Value / 1440m * 2.54m);
+            }
+
+            decimal? lineSpacing = 1m;
+            if (format.DfpSpacingLineTwips.HasValue)
+            {
+                lineSpacing = string.IsNullOrWhiteSpace(format.DfpSpacingLineRule) ||
+                              string.Equals(format.DfpSpacingLineRule, "auto", StringComparison.OrdinalIgnoreCase)
+                    ? format.DfpSpacingLineTwips.Value / 240m
+                    : null;
+            }
+
+            var leftTwips = format.DfpIndLeftTwips.HasValue && format.DfpIndLeftTwips.Value != 0
+                ? format.DfpIndLeftTwips.Value
+                : format.DfpIndStartTwips ?? 0;
+
+            paragraphs.Add(new FootnoteParagraphFormatInfo
+            {
+                Alignment = format.DfpJc ?? "left",
+                LeftIndentCm = leftTwips / 1440m * 2.54m,
+                FirstLineIndentCm = firstLineIndentCm,
+                SpacingBeforePt = format.DfpSpacingBeforeTwips.HasValue ? format.DfpSpacingBeforeTwips.Value / 20m : 0m,
+                SpacingAfterPt = format.DfpSpacingAfterTwips.HasValue ? format.DfpSpacingAfterTwips.Value / 20m : 0m,
+                LineSpacing = lineSpacing
+            });
         }
 
         return paragraphs;
-    }
-
-    private static uint? TryParseUIntAttribute(XElement? element, XName name)
-    {
-        if (element == null)
-            return null;
-
-        var raw = element.Attribute(name)?.Value ?? element.Attribute(name.LocalName)?.Value;
-        if (string.IsNullOrWhiteSpace(raw))
-            return null;
-
-        return uint.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
-            ? value
-            : null;
-    }
-
-    private static int? TryExtractNoteNumber(string? noteXml)
-    {
-        if (string.IsNullOrWhiteSpace(noteXml))
-            return null;
-
-        try
-        {
-            var doc = XDocument.Parse(noteXml);
-            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-            var raw = doc.Root?.Attribute(w + "id")?.Value ?? doc.Root?.Attribute("id")?.Value;
-            if (int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
-                return value;
-        }
-        catch
-        {
-            // Ignore XML parse failures and treat number as unknown.
-        }
-
-        return null;
     }
 }
 

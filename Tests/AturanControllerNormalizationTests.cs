@@ -83,8 +83,9 @@ public class AturanControllerNormalizationTests
         {
             AturanDetailId = 10,
             AturanId = 1,
-            AturanDetailKey = "nomor_halaman_akhir",
-            AturanDetailJsonValue = """{"continue":true}"""
+            AturanDetailKategori = "Nomor Halaman",
+            AturanDetailKey = "nomor_halaman",
+            AturanDetailJsonValue = """{"numbering":{"number_format":{"value":"decimal","is_editable":false,"is_hard_constraint":false}}}"""
         });
         await db.SaveChangesAsync();
 
@@ -104,7 +105,8 @@ public class AturanControllerNormalizationTests
                 new AturanDetailPatchItem
                 {
                     aturan_detail_id = 10,
-                    json_value = """{"continue":true}"""
+                    key = "nomor_halaman",
+                    json_value = """{"numbering":{"number_format":"decimal"}}"""
                 }
             ]
         };
@@ -113,9 +115,10 @@ public class AturanControllerNormalizationTests
 
         Assert.IsType<OkObjectResult>(result);
         var updated = await db.AturanDetails.FindAsync((uint)10);
-        Assert.Equal(
-            """{"continue":{"value":true,"is_editable":false,"is_hard_constraint":false}}""",
-            updated!.AturanDetailJsonValue);
+        Assert.Equal("nomor_halaman", updated!.AturanDetailKey);
+        var json = System.Text.Json.Nodes.JsonNode.Parse(updated.AturanDetailJsonValue!)!.AsObject();
+        Assert.Equal("decimal", json["numbering"]!["number_format"]!["value"]!.GetValue<string>());
+        Assert.False(json["numbering"]!["number_format"]!["is_editable"]!.GetValue<bool>());
         var aturan = await db.Aturans.FindAsync((uint)1);
         Assert.Equal(AturanStatusValues.TidakAktif, aturan!.AturanStatus);
     }
@@ -134,8 +137,9 @@ public class AturanControllerNormalizationTests
         {
             AturanDetailId = 20,
             AturanId = 2,
-            AturanDetailKey = "nomor_halaman_akhir",
-            AturanDetailJsonValue = """{"continue":{"value":false,"is_editable":false,"is_hard_constraint":false}}"""
+            AturanDetailKategori = "Nomor Halaman",
+            AturanDetailKey = "nomor_halaman",
+            AturanDetailJsonValue = """{"numbering":{"number_format":{"value":"decimal","is_editable":false,"is_hard_constraint":false}}}"""
         });
         await db.SaveChangesAsync();
 
@@ -155,7 +159,8 @@ public class AturanControllerNormalizationTests
                 new AturanDetailPatchItem
                 {
                     aturan_detail_id = 20,
-                    json_value = """{"continue":true}"""
+                    key = "nomor_halaman",
+                    json_value = """{"variation":{"different_first_page":{"enabled":true}}}"""
                 }
             ]
         };
@@ -232,8 +237,8 @@ public class AturanControllerNormalizationTests
         {
             AturanDetailId = 10,
             AturanId = 1,
-            AturanDetailKey = "paper",
-            AturanDetailJsonValue = """{"section":{"isi":{"value":"A4","is_editable":true}}}"""
+            AturanDetailKey = "page_settings",
+            AturanDetailJsonValue = """{"paper":{"size":{"value":"A4","is_editable":true}}}"""
         });
         await db.SaveChangesAsync();
 
@@ -253,6 +258,7 @@ public class AturanControllerNormalizationTests
                 new AturanDetailPatchItem
                 {
                     aturan_detail_id = 10,
+                    key = "page_settings",
                     json_value = """{"section":"""
                 }
             ]
@@ -263,7 +269,7 @@ public class AturanControllerNormalizationTests
         Assert.IsType<BadRequestObjectResult>(result);
         var unchanged = await db.AturanDetails.FindAsync((uint)10);
         Assert.Equal(
-            """{"section":{"isi":{"value":"A4","is_editable":true}}}""",
+            """{"paper":{"size":{"value":"A4","is_editable":true}}}""",
             unchanged!.AturanDetailJsonValue);
     }
 

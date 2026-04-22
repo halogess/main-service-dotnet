@@ -123,7 +123,6 @@ public class DokumenController : ControllerBase
             total_elemen = summary.TotalElemen,
             total_visual = summary.TotalVisual,
             total_note = summary.TotalNote,
-            total_media = summary.TotalMedia,
             total_kesalahan = summary.TotalKesalahan,
             total_kesalahan_detail = summary.TotalKesalahanDetail,
             total_adobe_log = summary.TotalAdobeLog,
@@ -131,10 +130,7 @@ public class DokumenController : ControllerBase
             total_paragraph_format = summary.TotalParagraphFormat,
             total_text_format = summary.TotalTextFormat,
             total_table_format = summary.TotalTableFormat,
-            total_table_row_format = summary.TotalTableRowFormat,
-            total_table_cell_format = summary.TotalTableCellFormat,
             total_drawing_format = summary.TotalDrawingFormat,
-            total_field_format = summary.TotalFieldFormat,
             total_storage_targets = summary.TotalStorageTargets,
             existing_storage_directories = summary.ExistingStorageDirectories
         });
@@ -222,7 +218,6 @@ public class DokumenController : ControllerBase
                 deleted_elemen = result.DeletedElemen,
                 deleted_visual = result.DeletedVisual,
                 deleted_note = result.DeletedNote,
-                deleted_media = result.DeletedMedia,
                 deleted_kesalahan = result.DeletedKesalahan,
                 deleted_kesalahan_detail = result.DeletedKesalahanDetail,
                 deleted_adobe_log = result.DeletedAdobeLog,
@@ -230,10 +225,7 @@ public class DokumenController : ControllerBase
                 deleted_paragraph_format = result.DeletedParagraphFormat,
                 deleted_text_format = result.DeletedTextFormat,
                 deleted_table_format = result.DeletedTableFormat,
-                deleted_table_row_format = result.DeletedTableRowFormat,
-                deleted_table_cell_format = result.DeletedTableCellFormat,
                 deleted_drawing_format = result.DeletedDrawingFormat,
-                deleted_field_format = result.DeletedFieldFormat,
                 storage_targets = result.StorageTargets,
                 deleted_storage_directories = result.DeletedStorageDirectories,
                 failed_storage_directories = result.FailedStorageDirectories
@@ -263,7 +255,9 @@ public class DokumenController : ControllerBase
                 tanggal_upload = d.TanggalUpload,
                 ukuran_file = d.UkuranFile,
                 status = d.Status,
-                jumlah_kesalahan = d.JumlahKesalahan
+                jumlah_kesalahan = d.JumlahKesalahan,
+                has_failed_queue = d.HasFailedQueue,
+                error_message = d.ErrorMessage
             }),
             total = result.Total,
             limit = result.Limit,
@@ -284,6 +278,8 @@ public class DokumenController : ControllerBase
         // Check authorization: admin can access all, user can only access their own
         if (role != "admin" && dokumen.MhsNrp != nrp)
             return Forbid();
+
+        var latestQueue = await GetLatestDokumenQueueAsync(id);
 
         // Base response
         object? kesalahanData = null;
@@ -354,6 +350,11 @@ public class DokumenController : ControllerBase
             skor = dokumen.DokumenSkor,
             skor_minimal = dokumen.DokumenSkorMinimal,
             jumlah_kesalahan = dokumen.DokumenJumlahKesalahan,
+            has_failed_queue = QueueCancellationHelper.HasFailedStage(latestQueue),
+            extraction_status = latestQueue?.AntrianExtractionStatus,
+            labeling_status = latestQueue?.AntrianLabelingStatus,
+            validation_status = latestQueue?.AntrianValidationStatus,
+            error_message = latestQueue?.AntrianErrorMessage,
             total_halaman = availablePages.Count,
             available_pages = availablePages,
             created_at = dokumen.DokumenCreatedAt,
@@ -406,7 +407,7 @@ public class DokumenController : ControllerBase
                         judul = d.KesalahanDetailJudul,
                         penjelasan = d.KesalahanDetailPenjelasan,
                         steps = d.KesalahanDetailSteps,
-                        is_required = d.KesalahanIsRequired
+                        is_hard_constraint = d.KesalahanIsHardConstraint
                     })
                     .ToList()
             })
@@ -741,6 +742,14 @@ public class DokumenController : ControllerBase
 
         return $"{resourceLabel} berhasil disubmit. Notifikasi akan dikirim ke email STTS Anda setelah selesai.";
     }
+
+    private Task<Antrian?> GetLatestDokumenQueueAsync(int dokumenId)
+        => _db.Antrians
+            .AsNoTracking()
+            .Where(a => a.DokumenId == (uint)dokumenId)
+            .OrderByDescending(a => a.AntrianCreatedAt)
+            .ThenByDescending(a => a.AntrianId)
+            .FirstOrDefaultAsync();
 }
 
 public sealed class PurgeDokumenHistoryRequest

@@ -1,6 +1,8 @@
 using System.Net;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ValidasiTugasAkhir.MainService.Models;
@@ -111,10 +113,40 @@ public class AuthServiceTests
             capturedUri!.AbsoluteUri);
     }
 
+    [Fact]
+    public async Task Login_ShouldBypassExternalApi_WhenEnvironmentIsDevelopment()
+    {
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
+        sttsDb.Mahasiswas.Add(new Mahasiswa
+        {
+            MhsNrp = "05111740000111",
+            MhsNama = "Mahasiswa Uji"
+        });
+        await sttsDb.SaveChangesAsync();
+
+        var requestCount = 0;
+        var factory = CreateHttpClientFactory(_ =>
+        {
+            requestCount++;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"response\":false}")
+            };
+        });
+
+        var service = CreateAuthService(sttsDb, factory, environmentName: Environments.Development);
+
+        var result = await service.Login("05111740000111", "password-apa-saja");
+
+        Assert.NotNull(result);
+        Assert.Equal(0, requestCount);
+    }
+
     private static AuthService CreateAuthService(
         SttsDbContext sttsDb,
         IHttpClientFactory httpClientFactory,
-        Dictionary<string, string?>? overrides = null)
+        Dictionary<string, string?>? overrides = null,
+        string environmentName = "Production")
     {
         var values = new Dictionary<string, string?>
             {
@@ -137,11 +169,15 @@ public class AuthServiceTests
             .AddInMemoryCollection(values)
             .Build();
 
+        var environment = new Mock<IWebHostEnvironment>();
+        environment.SetupGet(x => x.EnvironmentName).Returns(environmentName);
+
         return new AuthService(
             sttsDb,
             configuration,
             httpClientFactory,
-            NullLogger<AuthService>.Instance);
+            NullLogger<AuthService>.Instance,
+            environment.Object);
     }
 
     private static IHttpClientFactory CreateHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)

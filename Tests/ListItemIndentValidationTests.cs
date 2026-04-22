@@ -138,7 +138,6 @@ public class ListItemIndentValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "item_daftar",
-                AturanDetailStatus = 1,
                 AturanDetailJsonValue =
                     """
                     {

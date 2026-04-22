@@ -44,7 +44,9 @@ public class BukuController : ControllerBase
         if (string.IsNullOrWhiteSpace(judul))
             return BadRequest(new { message = "Judul tidak boleh kosong" });
 
-        if (_db.Bukus.Any(b => b.MhsNrp == nrp && b.BukuStatus == "dalam_antrian"))
+        if (_db.Bukus.Any(b =>
+            b.MhsNrp == nrp &&
+            b.BukuStatus == "dalam_antrian"))
             return BadRequest(new { message = "Masih ada buku dalam antrian" });
 
         try
@@ -69,7 +71,12 @@ public class BukuController : ControllerBase
     public IActionResult CanUpload()
     {
         var nrp = HttpContext.Items["Nrp"]?.ToString();
-        return Ok(new { can_upload = !_db.Bukus.Any(b => b.MhsNrp == nrp && b.BukuStatus == "dalam_antrian") });
+        return Ok(new
+        {
+            can_upload = !_db.Bukus.Any(b =>
+                b.MhsNrp == nrp &&
+                b.BukuStatus == "dalam_antrian")
+        });
     }
 
     [HttpGet("judul")]
@@ -100,12 +107,39 @@ public class BukuController : ControllerBase
         if (buku.MhsNrp != nrp)
             return Forbid();
         
-        if (buku.BukuStatus != "dalam_antrian")
-            return BadRequest(new { message = "Hanya buku dalam antrian yang bisa dibatalkan" });
-        
-        buku.BukuStatus = "dibatalkan";
-        buku.BukuUpdatedAt = DateTime.Now;
-        await _db.SaveChangesAsync();
+        if (buku.BukuStatus != "dalam_antrian" && buku.BukuStatus != "diproses")
+            return BadRequest(new { message = "Hanya buku dalam antrian atau diproses yang bisa dibatalkan" });
+
+        var now = DateTime.Now;
+        var strategy = _db.Database.CreateExecutionStrategy();
+
+        await strategy.ExecuteAsync(async () =>
+        {
+            var transaction = _db.Database.IsRelational()
+                ? await _db.Database.BeginTransactionAsync()
+                : null;
+
+            await using (transaction)
+            {
+                buku.BukuStatus = "dibatalkan";
+                buku.BukuUpdatedAt = now;
+
+                var queues = await GetBukuQueuesAsync((uint)id);
+
+                foreach (var queue in queues)
+                {
+                    QueueCancellationHelper.ClearActiveStages(
+                        queue,
+                        QueueCancellationHelper.CancelledByUserMessage,
+                        now);
+                }
+
+                await _db.SaveChangesAsync();
+                if (transaction != null)
+                    await transaction.CommitAsync();
+            }
+        });
+
         await _wsService.NotifyBukuCancelled(nrp!, id);
         
         return Ok(new { message = "Buku berhasil dibatalkan" });
@@ -203,11 +237,7 @@ public class BukuController : ControllerBase
         var isFinalStatus =
             string.Equals(buku.BukuStatus, "lolos", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(buku.BukuStatus, "tidak_lolos", StringComparison.OrdinalIgnoreCase);
-        var antrianList = await _db.Antrians
-            .Where(a => a.AntrianTipe == "buku" && a.BukuId == bukuId)
-            .OrderByDescending(a => a.AntrianCreatedAt)
-            .ThenByDescending(a => a.AntrianId)
-            .ToListAsync();
+        var antrianList = await GetBukuQueuesAsync(bukuId, asNoTracking: true);
         var hasFailedBabQueue = antrianList.Any(a =>
             a.BabId.HasValue &&
             (string.Equals(a.AntrianExtractionStatus, "failed", StringComparison.OrdinalIgnoreCase) ||
@@ -534,6 +564,27 @@ public class BukuController : ControllerBase
             return $"{resourceLabel} berhasil disubmit. Notifikasi akan dikirim ke {notificationEmail.Trim()} setelah selesai.";
 
         return $"{resourceLabel} berhasil disubmit. Notifikasi akan dikirim ke email STTS Anda setelah selesai.";
+    }
+
+    private async Task<List<Antrian>> GetBukuQueuesAsync(uint bukuId, bool asNoTracking = false)
+    {
+        var babIds = await _db.Babs
+            .Where(b => b.BukuId == bukuId)
+            .Select(b => b.BabId)
+            .ToListAsync();
+
+        IQueryable<Antrian> query = _db.Antrians;
+        if (asNoTracking)
+            query = query.AsNoTracking();
+
+        return await query
+            .Where(a =>
+                a.AntrianTipe == "buku" &&
+                (a.BukuId == bukuId ||
+                 (!a.BukuId.HasValue && a.BabId.HasValue && babIds.Contains(a.BabId.Value))))
+            .OrderByDescending(a => a.AntrianCreatedAt)
+            .ThenByDescending(a => a.AntrianId)
+            .ToListAsync();
     }
 
 }

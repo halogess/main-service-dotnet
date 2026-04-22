@@ -186,7 +186,6 @@ public class CaptionDrivenContentValidationTests
             AturanDetailKategori = "Isi Buku",
             AturanDetailKey = "tabel",
             AturanDetailJsonValue = """{"cegah_gambar_tabel":{"value":true,"is_editable":true}}""",
-            AturanDetailStatus = 1
         });
 
         fixture.Db.AturanDetails.Add(new AturanDetail
@@ -197,7 +196,6 @@ public class CaptionDrivenContentValidationTests
             AturanDetailKey = "caption_tabel",
             AturanDetailJsonValue =
                 """{"numbering":{"number_format":{"value":"Tabel [nomor_bab].[nomor_tabel]","is_editable":false},"case":{"value":"Title Case","is_editable":true},"enter_after_numbering":{"value":true,"is_editable":true}},"position":{"value":"before","is_editable":true}}""",
-            AturanDetailStatus = 1
         });
 
         fixture.AddElement(7001, 1, "paragraph", """{"text":"Tabel 2.8 Cara Menentukan Tipe Awalan untuk Kata yang Diawali \"te-\""}""");
@@ -233,7 +231,6 @@ public class CaptionDrivenContentValidationTests
             AturanDetailKategori = "Isi Buku",
             AturanDetailKey = "tabel",
             AturanDetailJsonValue = """{"cegah_gambar_tabel":{"value":true,"is_editable":true}}""",
-            AturanDetailStatus = 1
         });
 
         fixture.Db.AturanDetails.Add(new AturanDetail
@@ -244,7 +241,6 @@ public class CaptionDrivenContentValidationTests
             AturanDetailKey = "caption_tabel",
             AturanDetailJsonValue =
                 """{"numbering":{"number_format":{"value":"Tabel [nomor_bab].[nomor_tabel]","is_editable":false},"case":{"value":"Title Case","is_editable":true},"enter_after_numbering":{"value":true,"is_editable":true}},"position":{"value":"before","is_editable":true}}""",
-            AturanDetailStatus = 1
         });
 
         fixture.AddElement(8001, 1, "paragraph", """{"text":"Tabel 2.9 Cara Menentukan Tipe \"contoh awalan\" untuk Kata"}""");
@@ -308,7 +304,6 @@ public class CaptionDrivenContentValidationTests
             AturanDetailKey = "tabel",
             AturanDetailJsonValue =
                 """{"tabel":{"cegah_gambar_tabel":{"value":true,"is_editable":true}},"caption_tabel":{"numbering":{"number_format":{"value":"Tabel [nomor_bab].[nomor_tabel]","is_editable":false},"enter_after_numbering":{"value":true,"is_editable":true}},"position":{"value":"before","is_editable":true}}}""",
-            AturanDetailStatus = 1
         });
 
         fixture.AddElement(9021, 1, "paragraph", """{"text":"Tabel 1.1 Hasil Pengujian"}""");
@@ -409,7 +404,6 @@ public class CaptionDrivenContentValidationTests
             AturanDetailKey = "kode",
             AturanDetailJsonValue =
                 """{"kode":{"cegah_gambar_kode":{"value":true,"is_editable":true}},"judul_kode":{"numbering":{"number_format":{"value":["Algoritma [nomor_bab].[nomor_algo]","Segmen Program [nomor_bab].[nomor_segpro]"],"is_editable":false},"enter_after_numbering":{"value":false,"is_editable":true}},"position":{"value":"before","is_editable":true}}}""",
-            AturanDetailStatus = 1
         });
 
         fixture.AddElement(9111, 1, "paragraph", """{"text":"Algoritma 1.1 Proses Data"}""");
@@ -520,7 +514,6 @@ public class CaptionDrivenContentValidationTests
                 AturanDetailKategori = "Isi Buku",
                 AturanDetailKey = "tabel",
                 AturanDetailJsonValue = """{"cegah_gambar_tabel":{"value":true,"is_editable":true}}""",
-                AturanDetailStatus = 1
             });
 
             Db.AturanDetails.Add(new AturanDetail
@@ -531,7 +524,6 @@ public class CaptionDrivenContentValidationTests
                 AturanDetailKey = "caption_tabel",
                 AturanDetailJsonValue =
                     """{"numbering":{"number_format":{"value":"Tabel [nomor_bab].[nomor_tabel]","is_editable":false},"enter_after_numbering":{"value":true,"is_editable":true}},"position":{"value":"before","is_editable":true},"wajib_caption_lanjutan_jika_lintas_halaman":{"value":true,"is_editable":true}}""",
-                AturanDetailStatus = 1
             });
         }
 
@@ -545,7 +537,6 @@ public class CaptionDrivenContentValidationTests
                 AturanDetailKey = "kode",
                 AturanDetailJsonValue =
                     """{"kode":{"cegah_gambar_kode":{"value":true,"is_editable":true}},"judul_kode":{"numbering":{"number_format":{"value":["Algoritma [nomor_bab].[nomor_algo]","Segmen Program [nomor_bab].[nomor_segpro]"],"is_editable":false},"enter_after_numbering":{"value":false,"is_editable":true}},"position":{"value":"before","is_editable":true},"wajib_caption_lanjutan_jika_lintas_halaman":{"value":true,"is_editable":true}}}""",
-                AturanDetailStatus = 1
             });
         }
 
@@ -559,7 +550,6 @@ public class CaptionDrivenContentValidationTests
                 AturanDetailKey = "caption_gambar",
                 AturanDetailJsonValue =
                     """{"numbering":{"number_format":{"value":"Gambar [nomor_bab].[nomor_gambar]","is_editable":false},"enter_after_numbering":{"value":true,"is_editable":true}},"position":{"value":"before","is_editable":true}}""",
-                AturanDetailStatus = 1
             });
         }
 

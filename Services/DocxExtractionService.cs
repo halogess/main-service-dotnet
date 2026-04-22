@@ -40,7 +40,10 @@ public class DocxExtractionService : IDocxExtractionService
     public async Task ExtractDocxToDatabase(string docxPath, string refTipe, uint refId)
     {
         var normalizedRefTipe = string.IsNullOrWhiteSpace(refTipe) ? "dokumen" : refTipe.Trim().ToLowerInvariant();
-        var isDokumenRef = normalizedRefTipe == "dokumen";
+        var supportsNotes =
+            normalizedRefTipe == "dokumen" ||
+            normalizedRefTipe == "bab" ||
+            normalizedRefTipe == "aturan";
 
         try
         {
@@ -64,8 +67,6 @@ public class DocxExtractionService : IDocxExtractionService
             // Initialize TableStyleResolver for table format resolution
             var tableStyleResolver = new TableStyleResolver(stylesPart, stylesWithEffectsPart);
             var tableFormatExtractor = new TableFormatExtractor(tableStyleResolver);
-            var rowFormatExtractor = new TableRowFormatExtractor(tableStyleResolver);
-            var cellFormatExtractor = new TableCellFormatExtractor(tableStyleResolver);
 
             // Create ParagraphFormatExtractor with StyleResolver for effective property resolution
             var paragraphFormatExtractor = new ParagraphFormatExtractor(styleResolver, numberingPart);
@@ -75,8 +76,6 @@ public class DocxExtractionService : IDocxExtractionService
                 _logger,
                 _db,
                 tableFormatExtractor,
-                rowFormatExtractor,
-                cellFormatExtractor,
                 paragraphFormatExtractor,
                 _paragraphExtractor.ExtractParagraphContentSorted,
                 _paragraphExtractor.DetectParagraphType);
@@ -381,56 +380,60 @@ public class DocxExtractionService : IDocxExtractionService
             
             // === FOOTNOTE EXTRACTION ===
             var footnotesPart = doc.MainDocumentPart!.FootnotesPart;
-            if (isDokumenRef && footnotesPart?.Footnotes != null)
+            if (supportsNotes && footnotesPart?.Footnotes != null)
             {
                 foreach (var footnote in footnotesPart.Footnotes.Elements<DocumentFormat.OpenXml.Wordprocessing.Footnote>())
                 {
                     var fnId = footnote.Id?.Value ?? 0;
                     var fnType = footnote.Type?.Value.ToString().ToLower() ?? "normal";
-                    
-                    // Skip separator and continuation separator (they are system footnotes)
-                    if (fnId < 1) continue;
-                    
-                    var jsonContent = ExtractNoteContent(footnote, numberingPart, numberingCounters);
-                    
+
+                    var jsonContent = await ExtractNoteContent(
+                        footnote,
+                        paragraphFormatExtractor,
+                        numberingPart,
+                        numberingCounters);
+
                     _db.DokumenNotes.Add(new DokumenNote
                     {
-                        DokumenId = refId,
-                        DelemenId = GetDelemenIdForNote("footnote", fnId),
+                        DnoteRefTipe = normalizedRefTipe,
+                        DnoteRefId = refId,
+                        DelemenId = fnId >= 1 ? GetDelemenIdForNote("footnote", fnId) : null,
                         DnoteKind = "footnote",
                         DnoteType = fnType,
-                        DnoteJsonTree = jsonContent.ToString(Formatting.None),
-                        DnoteXml = footnote.OuterXml
+                        DnoteNumber = fnId >= 1 ? (uint?)fnId : null,
+                        DnoteJsonTree = jsonContent.ToString(Formatting.None)
                     });
                 }
-                _logger.LogDebug("Extracted footnotes for dokumen {DokumenId}", refId);
+                _logger.LogDebug("Extracted footnotes for {RefTipe} {RefId}", normalizedRefTipe, refId);
             }
-            
+
             // === ENDNOTE EXTRACTION ===
             var endnotesPart = doc.MainDocumentPart!.EndnotesPart;
-            if (isDokumenRef && endnotesPart?.Endnotes != null)
+            if (supportsNotes && endnotesPart?.Endnotes != null)
             {
                 foreach (var endnote in endnotesPart.Endnotes.Elements<DocumentFormat.OpenXml.Wordprocessing.Endnote>())
                 {
                     var enId = endnote.Id?.Value ?? 0;
                     var enType = endnote.Type?.Value.ToString().ToLower() ?? "normal";
-                    
-                    // Skip separator and continuation separator (they are system endnotes)
-                    if (enId < 1) continue;
-                    
-                    var jsonContent = ExtractNoteContent(endnote, numberingPart, numberingCounters);
-                    
+
+                    var jsonContent = await ExtractNoteContent(
+                        endnote,
+                        paragraphFormatExtractor,
+                        numberingPart,
+                        numberingCounters);
+
                     _db.DokumenNotes.Add(new DokumenNote
                     {
-                        DokumenId = refId,
-                        DelemenId = GetDelemenIdForNote("endnote", enId),
+                        DnoteRefTipe = normalizedRefTipe,
+                        DnoteRefId = refId,
+                        DelemenId = enId >= 1 ? GetDelemenIdForNote("endnote", enId) : null,
                         DnoteKind = "endnote",
                         DnoteType = enType,
-                        DnoteJsonTree = jsonContent.ToString(Formatting.None),
-                        DnoteXml = endnote.OuterXml
+                        DnoteNumber = enId >= 1 ? (uint?)enId : null,
+                        DnoteJsonTree = jsonContent.ToString(Formatting.None)
                     });
                 }
-                _logger.LogDebug("Extracted endnotes for dokumen {DokumenId}", refId);
+                _logger.LogDebug("Extracted endnotes for {RefTipe} {RefId}", normalizedRefTipe, refId);
             }
             
             await _db.SaveChangesAsync();
@@ -674,8 +677,9 @@ public class DocxExtractionService : IDocxExtractionService
     /// <summary>
     /// Extract content from a footnote or endnote as JSON
     /// </summary>
-    private JObject ExtractNoteContent(
+    private async Task<JObject> ExtractNoteContent(
         OpenXmlCompositeElement noteElement,
+        ParagraphFormatExtractor paragraphFormatExtractor,
         NumberingDefinitionsPart? numberingPart,
         Dictionary<int, Dictionary<int, int>> numberingCounters)
     {
@@ -686,9 +690,19 @@ public class DocxExtractionService : IDocxExtractionService
         {
             if (elem is Paragraph p)
             {
+                var format = paragraphFormatExtractor.ExtractFormat(p);
+                _db.DokumenFormatParagrafs.Add(format);
+                await _db.SaveChangesAsync();
+
                 foreach (var (type, json) in _paragraphExtractor.FlattenParagraph(p, numberingPart, numberingCounters))
                 {
-                    content.Add(new JObject { ["type"] = type, ["content"] = json["content"] });
+                    var paragraphJson = new JObject
+                    {
+                        ["type"] = type,
+                        ["dfp_id"] = format.DfpId,
+                        ["content"] = json["content"] ?? new JArray()
+                    };
+                    content.Add(paragraphJson);
                 }
             }
             else if (elem is Table t)

@@ -90,11 +90,14 @@ public class AturanService : IAturanService
 
     public async Task<AturanWithDetails?> GetByIdWithDetailsAsync(uint id)
     {
-        var aturan = await _db.Aturans.FindAsync(id);
+        var aturan = await _db.Aturans
+            .AsNoTracking()
+            .FirstOrDefaultAsync(item => item.AturanId == id);
         if (aturan == null)
             return null;
 
-        var details = AturanDetailVisibility.FilterVisible(await _db.AturanDetails
+        var details = CanonicalizeDetailsForRead(await _db.AturanDetails
+            .AsNoTracking()
             .Where(d => d.AturanId == id)
             .OrderBy(d => d.AturanDetailId)
             .ToListAsync());
@@ -117,6 +120,7 @@ public class AturanService : IAturanService
     public async Task<AturanWithDetails?> GetAktifWithDetailsAsync()
     {
         var aturan = await _db.Aturans
+            .AsNoTracking()
             .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
             .OrderByDescending(a => a.AturanCreatedAt)
             .FirstOrDefaultAsync();
@@ -124,8 +128,9 @@ public class AturanService : IAturanService
         if (aturan == null)
             return null;
 
-        var details = AturanDetailVisibility.FilterVisible(await _db.AturanDetails
-            .Where(d => d.AturanId == aturan.AturanId && d.AturanDetailStatus == 1)
+        var details = CanonicalizeDetailsForRead(await _db.AturanDetails
+            .AsNoTracking()
+            .Where(d => d.AturanId == aturan.AturanId)
             .OrderBy(d => d.AturanDetailId)
             .ToListAsync());
 
@@ -356,6 +361,9 @@ public class AturanService : IAturanService
             ? normalized
             : fallback;
     }
+
+    private static List<AturanDetail> CanonicalizeDetailsForRead(IReadOnlyList<AturanDetail> details)
+        => AturanDetailContract.NormalizeDetailsForContract(details);
 
     private void TryDeleteStorageTree(string? relativePath)
     {

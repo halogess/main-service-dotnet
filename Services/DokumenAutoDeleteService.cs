@@ -10,13 +10,6 @@ public interface IDokumenAutoDeleteService
 
 public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDeleteService
 {
-    private static readonly HashSet<string> ActiveQueueStates = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "in_queue",
-        "processing",
-        "diproses"
-    };
-
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<DokumenAutoDeleteService> _logger;
     private readonly TimeSpan _interval = TimeSpan.FromHours(24);
@@ -71,27 +64,11 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
         if (oldDokumenIds.Count == 0)
             return 0;
 
-        var activeQueueDokumenIds = await db.Antrians
-            .AsNoTracking()
-            .Where(a => a.AntrianTipe == "dokumen" &&
-                        a.DokumenId.HasValue &&
-                        oldDokumenIds.Contains((int)a.DokumenId.Value) &&
-                        (ActiveQueueStates.Contains(a.AntrianExtractionStatus ?? string.Empty) ||
-                         ActiveQueueStates.Contains(a.AntrianLabelingStatus ?? string.Empty) ||
-                         ActiveQueueStates.Contains(a.AntrianValidationStatus ?? string.Empty)))
-            .Select(a => (int)a.DokumenId!.Value)
-            .ToListAsync(cancellationToken);
-
-        var deletableDokumenIds = oldDokumenIds.Except(activeQueueDokumenIds).ToList();
-
-        if (deletableDokumenIds.Count == 0)
-            return 0;
-
-        _logger.LogInformation("Found {Count} dokumen records eligible for auto-deletion", deletableDokumenIds.Count);
+        _logger.LogInformation("Found {Count} dokumen records eligible for auto-deletion", oldDokumenIds.Count);
 
         var totalDeleted = 0;
 
-        foreach (var dokumenId in deletableDokumenIds)
+        foreach (var dokumenId in oldDokumenIds)
         {
             try
             {
@@ -176,19 +153,15 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
                 .ExecuteDeleteAsync(cancellationToken);
 
             await db.DokumenElemenVisuals
-                .Where(visual => visual.DevRefTipe == "dokumen" ||
+                .Where(visual => (visual.DevRefTipe == "dokumen" && visual.DevRefId == (uint)dokumenId) ||
                                  (visual.DokumenElemenId.HasValue && dokumenElementIds.Contains(visual.DokumenElemenId.Value)))
                 .ExecuteDeleteAsync(cancellationToken);
 
             await db.DokumenNotes
-                .Where(note => note.DokumenId == dokumenId)
+                .Where(note => note.DnoteRefTipe == "dokumen" && note.DnoteRefId == dokumenId)
                 .ExecuteDeleteAsync(cancellationToken);
 
-            await db.DokumenMedias
-                .Where(media => media.DokumenId == dokumenId)
-                .ExecuteDeleteAsync(cancellationToken);
-
-            await DeleteFormatRecordsAsync(db, dokumenElementIds, cancellationToken);
+            await DeleteFormatRecordsAsync(db, dokumenId, dokumenElementIds, cancellationToken);
 
             await db.DokumenElemens
                 .Where(e => e.DpartId.HasValue && dokumenPartIds.Contains(e.DpartId.Value))
@@ -226,6 +199,7 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
 
     private async Task DeleteFormatRecordsAsync(
         KorektorBukuDbContext db,
+        int dokumenId,
         List<ulong> elementIds,
         CancellationToken cancellationToken)
     {
@@ -235,10 +209,7 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
         var paragraphFormatIds = new HashSet<ulong>();
         var textFormatIds = new HashSet<ulong>();
         var tableFormatIds = new HashSet<ulong>();
-        var tableRowFormatIds = new HashSet<ulong>();
-        var tableCellFormatIds = new HashSet<ulong>();
         var drawingFormatIds = new HashSet<ulong>();
-        var fieldFormatIds = new HashSet<ulong>();
 
         var elements = await db.DokumenElemens
             .AsNoTracking()
@@ -249,19 +220,19 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
         foreach (var json in elements.Where(j => !string.IsNullOrWhiteSpace(j)))
         {
             CollectFormatIds(json!, paragraphFormatIds, textFormatIds, tableFormatIds,
-                tableRowFormatIds, tableCellFormatIds, drawingFormatIds, fieldFormatIds);
+                drawingFormatIds);
         }
 
         var notes = await db.DokumenNotes
             .AsNoTracking()
-            .Where(n => n.DokumenId > 0)
+            .Where(n => n.DnoteRefTipe == "dokumen" && n.DnoteRefId == dokumenId)
             .Select(n => n.DnoteJsonTree)
             .ToListAsync(cancellationToken);
 
         foreach (var json in notes.Where(j => !string.IsNullOrWhiteSpace(j)))
         {
             CollectFormatIds(json!, paragraphFormatIds, textFormatIds, tableFormatIds,
-                tableRowFormatIds, tableCellFormatIds, drawingFormatIds, fieldFormatIds);
+                drawingFormatIds);
         }
 
         if (paragraphFormatIds.Count > 0)
@@ -276,21 +247,9 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
             foreach (var chunk in tableFormatIds.Chunk(500))
                 await db.DokumenFormatTables.Where(item => chunk.Contains(item.DftId)).ExecuteDeleteAsync(cancellationToken);
 
-        if (tableRowFormatIds.Count > 0)
-            foreach (var chunk in tableRowFormatIds.Chunk(500))
-                await db.DokumenFormatTableRows.Where(item => chunk.Contains(item.DftrId)).ExecuteDeleteAsync(cancellationToken);
-
-        if (tableCellFormatIds.Count > 0)
-            foreach (var chunk in tableCellFormatIds.Chunk(500))
-                await db.DokumenFormatTableCells.Where(item => chunk.Contains(item.DftcId)).ExecuteDeleteAsync(cancellationToken);
-
         if (drawingFormatIds.Count > 0)
             foreach (var chunk in drawingFormatIds.Chunk(500))
                 await db.DokumenFormatDrawings.Where(item => chunk.Contains(item.DfdrId)).ExecuteDeleteAsync(cancellationToken);
-
-        if (fieldFormatIds.Count > 0)
-            foreach (var chunk in fieldFormatIds.Chunk(500))
-                await db.DokumenFormatFields.Where(item => chunk.Contains(item.DffdId)).ExecuteDeleteAsync(cancellationToken);
     }
 
     private static void CollectFormatIds(
@@ -298,16 +257,12 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
         HashSet<ulong> paragraphFormatIds,
         HashSet<ulong> textFormatIds,
         HashSet<ulong> tableFormatIds,
-        HashSet<ulong> tableRowFormatIds,
-        HashSet<ulong> tableCellFormatIds,
-        HashSet<ulong> drawingFormatIds,
-        HashSet<ulong> fieldFormatIds)
+        HashSet<ulong> drawingFormatIds)
     {
         try
         {
             using var document = System.Text.Json.JsonDocument.Parse(json);
-            CollectFormatIdsRecursive(document.RootElement, paragraphFormatIds, textFormatIds, tableFormatIds,
-                tableRowFormatIds, tableCellFormatIds, drawingFormatIds, fieldFormatIds);
+            CollectFormatIdsRecursive(document.RootElement, paragraphFormatIds, textFormatIds, tableFormatIds, drawingFormatIds);
         }
         catch (System.Text.Json.JsonException) { }
     }
@@ -317,10 +272,7 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
         HashSet<ulong> paragraphFormatIds,
         HashSet<ulong> textFormatIds,
         HashSet<ulong> tableFormatIds,
-        HashSet<ulong> tableRowFormatIds,
-        HashSet<ulong> tableCellFormatIds,
-        HashSet<ulong> drawingFormatIds,
-        HashSet<ulong> fieldFormatIds)
+        HashSet<ulong> drawingFormatIds)
     {
         switch (element.ValueKind)
         {
@@ -339,29 +291,18 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
                         case "dft_id":
                             TryAddUInt(property.Value, tableFormatIds);
                             break;
-                        case "dftr_id":
-                            TryAddUInt(property.Value, tableRowFormatIds);
-                            break;
-                        case "dftc_id":
-                            TryAddUInt(property.Value, tableCellFormatIds);
-                            break;
                         case "dfdr_id":
                             TryAddULong(property.Value, drawingFormatIds);
                             break;
-                        case "dffd_id":
-                            TryAddULong(property.Value, fieldFormatIds);
-                            break;
                     }
 
-                    CollectFormatIdsRecursive(property.Value, paragraphFormatIds, textFormatIds, tableFormatIds,
-                        tableRowFormatIds, tableCellFormatIds, drawingFormatIds, fieldFormatIds);
+                    CollectFormatIdsRecursive(property.Value, paragraphFormatIds, textFormatIds, tableFormatIds, drawingFormatIds);
                 }
                 break;
 
             case System.Text.Json.JsonValueKind.Array:
                 foreach (var item in element.EnumerateArray())
-                    CollectFormatIdsRecursive(item, paragraphFormatIds, textFormatIds, tableFormatIds,
-                        tableRowFormatIds, tableCellFormatIds, drawingFormatIds, fieldFormatIds);
+                    CollectFormatIdsRecursive(item, paragraphFormatIds, textFormatIds, tableFormatIds, drawingFormatIds);
                 break;
         }
     }

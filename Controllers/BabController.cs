@@ -65,6 +65,7 @@ public class BabController : ControllerBase
                 HalamanKe = sortKey.HalamanKe,
                 YTerkecil = sortKey.YTerkecil
             }))
+            .Where(x => x.HalamanKe > 0)
             .OrderBy(x => NormalizeSortPage(x.HalamanKe))
             .ThenBy(x => x.YTerkecil)
             .ThenBy(x => x.Kesalahan.KesalahanId)
@@ -75,7 +76,7 @@ public class BabController : ControllerBase
             .OrderBy(g => NormalizeSortPage(g.Key))
             .Select(g => new
             {
-                halaman_ke = g.Key == -1 ? (int?)null : g.Key,
+                halaman_ke = (int?)g.Key,
                 elemen = g.Select(x => new
                 {
                     kesalahan_id = x.Kesalahan.KesalahanId,
@@ -85,12 +86,16 @@ public class BabController : ControllerBase
             })
             .ToList();
 
-        var jumlahKesalahan = await (
-            from detail in _db.KesalahanDetails.AsNoTracking()
-            join parent in _db.Kesalahans.AsNoTracking() on detail.KesalahanId equals parent.KesalahanId
-            where parent.KesalahanRefTipe == KesalahanRefTipe.bab && parent.KesalahanRefId == babId
-            select detail.KesalahanDetailId
-        ).CountAsync();
+        var visibleKesalahanIds = orderedKesalahan
+            .Select(x => x.Kesalahan.KesalahanId)
+            .Distinct()
+            .ToList();
+        var jumlahKesalahan = visibleKesalahanIds.Count == 0
+            ? 0
+            : await _db.KesalahanDetails
+                .AsNoTracking()
+                .Where(detail => visibleKesalahanIds.Contains(detail.KesalahanId))
+                .CountAsync();
 
         var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
         var fullStoragePath = Path.GetFullPath(storagePath);

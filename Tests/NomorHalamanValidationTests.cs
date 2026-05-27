@@ -270,6 +270,48 @@ public class NomorHalamanValidationTests
         Assert.DoesNotContain(result.Errors, error => error.Field == "page_number_location");
     }
 
+    [Fact]
+    public async Task ValidatePageSettingsAsync_ShouldValidatePageNumberLineSpacingRule()
+    {
+        using var fixture = new SqlitePageNumberFixture();
+        fixture.AddDokumen();
+        fixture.AddFormats();
+        fixture.AddActiveAturan();
+        fixture.AddNomorHalamanRule("""
+            {
+              "paragraph": {
+                "spacing": {
+                  "line_spacing": { "value": 2, "is_editable": true, "is_hard_constraint": true },
+                  "before": { "value": 12, "is_editable": true, "is_hard_constraint": false },
+                  "after": { "value": 0, "is_editable": true, "is_hard_constraint": false }
+                }
+              },
+              "variation": {
+                "different_first_page": {
+                  "enabled": { "value": true }
+                }
+              }
+            }
+            """);
+
+        fixture.AddSection(1, 1, hasTitlePage: true);
+        fixture.AddBodyPart(1, 1);
+        fixture.AddBodyElement(101, 1, 1, 1, "Isi halaman pertama");
+        fixture.AddBodyElement(102, 1, 2, 2, "Isi halaman kedua");
+        fixture.AddHeaderFooterPart(11, 1, "header", "first");
+        fixture.AddPageFieldElement(1001, 11, 1, 1, "1", paragraphFormatId: 10);
+        fixture.AddHeaderFooterPart(12, 1, "footer", "default");
+        fixture.AddPageFieldElement(1002, 12, 1, 2, "2", paragraphFormatId: 11);
+
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await service.ValidatePageSettingsAsync(10);
+
+        Assert.Contains(result.Errors, error => error.Field == "page_number_line_spacing");
+        Assert.Contains(result.Errors, error => error.Field == "page_number_spacing_before");
+    }
+
     private static ValidationService CreateValidationService(KorektorBukuDbContext db)
         => new(db, NullLogger<ValidationService>.Instance);
 
@@ -314,7 +356,7 @@ public class NomorHalamanValidationTests
             });
         }
 
-        public void AddNomorHalamanRule()
+        public void AddNomorHalamanRule(string? jsonValue = null)
         {
             Db.AturanDetails.Add(new AturanDetail
             {
@@ -322,7 +364,7 @@ public class NomorHalamanValidationTests
                 AturanId = 1,
                 AturanDetailKategori = "Nomor Halaman",
                 AturanDetailKey = "nomor_halaman",
-                AturanDetailJsonValue = """{"variation":{"different_first_page":{"enabled":{"value":true}}}}""",
+                AturanDetailJsonValue = jsonValue ?? """{"variation":{"different_first_page":{"enabled":{"value":true}}}}""",
             });
         }
 

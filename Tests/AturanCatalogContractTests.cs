@@ -73,6 +73,9 @@ public class AturanCatalogContractTests
                 AturanDetailShapeValidator.TryValidate(detail.AturanDetailKey, roundTripJson!, out var shapeErrorMessage),
                 shapeErrorMessage);
         }
+
+        var pageNumberRoot = JsonNode.Parse(details.Single(detail => detail.AturanDetailKey == "nomor_halaman").AturanDetailJsonValue!)!.AsObject();
+        Assert.Null(pageNumberRoot["paragraph"]!["spacing"]!["line_spacing"]);
     }
 
     [Fact]
@@ -119,6 +122,9 @@ public class AturanCatalogContractTests
 
             Assert.Equal(expectedLockedPaths, lockedPaths);
         }
+
+        var pageNumberSeed = details.Single(detail => detail?["key"]?.GetValue<string>() == "nomor_halaman")!;
+        Assert.Null(pageNumberSeed["json_value"]!["paragraph"]!["spacing"]!["line_spacing"]);
     }
 
     [Fact]
@@ -141,6 +147,10 @@ public class AturanCatalogContractTests
         Assert.DoesNotContain(rows, row =>
             row.Elemen is "caption_gambar" or "caption_tabel" or "judul_kode" &&
             row.Kriteria == "Enter After Number");
+
+        Assert.DoesNotContain(rows, row =>
+            row.Elemen == "nomor_halaman" &&
+            row.Kriteria == "Line Spacing");
     }
 
     [Fact]

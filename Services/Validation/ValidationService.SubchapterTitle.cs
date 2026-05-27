@@ -652,8 +652,15 @@ public partial class ValidationService
         {
             result.IncrementTotalChecks(rule.Paragraph?.Indentation?.LeftIndent?.IsHardConstraint == true);
             var leftCm = GetLeftIndentCm(format);
+            var hangingCm = GetHangingIndentCm(format);
+            var isNumberedParagraph = format.DfpIsList ||
+                                      !string.IsNullOrWhiteSpace(format.DfpNumprJson) ||
+                                      (format.DfpListNumId ?? 0) > 0;
+            var actualLeftCm = isNumberedParagraph
+                ? Math.Max(0m, leftCm - hangingCm)
+                : leftCm;
 
-            if (Math.Abs(leftCm - expectedLeftIndent.Value) <= 0.05m)
+            if (Math.Abs(actualLeftCm - expectedLeftIndent.Value) <= 0.05m)
             {
                 result.IncrementPassedChecks();
             }
@@ -665,7 +672,7 @@ public partial class ValidationService
                     Field = "judul_subbab",
                     Message = "Left indent judul subbab tidak sesuai",
                     Expected = expectedLeftIndent.Value.ToString(CultureInfo.InvariantCulture) + " cm",
-                    Actual = leftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
+                    Actual = actualLeftCm.ToString("F2", CultureInfo.InvariantCulture) + " cm",
                     Evidence = evidence,
                     Locations = locations
                 });
@@ -1400,7 +1407,10 @@ public partial class ValidationService
             }
 
             if (!TryGetVisualBoundsOnPage(visualSummaryById, candidateId, anchorPage, out var candidateTop, out var candidateBottom))
-                break;
+            {
+                blankElementIds.Insert(0, candidateId);
+                continue;
+            }
 
             if (candidateBottom > currentTop + visualTolerance)
                 break;

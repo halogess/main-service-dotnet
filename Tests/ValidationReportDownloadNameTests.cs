@@ -322,6 +322,7 @@ public class ValidationReportDownloadNameTests
             KesalahanKategori = "Paragraf",
             KesalahanRefTipe = KesalahanRefTipe.dokumen,
             KesalahanRefId = 11,
+            KesalahanLokasi = """[{ "halaman_ke": 2, "bbox": null }]""",
             Details = new List<KesalahanDetail>
             {
                 new()
@@ -338,6 +339,38 @@ public class ValidationReportDownloadNameTests
         var rows = Assert.IsType<List<ValidationReportRow>>(method!.Invoke(null, [new List<Kesalahan> { kesalahan }]));
         var row = Assert.Single(rows);
         Assert.True(row.IsHardConstraint);
+    }
+
+    [Fact]
+    public void BuildRows_ShouldSkipKesalahanWithoutKnownLocation()
+    {
+        var method = typeof(ValidationReportService).GetMethod(
+            "BuildRows",
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+
+        var kesalahan = new Kesalahan
+        {
+            KesalahanId = 302,
+            KesalahanKategori = "Paragraf",
+            KesalahanRefTipe = KesalahanRefTipe.dokumen,
+            KesalahanRefId = 11,
+            KesalahanLokasi = null,
+            Details = new List<KesalahanDetail>
+            {
+                new()
+                {
+                    KesalahanDetailId = 3002,
+                    KesalahanId = 302,
+                    KesalahanDetailJudul = "Tanpa lokasi",
+                    KesalahanDetailPenjelasan = "Penjelasan"
+                }
+            }
+        };
+
+        var rows = Assert.IsType<List<ValidationReportRow>>(method!.Invoke(null, [new List<Kesalahan> { kesalahan }]));
+        Assert.Empty(rows);
     }
 
     [Fact]
@@ -363,6 +396,7 @@ public class ValidationReportDownloadNameTests
             KesalahanKategori = "Margin",
             KesalahanRefTipe = KesalahanRefTipe.bab,
             KesalahanRefId = 401,
+            KesalahanLokasi = """[{ "halaman_ke": 4, "bbox": null }]""",
             Details = new List<KesalahanDetail>
             {
                 new()
@@ -379,6 +413,46 @@ public class ValidationReportDownloadNameTests
         var rows = Assert.IsType<List<BukuValidationReportRow>>(method!.Invoke(null, [new List<Kesalahan> { kesalahan }, new Dictionary<uint, Bab> { [bab.BabId] = bab }]));
         var row = Assert.Single(rows);
         Assert.True(row.IsHardConstraint);
+    }
+
+    [Fact]
+    public void BuildBukuRows_ShouldSkipKesalahanWithoutKnownLocation()
+    {
+        var method = typeof(ValidationReportService).GetMethod(
+            "BuildBukuRows",
+            BindingFlags.Static | BindingFlags.NonPublic);
+
+        Assert.NotNull(method);
+
+        var bab = new Bab
+        {
+            BabId = 403,
+            BukuId = 12,
+            BabOrder = 3,
+            BabFilename = "Bab 3.docx"
+        };
+
+        var kesalahan = new Kesalahan
+        {
+            KesalahanId = 404,
+            KesalahanKategori = "Margin",
+            KesalahanRefTipe = KesalahanRefTipe.bab,
+            KesalahanRefId = 403,
+            KesalahanLokasi = """[{ "halaman_ke": null, "bbox": null, "bab_order": 3 }]""",
+            Details = new List<KesalahanDetail>
+            {
+                new()
+                {
+                    KesalahanDetailId = 4004,
+                    KesalahanId = 404,
+                    KesalahanDetailJudul = "Tanpa lokasi",
+                    KesalahanDetailPenjelasan = "Penjelasan"
+                }
+            }
+        };
+
+        var rows = Assert.IsType<List<BukuValidationReportRow>>(method!.Invoke(null, [new List<Kesalahan> { kesalahan }, new Dictionary<uint, Bab> { [bab.BabId] = bab }]));
+        Assert.Empty(rows);
     }
 
     [Fact]

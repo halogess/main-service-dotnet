@@ -145,7 +145,7 @@ public sealed class AturanImportService : IAturanImportService
 
         _db.AturanDetails.AddRange(normalizedDetails);
         aturan.AturanStatus = AturanStatusValues.MenungguReview;
-        aturan.AturanUpdatedAt = DateTime.Now;
+        aturan.AturanUpdatedAt = AppClock.Now;
         await _db.SaveChangesAsync(cancellationToken);
 
         await SendReviewReadyEmailAsync(aturan, cancellationToken);

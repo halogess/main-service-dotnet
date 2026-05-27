@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
 
@@ -77,11 +78,14 @@ public class GeminiApiKeyController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.gemini_api_key_value))
             return BadRequest(new { message = "gemini_api_key_value tidak boleh kosong" });
 
+        var now = AppClock.Now;
         var apiKey = new GeminiApiKey
         {
             GeminiApiKeyValue = request.gemini_api_key_value.Trim(),
             GeminiApiKeyStatus = request.gemini_api_key_status ?? 1,
-            GeminiApiKeyUsage = request.gemini_api_key_usage
+            GeminiApiKeyUsage = request.gemini_api_key_usage,
+            GeminiApiKeyCreatedAt = now,
+            GeminiApiKeyUpdatedAt = now
         };
 
         _db.GeminiApiKeys.Add(apiKey);
@@ -119,7 +123,7 @@ public class GeminiApiKeyController : ControllerBase
             apiKey.GeminiApiKeyUsage = request.gemini_api_key_usage.Value;
         }
 
-        apiKey.GeminiApiKeyUpdatedAt = DateTime.Now;
+        apiKey.GeminiApiKeyUpdatedAt = AppClock.Now;
 
         await _db.SaveChangesAsync();
 

@@ -284,6 +284,7 @@ public class DokumenController : ControllerBase
         // Base response
         object? kesalahanData = null;
         List<int> fallbackPages = [];
+        int? visibleJumlahKesalahan = null;
 
         // Include kesalahan list if document has been validated (lolos or tidak_lolos)
         if (dokumen.DokumenStatus == "lolos" || dokumen.DokumenStatus == "tidak_lolos")
@@ -300,6 +301,7 @@ public class DokumenController : ControllerBase
                     HalamanKe = sortKey.HalamanKe,
                     YTerkecil = sortKey.YTerkecil
                 }))
+                .Where(x => x.HalamanKe > 0)
                 .OrderBy(x => NormalizeSortPage(x.HalamanKe))
                 .ThenBy(x => x.YTerkecil)
                 .ThenBy(x => x.Kesalahan.KesalahanId)
@@ -312,7 +314,7 @@ public class DokumenController : ControllerBase
                 .OrderBy(g => NormalizeSortPage(g.Key))
                 .Select(g => new
                 {
-                    halaman_ke = g.Key == -1 ? (int?)null : g.Key,
+                    halaman_ke = (int?)g.Key,
                     elemen = g.Select(x => new
                     {
                         kesalahan_id = x.Kesalahan.KesalahanId,
@@ -328,6 +330,16 @@ public class DokumenController : ControllerBase
                 .Distinct()
                 .OrderBy(page => page)
                 .ToList();
+
+            var visibleKesalahanIds = orderedKesalahan
+                .Select(x => x.Kesalahan.KesalahanId)
+                .Distinct()
+                .ToList();
+            visibleJumlahKesalahan = visibleKesalahanIds.Count == 0
+                ? 0
+                : await _db.KesalahanDetails
+                    .Where(detail => visibleKesalahanIds.Contains(detail.KesalahanId))
+                    .CountAsync();
         }
 
         var storagePath = Environment.GetEnvironmentVariable("STORAGE_PATH") ?? "/app/storage";
@@ -349,7 +361,7 @@ public class DokumenController : ControllerBase
             status = dokumen.DokumenStatus,
             skor = dokumen.DokumenSkor,
             skor_minimal = dokumen.DokumenSkorMinimal,
-            jumlah_kesalahan = dokumen.DokumenJumlahKesalahan,
+            jumlah_kesalahan = visibleJumlahKesalahan ?? dokumen.DokumenJumlahKesalahan,
             has_failed_queue = QueueCancellationHelper.HasFailedStage(latestQueue),
             extraction_status = latestQueue?.AntrianExtractionStatus,
             labeling_status = latestQueue?.AntrianLabelingStatus,

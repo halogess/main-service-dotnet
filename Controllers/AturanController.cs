@@ -344,7 +344,7 @@ public class AturanController : ControllerBase
         {
             aturan.AturanStatus = AturanStatusValues.TidakAktif;
         }
-        aturan.AturanUpdatedAt = DateTime.Now;
+        aturan.AturanUpdatedAt = AppClock.Now;
         await _db.SaveChangesAsync();
 
         return Ok(new

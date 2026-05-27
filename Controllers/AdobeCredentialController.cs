@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Controllers;
 
@@ -92,6 +93,7 @@ public class AdobeCredentialController : ControllerBase
         if (request.adobe_credentials_quota_used.HasValue && request.adobe_credentials_quota_used.Value < 0)
             return BadRequest(new { message = "adobe_credentials_quota_used tidak valid" });
 
+        var now = AppClock.Now;
         var credential = new AdobeCredential
         {
             AdobeClientId = request.adobe_client_id.Trim(),
@@ -101,7 +103,9 @@ public class AdobeCredentialController : ControllerBase
                 : request.adobe_credentials_status,
             AdobeCredentialsQuotaLimit = request.adobe_credentials_quota_limit ?? 500,
             AdobeCredentialsQuotaUsed = request.adobe_credentials_quota_used ?? 0,
-            AdobeCredentialsResetDate = request.adobe_credentials_reset_date
+            AdobeCredentialsResetDate = request.adobe_credentials_reset_date,
+            AdobeCredentialsCreatedAt = now,
+            AdobeCredentialsUpdatedAt = now
         };
 
         _db.AdobeCredentials.Add(credential);
@@ -164,7 +168,7 @@ public class AdobeCredentialController : ControllerBase
             credential.AdobeCredentialsResetDate = request.adobe_credentials_reset_date;
         }
 
-        credential.AdobeCredentialsUpdatedAt = DateTime.Now;
+        credential.AdobeCredentialsUpdatedAt = AppClock.Now;
 
         await _db.SaveChangesAsync();
 

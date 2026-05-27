@@ -58,8 +58,8 @@ public class BukuService : IBukuService
             BukuJudul = judul,
             BukuStatus = "dalam_antrian",
             BukuJumlahBab = files.Count,
-            BukuCreatedAt = DateTime.Now,
-            BukuUpdatedAt = DateTime.Now
+            BukuCreatedAt = AppClock.Now,
+            BukuUpdatedAt = AppClock.Now
         };
 
         _db.Bukus.Add(buku);
@@ -100,8 +100,8 @@ public class BukuService : IBukuService
                     BukuId = (uint)buku.BukuId,
                     BabId = bab.BabId,
                     AntrianExtractionStatus = "in_queue",
-                    AntrianCreatedAt = DateTime.Now,
-                    AntrianUpdatedAt = DateTime.Now
+                    AntrianCreatedAt = AppClock.Now,
+                    AntrianUpdatedAt = AppClock.Now
                 };
                 _db.Antrians.Add(antrian);
                 await _db.SaveChangesAsync();

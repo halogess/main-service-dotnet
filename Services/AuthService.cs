@@ -256,7 +256,14 @@ public class AuthService : IAuthService
 
     internal static string BuildExternalAuthUrl(string baseUrl, string username, string password, string appName)
     {
-        return $"{baseUrl.TrimEnd('/')}/{Uri.EscapeDataString(username)}/login/{Uri.EscapeDataString(password)}&appname={Uri.EscapeDataString(appName)}";
+        // 1. Tangani spasi dan tanda + gara-gara double-decode dari PHP
+        // C# escape datastring me-return %20 untuk spasi. PHP mengharapkan spasi tidak hancur.
+        string safePassword = Uri.EscapeDataString(Uri.EscapeDataString(password));
+
+        // 2. Susun persis seperti mau programmer lama (dengan /&appname=)
+        return $"{baseUrl.TrimEnd('/')}/{Uri.EscapeDataString(username)}/login/{safePassword}/&appname={Uri.EscapeDataString(appName)}";
+        // return $"{baseUrl.TrimEnd('/')}/{Uri.EscapeDataString(username)}/login/{Uri.EscapeDataString(password)}/&appname={Uri.EscapeDataString(appName)}";
+        // return $"{baseUrl.TrimEnd('/')}/{Uri.EscapeDataString(username)}/login/{Uri.EscapeDataString(password)}&appname={Uri.EscapeDataString(appName)}";
     }
 
     internal static bool TryParseExternalAuthResponse(string responseBody, out bool isValid)

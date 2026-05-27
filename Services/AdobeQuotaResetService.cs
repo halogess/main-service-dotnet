@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using ValidasiTugasAkhir.MainService.Models;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace _.Services;
 
@@ -20,7 +21,7 @@ public class AdobeQuotaResetService : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var now = DateTime.Now;
+            var now = AppClock.Now;
             var nextReset = GetNextQuotaReset(now);
             var delay = nextReset - now;
 
@@ -37,7 +38,7 @@ public class AdobeQuotaResetService : BackgroundService
 
             try
             {
-                var resetCount = await ResetQuotaIfNeededAsync(DateTime.Now, stoppingToken);
+                var resetCount = await ResetQuotaIfNeededAsync(AppClock.Now, stoppingToken);
                 _logger.LogInformation("Adobe quota reset completed for {Count} credentials", resetCount);
             }
             catch (Exception ex)
@@ -51,7 +52,7 @@ public class AdobeQuotaResetService : BackgroundService
     {
         try
         {
-            var now = DateTime.Now;
+            var now = AppClock.Now;
             var resetCount = await ResetQuotaIfNeededAsync(now, stoppingToken);
             if (resetCount == 0)
             {

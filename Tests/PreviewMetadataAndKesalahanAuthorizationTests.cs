@@ -133,6 +133,88 @@ public class PreviewMetadataAndKesalahanAuthorizationTests
     }
 
     [Fact]
+    public async Task GetDokumenById_ShouldHideKesalahanWithoutKnownLocation()
+    {
+        await using var db = ControllerTestHelpers.CreateDbContext();
+        await using var sttsDb = ControllerTestHelpers.CreateSttsDbContext();
+        db.Dokumens.Add(new Dokumen
+        {
+            DokumenId = 10,
+            MhsNrp = "05111740000123",
+            DokumenFilename = "Bab10.docx",
+            DokumenStatus = "tidak_lolos",
+            DokumenJumlahKesalahan = 2
+        });
+        db.Kesalahans.AddRange(
+            new Kesalahan
+            {
+                KesalahanId = 101,
+                KesalahanKategori = "Paragraf",
+                KesalahanRefTipe = KesalahanRefTipe.dokumen,
+                KesalahanRefId = 10,
+                KesalahanLokasi = null,
+                Details =
+                [
+                    new KesalahanDetail
+                    {
+                        KesalahanDetailId = 201,
+                        KesalahanId = 101,
+                        KesalahanDetailJudul = "Tanpa lokasi",
+                        KesalahanDetailPenjelasan = "Tidak tampil"
+                    }
+                ]
+            },
+            new Kesalahan
+            {
+                KesalahanId = 102,
+                KesalahanKategori = "Paragraf",
+                KesalahanRefTipe = KesalahanRefTipe.dokumen,
+                KesalahanRefId = 10,
+                KesalahanLokasi = """[{ "halaman_ke": 5, "bbox": null }]""",
+                Details =
+                [
+                    new KesalahanDetail
+                    {
+                        KesalahanDetailId = 202,
+                        KesalahanId = 102,
+                        KesalahanDetailJudul = "Dengan lokasi",
+                        KesalahanDetailPenjelasan = "Tampil"
+                    }
+                ]
+            });
+        await db.SaveChangesAsync();
+
+        var controller = new DokumenController(
+            db,
+            sttsDb,
+            Mock.Of<IDokumenService>(),
+            Mock.Of<IDokumenImportService>(),
+            Mock.Of<IDokumenHistoryPurgeService>(),
+            Mock.Of<IValidationReportService>())
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext()
+            }
+        };
+
+        controller.HttpContext.Items["Nrp"] = "05111740000123";
+        controller.HttpContext.Items["Role"] = "mahasiswa";
+
+        var result = await controller.GetDokumenById(10);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(ok.Value));
+        var root = json.RootElement;
+        Assert.Equal(1, root.GetProperty("jumlah_kesalahan").GetInt32());
+        var kesalahanPages = root.GetProperty("kesalahan").EnumerateArray().ToList();
+        var page = Assert.Single(kesalahanPages);
+        Assert.Equal(5, page.GetProperty("halaman_ke").GetInt32());
+        var element = Assert.Single(page.GetProperty("elemen").EnumerateArray().ToList());
+        Assert.Equal(102, element.GetProperty("kesalahan_id").GetInt32());
+    }
+
+    [Fact]
     public async Task GetKesalahanByBab_ShouldReturnAvailablePagesFromBabImageDirectory()
     {
         await using var db = ControllerTestHelpers.CreateDbContext();

@@ -86,7 +86,7 @@ public class PdfConversionService : IPdfConversionService
 
     private async Task<AdobeToken> GetAccessTokenWithExpiry(string clientId, string clientSecret, string tokenUrl, uint? antrian_id = null, CancellationToken cancellationToken = default)
     {
-        var startTime = DateTime.Now;
+        var startTime = AppClock.Now;
         var request = new HttpRequestMessage(HttpMethod.Post, tokenUrl);
         request.Content = new FormUrlEncodedContent(new[]
         {
@@ -95,7 +95,7 @@ public class PdfConversionService : IPdfConversionService
         });
 
         var response = await _httpClient.SendAsync(request, cancellationToken);
-        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
+        var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
         
         await LogApiCall(null, tokenUrl, "POST", (int)response.StatusCode, responseTime, response.IsSuccessStatusCode ? null : responseBody, antrian_id);
@@ -106,7 +106,7 @@ public class PdfConversionService : IPdfConversionService
         return new AdobeToken
         {
             AccessToken = result.access_token,
-            ExpiresAt = DateTime.Now.AddSeconds(result.expires_in - 300)
+            ExpiresAt = AppClock.Now.AddSeconds(result.expires_in - 300)
         };
     }
 
@@ -119,7 +119,7 @@ public class PdfConversionService : IPdfConversionService
     private async Task<(string assetId, string uploadUri)> CreateUploadUri(string accessToken, string clientId, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null, CancellationToken cancellationToken = default)
     {
         var endpoint = $"{apiBaseUrl}/assets";
-        var startTime = DateTime.Now;
+        var startTime = AppClock.Now;
         
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -127,7 +127,7 @@ public class PdfConversionService : IPdfConversionService
         request.Content = JsonContent.Create(new { mediaType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 
         var response = await _httpClient.SendAsync(request, cancellationToken);
-        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
+        var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
         
         await LogApiCall(adobe_credentials_id, endpoint, "POST", (int)response.StatusCode, responseTime, response.IsSuccessStatusCode ? null : responseBody, antrian_id);
@@ -146,14 +146,14 @@ public class PdfConversionService : IPdfConversionService
     private async Task UploadDocument(string uploadUri, string filePath, int? adobe_credentials_id, uint? antrian_id = null, CancellationToken cancellationToken = default)
     {
         var fileBytes = await File.ReadAllBytesAsync(filePath, cancellationToken);
-        var startTime = DateTime.Now;
+        var startTime = AppClock.Now;
         
         var request = new HttpRequestMessage(HttpMethod.Put, uploadUri);
         request.Content = new ByteArrayContent(fileBytes);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
         var response = await _httpClient.SendAsync(request, cancellationToken);
-        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
+        var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
         
         await LogApiCall(adobe_credentials_id, "S3 Upload", "PUT", (int)response.StatusCode, responseTime, null, antrian_id);
         
@@ -163,7 +163,7 @@ public class PdfConversionService : IPdfConversionService
     private async Task<string> CreateConversionJob(string accessToken, string clientId, string assetId, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null, CancellationToken cancellationToken = default)
     {
         var endpoint = $"{apiBaseUrl}/operation/createpdf";
-        var startTime = DateTime.Now;
+        var startTime = AppClock.Now;
         
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
@@ -171,7 +171,7 @@ public class PdfConversionService : IPdfConversionService
         request.Content = JsonContent.Create(new { assetID = assetId });
 
         var response = await _httpClient.SendAsync(request, cancellationToken);
-        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
+        var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
         
         await LogApiCall(adobe_credentials_id, endpoint, "POST", (int)response.StatusCode, responseTime, response.IsSuccessStatusCode ? null : responseBody, antrian_id);
@@ -192,14 +192,14 @@ public class PdfConversionService : IPdfConversionService
                 throw new TimeoutException($"Adobe job tidak selesai dalam {(int)_jobPollingTimeout.TotalSeconds} detik.");
             }
 
-            var startTime = DateTime.Now;
+            var startTime = AppClock.Now;
             
             var request = new HttpRequestMessage(HttpMethod.Get, jobUri);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             request.Headers.Add("x-api-key", clientId);
 
             var response = await _httpClient.SendAsync(request, cancellationToken);
-            var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
+            var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
             JsonElement? result = null;
@@ -268,11 +268,11 @@ public class PdfConversionService : IPdfConversionService
 
     private async Task<byte[]> DownloadPdf(string downloadUri, string accessToken, int? adobe_credentials_id, uint? antrian_id = null, CancellationToken cancellationToken = default)
     {
-        var startTime = DateTime.Now;
+        var startTime = AppClock.Now;
         var request = new HttpRequestMessage(HttpMethod.Get, downloadUri);
 
         var response = await _httpClient.SendAsync(request, cancellationToken);
-        var responseTime = (int)(DateTime.Now - startTime).TotalMilliseconds;
+        var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
         
         await LogApiCall(adobe_credentials_id, "S3 Download", "GET", (int)response.StatusCode, responseTime, null, antrian_id);
         
@@ -297,7 +297,8 @@ public class PdfConversionService : IPdfConversionService
                 Method = method,
                 StatusCode = status_code,
                 ResponseTimeMs = response_time_ms,
-                ErrorMessage = error_message
+                ErrorMessage = error_message,
+                CreatedAt = AppClock.Now
             };
             
             db.AdobeApiLogs.Add(log);

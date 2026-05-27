@@ -53,7 +53,7 @@ public sealed class DokumenAutoDeleteService : BackgroundService, IDokumenAutoDe
         using var scope = _serviceProvider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<KorektorBukuDbContext>();
 
-        var cutoffDate = DateTime.Now.AddDays(-30);
+        var cutoffDate = AppClock.Now.AddDays(-30);
 
         var oldDokumenIds = await db.Dokumens
             .AsNoTracking()

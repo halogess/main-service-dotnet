@@ -43,7 +43,7 @@ public static class QueueCancellationHelper
             return false;
 
         queue.AntrianErrorMessage = Truncate(errorMessage ?? CancelledByUserMessage, 255);
-        queue.AntrianUpdatedAt = updatedAt ?? DateTime.Now;
+        queue.AntrianUpdatedAt = updatedAt ?? AppClock.Now;
         return true;
     }
 

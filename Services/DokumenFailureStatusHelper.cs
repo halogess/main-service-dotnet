@@ -26,7 +26,7 @@ public static class DokumenFailureStatusHelper
         dokumen.DokumenSkorMinimal = null;
         dokumen.DokumenJumlahKesalahan = null;
         dokumen.DokumenReportPath = null;
-        dokumen.DokumenUpdatedAt = DateTime.Now;
+        dokumen.DokumenUpdatedAt = AppClock.Now;
 
         return shouldNotify
             ? new DokumenFailureNotification(dokumen.MhsNrp, dokumen.DokumenId)

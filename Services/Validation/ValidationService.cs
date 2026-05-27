@@ -1000,6 +1000,42 @@ public class ValidationResult
 
     public decimal Score => UniqueTotalChecks > 0 ? (decimal)UniquePassedChecks / UniqueTotalChecks * 100 : 100;
 
+    public decimal GetEffectiveScore(IReadOnlyCollection<ValidationError> effectiveErrors)
+    {
+        FinalizePendingCheck();
+
+        var failedCheckKeys = new HashSet<string>(StringComparer.Ordinal);
+        var keylessErrorCount = 0;
+
+        foreach (var error in effectiveErrors)
+        {
+            var hasKnownCheckKey = false;
+            foreach (var checkKey in error.ValidationCheckKeys)
+            {
+                if (string.IsNullOrWhiteSpace(checkKey) || !_uniqueCheckKeys.Contains(checkKey))
+                    continue;
+
+                failedCheckKeys.Add(checkKey);
+                hasKnownCheckKey = true;
+            }
+
+            if (!hasKnownCheckKey)
+                keylessErrorCount++;
+        }
+
+        var effectiveFailedChecks = failedCheckKeys.Count + keylessErrorCount;
+        var effectiveTotalChecks = Math.Max(_uniqueCheckKeys.Count, effectiveFailedChecks);
+
+        if (effectiveTotalChecks == 0)
+            return 100;
+
+        var effectivePassedChecks = Math.Max(0, effectiveTotalChecks - effectiveFailedChecks);
+        return (decimal)effectivePassedChecks / effectiveTotalChecks * 100;
+    }
+
+    public bool HasEffectiveHardConstraintViolation(IReadOnlyCollection<ValidationError> effectiveErrors)
+        => effectiveErrors.Any(error => error.IsHardConstraint);
+
     public void IncrementTotalChecks(
         bool isHardConstraint = false,
         [CallerFilePath] string filePath = "",
@@ -1074,6 +1110,9 @@ public class ValidationResult
         if (error == null)
             return;
 
+        if (!_pendingCheckPassed)
+            error.AddValidationCheckKey(_pendingCheckKey);
+
         if (!error.IsHardConstraint && _pendingCheckIsHardConstraint && !_pendingCheckPassed)
             error.IsHardConstraint = true;
 
@@ -1104,6 +1143,8 @@ public class ErrorBbox
 
 public class ValidationError
 {
+    private readonly List<string> _validationCheckKeys = new();
+
     public string Category { get; set; } = string.Empty;
     public string Field { get; set; } = string.Empty;
     public string Message { get; set; } = string.Empty;
@@ -1133,6 +1174,23 @@ public class ValidationError
     public decimal? PageMarginRightCm { get; set; }
     public ulong? DokumenElemenId { get; set; }
     public bool IsHardConstraint { get; set; }
+
+    internal IReadOnlyList<string> ValidationCheckKeys => _validationCheckKeys;
+
+    internal void AddValidationCheckKey(string? checkKey)
+    {
+        if (string.IsNullOrWhiteSpace(checkKey))
+            return;
+
+        if (!_validationCheckKeys.Contains(checkKey, StringComparer.Ordinal))
+            _validationCheckKeys.Add(checkKey);
+    }
+
+    internal void AddValidationCheckKeys(IEnumerable<string> checkKeys)
+    {
+        foreach (var checkKey in checkKeys)
+            AddValidationCheckKey(checkKey);
+    }
 }
 
 #endregion

@@ -810,6 +810,8 @@ public partial class ValidationService
 
             var target = merged[mergedIndex];
             target.Locations = MergeErrorLocations(target.Locations, error.Locations);
+            target.AddValidationCheckKeys(error.ValidationCheckKeys);
+            target.IsHardConstraint = target.IsHardConstraint || error.IsHardConstraint;
 
             if (!target.DokumenElemenId.HasValue && error.DokumenElemenId.HasValue)
                 target.DokumenElemenId = error.DokumenElemenId;

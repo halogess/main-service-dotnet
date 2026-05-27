@@ -72,7 +72,7 @@ public partial class GeminiService : IGeminiService
         _httpClient = httpClient;
         _logger = logger;
         _db = db;
-        _analysisModel = configuration["Gemini:Model"] ?? "gemma-3-27b";
+        _analysisModel = configuration["Gemini:Model"] ?? "gemini-2.5-flash";
         _apiBaseUrl = configuration["Gemini:ApiBaseUrl"] ?? "https://generativelanguage.googleapis.com/v1beta";
         _generationTemperature = configuration.GetValue("Gemini:Temperature", 0.1);
         _generationTopP = configuration.GetValue("Gemini:TopP", 0.8);
@@ -884,6 +884,12 @@ public partial class GeminiService : IGeminiService
                     if (part.ValueKind != JsonValueKind.Object)
                         continue;
 
+                    if (part.TryGetProperty("thought", out var thoughtEl) &&
+                        thoughtEl.ValueKind == JsonValueKind.True)
+                    {
+                        continue;
+                    }
+
                     if (part.TryGetProperty("text", out var textEl) && textEl.ValueKind == JsonValueKind.String)
                         textBuilder.Append(textEl.GetString());
                 }
@@ -990,7 +996,7 @@ public partial class GeminiService : IGeminiService
             LogTotalBatches = totalBatches ?? 0,
             LogErrorCount = errorCount ?? 0,
             LogKeyTokensUsed = keyTokensUsed ?? 0,
-            LogCreatedAt = DateTime.Now
+            LogCreatedAt = AppClock.Now
         };
 
         try
@@ -1140,7 +1146,7 @@ public partial class GeminiService : IGeminiService
         var currentUsage = apiKey.GeminiApiKeyUsage ?? 0;
         if (currentUsage < uint.MaxValue)
             apiKey.GeminiApiKeyUsage = currentUsage + 1;
-        apiKey.GeminiApiKeyUpdatedAt = DateTime.Now;
+        apiKey.GeminiApiKeyUpdatedAt = AppClock.Now;
 
         try
         {

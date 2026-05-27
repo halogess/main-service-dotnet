@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using ValidasiTugasAkhir.MainService.Services;
 using Microsoft.EntityFrameworkCore;
@@ -110,7 +111,7 @@ public class BukuController : ControllerBase
         if (buku.BukuStatus != "dalam_antrian" && buku.BukuStatus != "diproses")
             return BadRequest(new { message = "Hanya buku dalam antrian atau diproses yang bisa dibatalkan" });
 
-        var now = DateTime.Now;
+        var now = AppClock.Now;
         var strategy = _db.Database.CreateExecutionStrategy();
 
         await strategy.ExecuteAsync(async () =>
@@ -285,6 +286,23 @@ public class BukuController : ControllerBase
                 .Where(b => b.BukuId == bukuId)
                 .OrderBy(b => b.BabOrder)
                 .ToListAsync();
+            var babIds = babs.Select(b => b.BabId).ToList();
+            var visibleDetailCountsByBab = babIds.Count == 0
+                ? new Dictionary<uint, int>()
+                : (await (
+                    from detail in _db.KesalahanDetails.AsNoTracking()
+                    join parent in _db.Kesalahans.AsNoTracking() on detail.KesalahanId equals parent.KesalahanId
+                    where parent.KesalahanRefTipe == KesalahanRefTipe.bab &&
+                          babIds.Contains(parent.KesalahanRefId)
+                    select new
+                    {
+                        parent.KesalahanRefId,
+                        parent.KesalahanLokasi,
+                        detail.KesalahanDetailId
+                    }).ToListAsync())
+                    .Where(row => HasKnownLocation(row.KesalahanLokasi))
+                    .GroupBy(row => row.KesalahanRefId)
+                    .ToDictionary(group => group.Key, group => group.Count());
 
             var queueByBabId = antrianList
                 .Where(a => a.BabId.HasValue)
@@ -300,7 +318,7 @@ public class BukuController : ControllerBase
                     bab_order = b.BabOrder,
                     bab_skor = b.BabSkor,
                     bab_skor_minimal = b.BabSkorMinimal,
-                    bab_jumlah_kesalahan = b.BabJumlahKesalahan,
+                    bab_jumlah_kesalahan = visibleDetailCountsByBab.GetValueOrDefault(b.BabId),
                     filename = b.BabFilename,
                     has_pdf = !string.IsNullOrWhiteSpace(b.BabPdfPath),
                     extraction_status = queue?.AntrianExtractionStatus,
@@ -312,7 +330,7 @@ public class BukuController : ControllerBase
             }).ToList();
 
             response["skor"] = buku.BukuSkor;
-            response["jumlah_kesalahan"] = buku.BukuJumlahKesalahan;
+            response["jumlah_kesalahan"] = visibleDetailCountsByBab.Values.Sum();
             response["bab"] = babData;
         }
 
@@ -428,6 +446,39 @@ public class BukuController : ControllerBase
 
         var archiveInfo = new FileInfo(archiveFullPath);
         return archiveInfo.Exists && archiveInfo.Length > 0;
+    }
+
+    private static bool HasKnownLocation(string? lokasiJson)
+    {
+        if (string.IsNullOrWhiteSpace(lokasiJson))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(lokasiJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return false;
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (item.TryGetProperty("halaman_ke", out var halamanEl) &&
+                    halamanEl.ValueKind == JsonValueKind.Number &&
+                    halamanEl.TryGetInt32(out var page) &&
+                    page > 0)
+                {
+                    return true;
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        return false;
     }
 
     private static string BuildArchiveDownloadFileName(string? nrp, string archiveKind, DateTime timestamp)

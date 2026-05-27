@@ -56,6 +56,28 @@ public class ValidationQueueBackgroundService : BackgroundService
         }
     }
 
+    private sealed class ErrorStorageResult
+    {
+        public static readonly ErrorStorageResult Empty = new(0, 0, 0, Array.Empty<ValidationError>());
+
+        public ErrorStorageResult(
+            int storedDetailCount,
+            int enrichedErrorCount,
+            int locationFilteredErrorCount,
+            IReadOnlyList<ValidationError> storableErrors)
+        {
+            StoredDetailCount = storedDetailCount;
+            EnrichedErrorCount = enrichedErrorCount;
+            LocationFilteredErrorCount = locationFilteredErrorCount;
+            StorableErrors = storableErrors;
+        }
+
+        public int StoredDetailCount { get; }
+        public int EnrichedErrorCount { get; }
+        public int LocationFilteredErrorCount { get; }
+        public IReadOnlyList<ValidationError> StorableErrors { get; }
+    }
+
     public ValidationQueueBackgroundService(
         IServiceProvider serviceProvider,
         ILogger<ValidationQueueBackgroundService> logger,
@@ -103,7 +125,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                     _logger.LogInformation("Processing validation for antrian ID: {AntrianId}", queue.AntrianId);
 
                     queue.AntrianValidationStatus = "processing";
-                    queue.AntrianUpdatedAt = DateTime.Now;
+                    queue.AntrianUpdatedAt = AppClock.Now;
                     await db.SaveChangesAsync(stoppingToken);
                     PendingValidationEmailNotification? pendingValidationEmail = null;
                     DokumenFailureNotification? pendingDokumenFailureNotification = null;
@@ -140,19 +162,16 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "processing_results", 70);
                                 
                                 // Update dokumen with validation results
-                                var roundedScore = (int)Math.Round(validationResult.Score);
-                                dokumen.DokumenSkor = roundedScore;
-                                dokumen.DokumenUpdatedAt = DateTime.Now;
-
+                                var rawScore = validationResult.Score;
                                 var rawErrorCount = validationResult.Errors.Count;
-                                var storedErrorCount = 0;
+                                var errorStorageResult = ErrorStorageResult.Empty;
                                 if (rawErrorCount > 0)
                                 {
                                     // Notify: Enriching errors with AI
                                     await wsService.NotifyValidationProgress(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "enriching", 85);
                                     var (sectionRefType, sectionRefId) = ResolveSectionRef(queue);
 
-                                    storedErrorCount = await EnrichAndStoreErrorsAsync(
+                                    errorStorageResult = await EnrichAndStoreErrorsAsync(
                                         db,
                                         queue.AntrianId,
                                         queue.DokumenId.Value,
@@ -163,18 +182,27 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         validationResult.Errors,
                                         stoppingToken);
                                 }
+                                var effectiveScore = validationResult.GetEffectiveScore(errorStorageResult.StorableErrors);
+                                var roundedScore = (int)Math.Round(effectiveScore);
+                                var hasEffectiveHardConstraintViolation = validationResult.HasEffectiveHardConstraintViolation(errorStorageResult.StorableErrors);
+                                var storedErrorCount = errorStorageResult.StoredDetailCount;
+                                dokumen.DokumenSkor = roundedScore;
+                                dokumen.DokumenUpdatedAt = AppClock.Now;
                                 dokumen.DokumenJumlahKesalahan = storedErrorCount;
 
                                 _logger.LogInformation(
-                                    "Validated dokumen ID: {DokumenId}, Score: {Score}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
+                                    "Validated dokumen ID: {DokumenId}, RawScore: {RawScore}, EffectiveScore: {EffectiveScore}, RawErrors: {RawErrorCount}, EnrichedErrors: {EnrichedErrorCount}, LocationFilteredErrors: {LocationFilteredErrorCount}, StoredErrors: {StoredErrorCount}",
                                     queue.DokumenId,
-                                    validationResult.Score,
+                                    rawScore,
+                                    effectiveScore,
                                     rawErrorCount,
+                                    errorStorageResult.EnrichedErrorCount,
+                                    errorStorageResult.LocationFilteredErrorCount,
                                     storedErrorCount);
                                 if (rawErrorCount > 0 && storedErrorCount == 0)
                                 {
                                     _logger.LogWarning(
-                                        "No persisted kesalahan details for dokumen ID: {DokumenId} despite {RawErrorCount} raw validation errors",
+                                        "No located kesalahan details persisted for dokumen ID: {DokumenId} despite {RawErrorCount} raw validation errors",
                                         queue.DokumenId,
                                         rawErrorCount);
                                 }
@@ -189,9 +217,9 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 var isLolos = IsValidationPassed(
                                     roundedScore,
                                     minimumScoreValue,
-                                    validationResult.HasHardConstraintViolation);
+                                    hasEffectiveHardConstraintViolation);
                                 dokumen.DokumenStatus = isLolos ? "lolos" : "tidak_lolos";
-                                dokumen.DokumenUpdatedAt = DateTime.Now;
+                                dokumen.DokumenUpdatedAt = AppClock.Now;
 
                                 if (activeAturan == null)
                                 {
@@ -207,7 +235,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         queue.DokumenId,
                                         roundedScore,
                                         minimumScoreValue,
-                                        validationResult.HasHardConstraintViolation,
+                                        hasEffectiveHardConstraintViolation,
                                         activeAturan.AturanId,
                                         dokumen.DokumenStatus);
                                 }
@@ -239,9 +267,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                     continue;
                                 }
 
-                                var roundedScore = (int)Math.Round(validationResult.Score);
-                                bab.BabSkor = roundedScore;
-                                bab.BabHasHardConstraintViolation = validationResult.HasHardConstraintViolation;
+                                var rawScore = validationResult.Score;
 
                                 var activeAturan = await db.Aturans
                                     .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
@@ -251,11 +277,11 @@ public class ValidationQueueBackgroundService : BackgroundService
                                 bab.BabSkorMinimal = minimumScoreValue;
 
                                 var rawErrorCount = validationResult.Errors.Count;
-                                var storedErrorCount = 0;
+                                var errorStorageResult = ErrorStorageResult.Empty;
                                 if (rawErrorCount > 0)
                                 {
                                     var (sectionRefType, sectionRefId) = ResolveSectionRef(queue);
-                                    storedErrorCount = await EnrichAndStoreErrorsAsync(
+                                    errorStorageResult = await EnrichAndStoreErrorsAsync(
                                         db,
                                         queue.AntrianId,
                                         queue.BabId.Value,
@@ -267,21 +293,30 @@ public class ValidationQueueBackgroundService : BackgroundService
                                         stoppingToken,
                                         babOrder: bab.BabOrder);
                                 }
+                                var effectiveScore = validationResult.GetEffectiveScore(errorStorageResult.StorableErrors);
+                                var roundedScore = (int)Math.Round(effectiveScore);
+                                var hasEffectiveHardConstraintViolation = validationResult.HasEffectiveHardConstraintViolation(errorStorageResult.StorableErrors);
+                                var storedErrorCount = errorStorageResult.StoredDetailCount;
+                                bab.BabSkor = roundedScore;
+                                bab.BabHasHardConstraintViolation = hasEffectiveHardConstraintViolation;
                                 bab.BabJumlahKesalahan = storedErrorCount;
 
                                 _logger.LogInformation(
-                                    "Validated bab ID: {BabId} (BukuId: {BukuId}), Score: {Score}, MinimumScoreAtValidation: {MinimumScore}, HasHardConstraintViolation: {HasHardConstraintViolation}, RawErrors: {RawErrorCount}, StoredErrors: {StoredErrorCount}",
+                                    "Validated bab ID: {BabId} (BukuId: {BukuId}), RawScore: {RawScore}, EffectiveScore: {EffectiveScore}, MinimumScoreAtValidation: {MinimumScore}, HasHardConstraintViolation: {HasHardConstraintViolation}, RawErrors: {RawErrorCount}, EnrichedErrors: {EnrichedErrorCount}, LocationFilteredErrors: {LocationFilteredErrorCount}, StoredErrors: {StoredErrorCount}",
                                     queue.BabId,
                                     queue.BukuId,
-                                    roundedScore,
+                                    rawScore,
+                                    effectiveScore,
                                     minimumScoreValue,
-                                    validationResult.HasHardConstraintViolation,
+                                    hasEffectiveHardConstraintViolation,
                                     rawErrorCount,
+                                    errorStorageResult.EnrichedErrorCount,
+                                    errorStorageResult.LocationFilteredErrorCount,
                                     storedErrorCount);
                                 if (rawErrorCount > 0 && storedErrorCount == 0)
                                 {
                                     _logger.LogWarning(
-                                        "No persisted kesalahan details for bab ID: {BabId} despite {RawErrorCount} raw validation errors",
+                                        "No located kesalahan details persisted for bab ID: {BabId} despite {RawErrorCount} raw validation errors",
                                         queue.BabId,
                                         rawErrorCount);
                                 }
@@ -297,7 +332,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                         }
 
                         queue.AntrianValidationStatus = "completed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = AppClock.Now;
                         queue.AntrianErrorMessage = null;
                         _logger.LogInformation("Completed validation for antrian ID: {AntrianId}", queue.AntrianId);
 
@@ -356,7 +391,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                                     buku.BukuStatus = finalStatus;
                                     buku.BukuJumlahKesalahan = totalKesalahan;
                                     buku.BukuSkor = (int)Math.Round(averageScore);
-                                    buku.BukuUpdatedAt = DateTime.Now;
+                                    buku.BukuUpdatedAt = AppClock.Now;
 
                                     await reportService.GenerateBukuReportAsync(
                                         (int)queue.BukuId.Value,
@@ -392,7 +427,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                         }
 
                         queue.AntrianValidationStatus = "failed";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = AppClock.Now;
                         queue.AntrianErrorMessage = ex.Message.Length > 255 ? ex.Message[..252] + "..." : ex.Message;
                         _logger.LogError(ex, "Failed validation for antrian ID: {AntrianId}", queue.AntrianId);
 
@@ -402,7 +437,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                             if (aturan != null)
                             {
                                 aturan.AturanStatus = AturanStatusValues.Gagal;
-                                aturan.AturanUpdatedAt = DateTime.Now;
+                                aturan.AturanUpdatedAt = AppClock.Now;
                             }
                         }
 
@@ -716,7 +751,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         return (true, babs);
     }
 
-    private async Task<int> EnrichAndStoreErrorsAsync(
+    private async Task<ErrorStorageResult> EnrichAndStoreErrorsAsync(
         KorektorBukuDbContext db,
         uint antrianId,
         uint dokumenId,
@@ -729,7 +764,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         byte? babOrder = null)
     {
         if (errors.Count == 0)
-            return 0;
+            return ErrorStorageResult.Empty;
 
         var aturan = await db.Aturans
             .Where(a => a.AturanStatus == AturanStatusValues.Aktif)
@@ -752,11 +787,18 @@ public class ValidationQueueBackgroundService : BackgroundService
             errors,
             cancellationToken);
         if (llmErrors.Count == 0)
-            return 0;
+            return new ErrorStorageResult(0, 0, 0, Array.Empty<ValidationError>());
+
+        var storableErrors = llmErrors
+            .Where(HasKnownLocation)
+            .ToList();
+        var locationFilteredErrorCount = llmErrors.Count - storableErrors.Count;
+        if (storableErrors.Count == 0)
+            return new ErrorStorageResult(0, llmErrors.Count, locationFilteredErrorCount, storableErrors);
 
         var detailByIndex = new ConcurrentDictionary<int, GeminiErrorDetail>();
         var pending = new ConcurrentQueue<BatchErrorItem>(
-            llmErrors.Select((error, index) => new BatchErrorItem(error, index)));
+            storableErrors.Select((error, index) => new BatchErrorItem(error, index)));
         var batchNumber = 0;
         var inFlight = 0;
 
@@ -814,7 +856,7 @@ public class ValidationQueueBackgroundService : BackgroundService
                         batch.Count,
                         minIndex,
                         maxIndex,
-                        llmErrors.Count);
+                        storableErrors.Count);
 
                     var batchDetails = await FetchGuidanceForBatchAsync(
                         batch,
@@ -965,7 +1007,7 @@ public class ValidationQueueBackgroundService : BackgroundService
         // For page-settings errors we keep expected in the key to preserve per-rule separation.
         var errorGroups = new Dictionary<string, (Kesalahan Parent, List<KesalahanDetail> Details)>();
         var storedDetailCount = 0;
-        var errorsToStore = llmErrors;
+        var errorsToStore = storableErrors;
         for (int i = 0; i < errorsToStore.Count; i++)
         {
             var error = errorsToStore[i];
@@ -988,6 +1030,9 @@ public class ValidationQueueBackgroundService : BackgroundService
             category = Truncate(category, 100);
 
             var lokasi = BuildKesalahanLokasi(error, babOrder);
+            if (lokasi == null)
+                continue;
+
             var fieldKey = string.IsNullOrWhiteSpace(error.Field) ? "-" : error.Field.Trim().ToLowerInvariant();
             var expectedKey = string.IsNullOrWhiteSpace(error.Expected) ? "-" : error.Expected.Trim().ToLowerInvariant();
             
@@ -1037,7 +1082,7 @@ public class ValidationQueueBackgroundService : BackgroundService
             db.KesalahanDetails.AddRange(group.Details);
         }
 
-        return storedDetailCount;
+        return new ErrorStorageResult(storedDetailCount, llmErrors.Count, locationFilteredErrorCount, storableErrors);
     }
 
     private async Task<List<GeminiErrorDetail>> FetchGuidanceForBatchAsync(
@@ -1266,6 +1311,9 @@ public class ValidationQueueBackgroundService : BackgroundService
         IReadOnlyDictionary<int, SectionContext> sectionContexts)
     {
         var aggregated = CloneValidationError(sample);
+        foreach (var groupError in groupErrors)
+            aggregated.AddValidationCheckKeys(groupError.ValidationCheckKeys);
+        aggregated.IsHardConstraint = groupErrors.Any(error => error.IsHardConstraint);
         aggregated.ScopeHint = BuildPageSettingsScopeHint(sample.Field, groupErrors, sectionContexts);
 
         var locations = BuildAggregatedLocations(groupErrors, sectionContexts);
@@ -1939,7 +1987,7 @@ public class ValidationQueueBackgroundService : BackgroundService
 
     private static ValidationError CloneValidationError(ValidationError source)
     {
-        return new ValidationError
+        var clone = new ValidationError
         {
             Category = source.Category,
             Field = source.Field,
@@ -1985,7 +2033,12 @@ public class ValidationQueueBackgroundService : BackgroundService
             DokumenElemenId = source.DokumenElemenId,
             IsHardConstraint = source.IsHardConstraint
         };
+        clone.AddValidationCheckKeys(source.ValidationCheckKeys);
+        return clone;
     }
+
+    private static bool HasKnownLocation(ValidationError error)
+        => error.Locations.Any(loc => loc != null && loc.HalamanKe > 0);
 
     private static string? BuildKesalahanLokasi(ValidationError error, byte? babOrder = null)
     {
@@ -1995,30 +2048,12 @@ public class ValidationQueueBackgroundService : BackgroundService
         };
         var evidence = NormalizeEvidence(error.Evidence);
 
-        if (error.Locations.Count == 0)
-        {
-            if (!babOrder.HasValue)
-                return null;
-
-            var fallback = new List<Dictionary<string, object?>>
-            {
-                new()
-                {
-                    ["halaman_ke"] = null,
-                    ["bbox"] = null,
-                    ["bab_order"] = babOrder.Value
-                }
-            };
-            if (!string.IsNullOrWhiteSpace(evidence))
-                fallback[0]["evidence"] = evidence;
-
-            return JsonSerializer.Serialize(fallback, jsonOptions);
-        }
-
         var orderedLocations = error.Locations
-            .Where(loc => loc != null)
-            .OrderBy(loc => loc.HalamanKe <= 0 ? int.MaxValue : loc.HalamanKe)
+            .Where(loc => loc != null && loc.HalamanKe > 0)
+            .OrderBy(loc => loc.HalamanKe)
             .ToList();
+        if (orderedLocations.Count == 0)
+            return null;
 
         var locations = orderedLocations.Select(loc =>
         {

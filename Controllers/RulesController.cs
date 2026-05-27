@@ -136,6 +136,7 @@ public class RulesController : ControllerBase
             }
         }
 
+        var now = AppClock.Now;
         var aturan = new Aturan
         {
             AturanVersi = request.aturan_versi,
@@ -143,7 +144,9 @@ public class RulesController : ControllerBase
                 ? AturanStatusValues.TidakAktif
                 : request.aturan_status.Trim().ToLowerInvariant(),
             AturanSkorMinimum = request.aturan_skor_minimum ?? 80,
-            AturanTemplateFilePath = request.aturan_template_file_path
+            AturanTemplateFilePath = request.aturan_template_file_path,
+            AturanCreatedAt = now,
+            AturanUpdatedAt = now
         };
 
         _db.Aturans.Add(aturan);
@@ -237,6 +240,7 @@ public class RulesController : ControllerBase
             aturan.AturanSkorMinimum = request.aturan_skor_minimum.Value;
         if (request.aturan_template_file_path != null)
             aturan.AturanTemplateFilePath = request.aturan_template_file_path;
+        aturan.AturanUpdatedAt = AppClock.Now;
 
         // Update details if provided
         if (normalizedDetails.Count > 0)

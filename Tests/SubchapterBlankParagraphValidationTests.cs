@@ -78,6 +78,67 @@ public class SubchapterBlankParagraphValidationTests
     }
 
     [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldNormalizeLeftIndentForNumberedSubchapter()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules();
+
+        fixture.AddSubchapterElement(1201, 1, 104, "1.1 Latar Belakang", page: 1, y0: 100f, y1: 120f);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        Assert.DoesNotContain(result.Errors, item => item.Message == "Left indent judul subbab tidak sesuai");
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldReportLeftIndent_WhenNormalizedNumberingIndentDoesNotMatch()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules();
+
+        fixture.AddSubchapterElement(1301, 1, 105, "1.1 Latar Belakang", page: 1, y0: 100f, y1: 120f);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        var error = Assert.Single(result.Errors, item => item.Message == "Left indent judul subbab tidak sesuai");
+        Assert.Equal("0 cm", error.Expected);
+        Assert.Equal("1.27 cm", error.Actual);
+    }
+
+    [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldCountInvisibleBlankParagraphBeforeSubchapter()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules();
+
+        fixture.AddParagraphElement(1401, 1, 102, 202, "Paragraf sebelum subbab", page: 1, y0: 100f, y1: 120f);
+        fixture.AddInvisibleBlankParagraphElement(1402, 2, 102, 202);
+        fixture.AddSubchapterElement(1403, 3, 104, "1.1 Latar Belakang", page: 1, y0: 150f, y1: 170f);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        Assert.DoesNotContain(result.Errors, item => item.Message == "Jumlah baris kosong sebelum judul subbab tidak sesuai");
+        Assert.DoesNotContain(result.Errors, item => item.Message == "Left indent judul subbab tidak sesuai");
+        Assert.Empty(result.Errors);
+    }
+
+    [Fact]
     public async Task ValidateSubchapterTitleAsync_ShouldIgnoreQuotedLowercasePhraseForTitleCase()
     {
         using var fixture = new SqliteSubchapterFixture();
@@ -295,6 +356,36 @@ public class SubchapterBlankParagraphValidationTests
                     DfpSpacingLineRule = "auto",
                     DfpSpacingBeforeTwips = 0,
                     DfpSpacingAfterTwips = 0
+                },
+                new DokumenFormatParagraf
+                {
+                    DfpId = 104,
+                    DfpJc = "left",
+                    DfpIndLeftTwips = 720,
+                    DfpIndStartTwips = 720,
+                    DfpIndHangingTwips = 720,
+                    DfpSpacingLineTwips = 360,
+                    DfpSpacingLineRule = "auto",
+                    DfpSpacingBeforeTwips = 0,
+                    DfpSpacingAfterTwips = 0,
+                    DfpIsList = true,
+                    DfpListNumId = 1,
+                    DfpListIlvl = 0
+                },
+                new DokumenFormatParagraf
+                {
+                    DfpId = 105,
+                    DfpJc = "left",
+                    DfpIndLeftTwips = 1440,
+                    DfpIndStartTwips = 1440,
+                    DfpIndHangingTwips = 720,
+                    DfpSpacingLineTwips = 360,
+                    DfpSpacingLineRule = "auto",
+                    DfpSpacingBeforeTwips = 0,
+                    DfpSpacingAfterTwips = 0,
+                    DfpIsList = true,
+                    DfpListNumId = 1,
+                    DfpListIlvl = 0
                 });
 
             Db.DokumenFormatTexts.AddRange(
@@ -335,6 +426,19 @@ public class SubchapterBlankParagraphValidationTests
         public void AddBlankParagraphElement(ulong elementId, uint sequence, uint paragraphFormatId, uint textFormatId, uint page, float y0, float y1)
         {
             AddElement(elementId, sequence, paragraphFormatId, textFormatId, string.Empty, page, y0, y1, "paragraf");
+        }
+
+        public void AddInvisibleBlankParagraphElement(ulong elementId, uint sequence, uint paragraphFormatId, uint textFormatId)
+        {
+            Db.DokumenElemens.Add(new DokumenElemen
+            {
+                DelemenId = elementId,
+                DpartId = 1,
+                DelemenSequence = sequence,
+                DelemenType = "paragraph",
+                DelemenJsonTree = CreateParagraphJson(paragraphFormatId, textFormatId, string.Empty),
+                DelemenXml = string.Empty
+            });
         }
 
         public void AddSubchapterElement(ulong elementId, uint sequence, uint paragraphFormatId, string text, uint page, float y0, float y1)

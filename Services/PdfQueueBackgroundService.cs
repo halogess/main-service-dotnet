@@ -13,7 +13,7 @@ public class PdfQueueBackgroundService : BackgroundService
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _workerStartedAt = DateTime.Now;
+        _workerStartedAt = AppClock.Now;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -63,7 +63,7 @@ public class PdfQueueBackgroundService : BackgroundService
                     _logger.LogInformation("Processing antrian ID: {AntrianId}, File: {FilePath}", queue.AntrianId, filePath);
 
                     queue.AntrianExtractionStatus = "processing";
-                    queue.AntrianUpdatedAt = DateTime.Now;
+                    queue.AntrianUpdatedAt = AppClock.Now;
 
                     if (queue.AntrianTipe == "dokumen" && queue.DokumenId.HasValue)
                     {
@@ -72,7 +72,7 @@ public class PdfQueueBackgroundService : BackgroundService
                             !string.Equals(dokumen.DokumenStatus, "dibatalkan", StringComparison.OrdinalIgnoreCase))
                         {
                             dokumen.DokumenStatus = "diproses";
-                            dokumen.DokumenUpdatedAt = DateTime.Now;
+                            dokumen.DokumenUpdatedAt = AppClock.Now;
                             _logger.LogInformation("Updated dokumen ID: {DokumenId}, status: diproses", queue.DokumenId);
                             await wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, (int)queue.DokumenId.Value, "diproses");
                         }
@@ -83,7 +83,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         if (buku != null && buku.BukuStatus == "dalam_antrian")
                         {
                             buku.BukuStatus = "diproses";
-                            buku.BukuUpdatedAt = DateTime.Now;
+                            buku.BukuUpdatedAt = AppClock.Now;
                             _logger.LogInformation("Updated buku ID: {BukuId}, status: diproses", queue.BukuId);
                             await wsService.NotifyBukuStatusChanged(buku.MhsNrp, (int)queue.BukuId.Value, "diproses");
                         }
@@ -94,7 +94,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         if (aturan != null)
                         {
                             aturan.AturanStatus = AturanStatusValues.Diproses;
-                            aturan.AturanUpdatedAt = DateTime.Now;
+                            aturan.AturanUpdatedAt = AppClock.Now;
                         }
                     }
 
@@ -152,7 +152,7 @@ public class PdfQueueBackgroundService : BackgroundService
                             stoppingToken);
 
                         credential.AdobeCredentialsQuotaUsed++;
-                        credential.AdobeCredentialsUpdatedAt = DateTime.Now;
+                        credential.AdobeCredentialsUpdatedAt = AppClock.Now;
 
                         var fileService = scope.ServiceProvider.GetRequiredService<IFileService>();
                         var pdfPath = fileService.GetPdfPath(filePath);
@@ -166,7 +166,7 @@ public class PdfQueueBackgroundService : BackgroundService
                             if (dokumen != null)
                             {
                                 dokumen.DokumenPdfPath = pdfPath;
-                                dokumen.DokumenUpdatedAt = DateTime.Now;
+                                dokumen.DokumenUpdatedAt = AppClock.Now;
                                 _logger.LogInformation("Updated dokumen ID: {DokumenId}, pdf_path: {PdfPath}", queue.DokumenId, pdfPath);
                             }
                         }
@@ -193,7 +193,7 @@ public class PdfQueueBackgroundService : BackgroundService
                                         bukuNrpForArchiveReady = buku.MhsNrp;
                                         shouldNotifyBukuArchiveReady = true;
                                         buku.BukuStatus = "diproses";
-                                        buku.BukuUpdatedAt = DateTime.Now;
+                                        buku.BukuUpdatedAt = AppClock.Now;
                                         _logger.LogInformation("All babs completed for buku ID: {BukuId}", queue.BukuId);
                                     }
                                 }
@@ -205,7 +205,7 @@ public class PdfQueueBackgroundService : BackgroundService
                             if (aturan != null)
                             {
                                 aturan.AturanTemplatePdfPath = pdfPath;
-                                aturan.AturanUpdatedAt = DateTime.Now;
+                                aturan.AturanUpdatedAt = AppClock.Now;
                                 _logger.LogInformation("Updated aturan ID: {AturanId}, pdf_path: {PdfPath}", queue.AturanId, pdfPath);
                             }
                         }
@@ -263,7 +263,7 @@ public class PdfQueueBackgroundService : BackgroundService
 
                         queue.AntrianExtractionStatus = "completed";
                         queue.AntrianLabelingStatus = "in_queue";
-                        queue.AntrianUpdatedAt = DateTime.Now;
+                        queue.AntrianUpdatedAt = AppClock.Now;
                         queue.AntrianErrorMessage = null;
                         _logger.LogInformation("Completed antrian ID: {AntrianId}, PDF: {PdfPath}", queue.AntrianId, pdfPath);
                     }
@@ -386,7 +386,7 @@ public class PdfQueueBackgroundService : BackgroundService
         if (orphanedQueues.Count == 0)
             return;
 
-        var recoveredAt = DateTime.Now;
+        var recoveredAt = AppClock.Now;
         foreach (var queue in orphanedQueues)
         {
             queue.AntrianExtractionStatus = "in_queue";
@@ -457,7 +457,7 @@ public class PdfQueueBackgroundService : BackgroundService
             return;
 
         aturan.AturanStatus = AturanStatusValues.Gagal;
-        aturan.AturanUpdatedAt = DateTime.Now;
+        aturan.AturanUpdatedAt = AppClock.Now;
     }
 
     private static async Task<(DokumenFailureNotification? DokumenFailureNotification, BukuFailureNotification? BukuFailureNotification)> HandleQueueFailureAsync(
@@ -467,7 +467,7 @@ public class PdfQueueBackgroundService : BackgroundService
         CancellationToken cancellationToken)
     {
         queue.AntrianExtractionStatus = "failed";
-        queue.AntrianUpdatedAt = DateTime.Now;
+        queue.AntrianUpdatedAt = AppClock.Now;
         queue.AntrianErrorMessage = errorMessage;
 
         await MarkAturanFailedAsync(db, queue, cancellationToken);

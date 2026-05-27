@@ -73,8 +73,8 @@ public class DokumenService : IDokumenService
             DokumenFilename = file.FileName,
             DokumenFilesizeBytes = file.Length,
             DokumenStatus = "dalam_antrian",
-            DokumenCreatedAt = DateTime.Now,
-            DokumenUpdatedAt = DateTime.Now
+            DokumenCreatedAt = AppClock.Now,
+            DokumenUpdatedAt = AppClock.Now
         };
         
         _db.Dokumens.Add(dokumen);
@@ -88,8 +88,8 @@ public class DokumenService : IDokumenService
             AntrianTipe = "dokumen",
             DokumenId = (uint)dokumen.DokumenId,
             AntrianExtractionStatus = "in_queue",
-            AntrianCreatedAt = DateTime.Now,
-            AntrianUpdatedAt = DateTime.Now
+            AntrianCreatedAt = AppClock.Now,
+            AntrianUpdatedAt = AppClock.Now
         };
         _db.Antrians.Add(antrian);
         await _db.SaveChangesAsync();
@@ -114,7 +114,7 @@ public class DokumenService : IDokumenService
         }
 
         dokumen.DokumenStatus = status;
-        dokumen.DokumenUpdatedAt = DateTime.Now;
+        dokumen.DokumenUpdatedAt = AppClock.Now;
         
         await _db.SaveChangesAsync();
         await _wsService.NotifyDokumenStatusChanged(dokumen.MhsNrp!, dokumenId, status);
@@ -132,7 +132,7 @@ public class DokumenService : IDokumenService
         if (dokumen.DokumenStatus != "dalam_antrian" && dokumen.DokumenStatus != "diproses")
             throw new InvalidOperationException("Hanya dokumen dalam antrian atau diproses yang bisa dibatalkan");
 
-        var now = DateTime.Now;
+        var now = AppClock.Now;
         var strategy = _db.Database.CreateExecutionStrategy();
 
         await strategy.ExecuteAsync(async () =>

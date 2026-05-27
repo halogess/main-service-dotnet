@@ -53,7 +53,7 @@ public class WebSocketService : IWebSocketService
             type = "status_changed",
             dokumen_id = dokumenId,
             status = status,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 
@@ -65,7 +65,7 @@ public class WebSocketService : IWebSocketService
             dokumen_id = dokumenId,
             docx_ready = docxReady,
             pdf_ready = pdfReady,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 
@@ -75,7 +75,7 @@ public class WebSocketService : IWebSocketService
         {
             type = "dokumen_cancelled",
             dokumen_id = dokumenId,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 
@@ -85,7 +85,7 @@ public class WebSocketService : IWebSocketService
         {
             type = "queue_position_changed",
             position = position,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 
@@ -96,7 +96,7 @@ public class WebSocketService : IWebSocketService
             type = "buku_status_changed",
             buku_id = bukuId,
             status = status,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 
@@ -108,7 +108,7 @@ public class WebSocketService : IWebSocketService
             buku_id = bukuId,
             docx_ready = docxReady,
             pdf_ready = pdfReady,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 
@@ -118,7 +118,7 @@ public class WebSocketService : IWebSocketService
         {
             type = "buku_cancelled",
             buku_id = bukuId,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 
@@ -130,7 +130,7 @@ public class WebSocketService : IWebSocketService
             dokumen_id = dokumenId,
             stage = stage,
             progress = progress,
-            timestamp = DateTime.Now
+            timestamp = AppClock.Now
         });
     }
 

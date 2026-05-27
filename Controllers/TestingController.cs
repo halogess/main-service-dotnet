@@ -72,8 +72,8 @@ public class TestingController : ControllerBase
                     BukuJumlahBab = jumlahBab,
                     BukuSkor = status == "lolos" ? random.Next(75, 95) : (status == "tidak_lolos" ? random.Next(50, 70) : null),
                     BukuJumlahKesalahan = status == "lolos" ? random.Next(1, 10) : (status == "tidak_lolos" ? random.Next(15, 35) : null),
-                    BukuCreatedAt = DateTime.Now.AddDays(-randomDays),
-                    BukuUpdatedAt = DateTime.Now
+                    BukuCreatedAt = AppClock.Now.AddDays(-randomDays),
+                    BukuUpdatedAt = AppClock.Now
                 };
 
                 _db.Bukus.Add(buku);
@@ -228,8 +228,8 @@ public class TestingController : ControllerBase
                             BukuJumlahBab = jumlahBab,
                             BukuSkor = statusBuku == "lolos" ? random.Next(75, 95) : (statusBuku == "tidak_lolos" ? random.Next(50, 70) : null),
                             BukuJumlahKesalahan = statusBuku == "lolos" ? random.Next(1, 10) : (statusBuku == "tidak_lolos" ? random.Next(15, 35) : null),
-                            BukuCreatedAt = DateTime.Now.AddDays(-random.Next(1, 365)),
-                            BukuUpdatedAt = DateTime.Now
+                            BukuCreatedAt = AppClock.Now.AddDays(-random.Next(1, 365)),
+                            BukuUpdatedAt = AppClock.Now
                         };
                         
                         _db.Bukus.Add(buku);

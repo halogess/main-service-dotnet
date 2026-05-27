@@ -109,7 +109,7 @@ public class AuthServiceTests
 
         Assert.NotNull(capturedUri);
         Assert.Equal(
-            "https://ws.stts.edu/credential/05111740000111/login/pa%20ss%3F%2B%23&appname=ta_korektor_buku",
+            "https://ws.stts.edu/credential/05111740000111/login/pa%2520ss%253F%252B%2523/&appname=ta_korektor_buku",
             capturedUri!.AbsoluteUri);
     }
 

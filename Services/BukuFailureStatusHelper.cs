@@ -25,7 +25,7 @@ public static class BukuFailureStatusHelper
         buku.BukuSkor = null;
         buku.BukuJumlahKesalahan = null;
         buku.BukuReportPath = null;
-        buku.BukuUpdatedAt = DateTime.Now;
+        buku.BukuUpdatedAt = AppClock.Now;
 
         return shouldNotify
             ? new BukuFailureNotification(buku.MhsNrp, buku.BukuId)

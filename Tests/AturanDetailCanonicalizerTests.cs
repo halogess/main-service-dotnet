@@ -31,6 +31,31 @@ public class AturanDetailCanonicalizerTests
     }
 
     [Fact]
+    public void TryCanonicalize_ShouldDropLegacyPageNumberLineSpacing()
+    {
+        const string rawJson = """
+            {
+              "paragraph": {
+                "spacing": {
+                  "line_spacing": { "value": 2, "is_editable": true, "is_hard_constraint": true },
+                  "before": { "value": 6, "is_editable": true, "is_hard_constraint": false }
+                }
+              }
+            }
+            """;
+
+        var result = AturanDetailCanonicalizer.TryCanonicalize("nomor_halaman", rawJson, out var canonicalJson, out var changed, out var errorMessage);
+
+        Assert.True(result, errorMessage);
+        Assert.True(changed);
+
+        var root = JsonNode.Parse(canonicalJson!)!.AsObject();
+        Assert.Null(root["paragraph"]!["spacing"]!["line_spacing"]);
+        Assert.Equal(6m, root["paragraph"]!["spacing"]!["before"]!["value"]!.GetValue<decimal>());
+        Assert.Equal(0m, root["paragraph"]!["spacing"]!["after"]!["value"]!.GetValue<decimal>());
+    }
+
+    [Fact]
     public void TryCanonicalize_ShouldPromoteLegacyParagraphIndentationIntoCanonicalShape()
     {
         const string rawJson = """

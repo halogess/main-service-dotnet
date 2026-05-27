@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using ValidasiTugasAkhir.MainService.Services;
 
 namespace ValidasiTugasAkhir.MainService.Models;
 
@@ -39,5 +40,5 @@ public class LlmApiLog
     public int? LogKeyTokensUsed { get; set; }
 
     [Column("log_created_at")]
-    public DateTime LogCreatedAt { get; set; } = DateTime.Now;
+    public DateTime LogCreatedAt { get; set; } = AppClock.Now;
 }

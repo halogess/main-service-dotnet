@@ -79,7 +79,7 @@ public sealed class ValidationReportService : IValidationReportService
                 !string.Equals(dokumen.DokumenReportPath, reportRelativePath, StringComparison.OrdinalIgnoreCase))
             {
                 dokumen.DokumenReportPath = reportRelativePath;
-                dokumen.DokumenUpdatedAt = DateTime.Now;
+                dokumen.DokumenUpdatedAt = AppClock.Now;
                 await _db.SaveChangesAsync(cancellationToken);
             }
 
@@ -97,7 +97,7 @@ public sealed class ValidationReportService : IValidationReportService
         var rows = BuildRows(kesalahanList);
         var summary = BuildSummary(rows);
 
-        var generatedAt = DateTime.Now;
+        var generatedAt = AppClock.Now;
         var data = new ValidationReportData
         {
             GeneratedAt = generatedAt,
@@ -106,7 +106,7 @@ public sealed class ValidationReportService : IValidationReportService
             Filename = dokumen.DokumenFilename,
             Status = reportStatus,
             Skor = dokumen.DokumenSkor,
-            TotalKesalahan = dokumen.DokumenJumlahKesalahan,
+            TotalKesalahan = summary.TotalDetails,
             Summary = summary,
             Rows = rows
         };
@@ -118,7 +118,7 @@ public sealed class ValidationReportService : IValidationReportService
         await File.WriteAllBytesAsync(reportFullPath, pdfBytes, cancellationToken);
 
         dokumen.DokumenReportPath = reportRelativePath;
-        dokumen.DokumenUpdatedAt = DateTime.Now;
+        dokumen.DokumenUpdatedAt = AppClock.Now;
         await _db.SaveChangesAsync(cancellationToken);
 
         return new ValidationReportResult(pdfBytes, BuildReportDownloadFileName(dokumen.MhsNrp, "dokumen", generatedAt));
@@ -160,7 +160,7 @@ public sealed class ValidationReportService : IValidationReportService
                 !string.Equals(buku.BukuReportPath, reportRelativePath, StringComparison.OrdinalIgnoreCase))
             {
                 buku.BukuReportPath = reportRelativePath;
-                buku.BukuUpdatedAt = DateTime.Now;
+                buku.BukuUpdatedAt = AppClock.Now;
                 await _db.SaveChangesAsync(cancellationToken);
             }
 
@@ -187,6 +187,9 @@ public sealed class ValidationReportService : IValidationReportService
 
         var rows = BuildBukuRows(kesalahanList, babById);
         var summary = BuildBukuSummary(rows);
+        var detailCountByBab = rows
+            .GroupBy(row => row.BabId)
+            .ToDictionary(group => group.Key, group => group.Count());
 
         var mahasiswaName = await _sttsDb.Mahasiswas
             .Where(m => m.MhsNrp == buku.MhsNrp)
@@ -202,11 +205,11 @@ public sealed class ValidationReportService : IValidationReportService
                 Filename = b.BabFilename,
                 Skor = b.BabSkor,
                 SkorMinimal = b.BabSkorMinimal,
-                JumlahKesalahan = b.BabJumlahKesalahan
+                JumlahKesalahan = detailCountByBab.GetValueOrDefault(b.BabId)
             })
             .ToList();
 
-        var generatedAt = DateTime.Now;
+        var generatedAt = AppClock.Now;
         var data = new BukuValidationReportData
         {
             GeneratedAt = generatedAt,
@@ -216,7 +219,7 @@ public sealed class ValidationReportService : IValidationReportService
             Judul = buku.BukuJudul,
             Status = reportStatus,
             Skor = buku.BukuSkor,
-            TotalKesalahan = buku.BukuJumlahKesalahan,
+            TotalKesalahan = summary.TotalDetails,
             IncludeCertificate = includeCertificate,
             AturanVersiValidasi = aturanVersiValidasi,
             VerificationCode = GenerateVerificationCode(buku.BukuId, generatedAt),
@@ -232,7 +235,7 @@ public sealed class ValidationReportService : IValidationReportService
         await File.WriteAllBytesAsync(reportFullPath, pdfBytes, cancellationToken);
 
         buku.BukuReportPath = reportRelativePath;
-        buku.BukuUpdatedAt = DateTime.Now;
+        buku.BukuUpdatedAt = AppClock.Now;
         await _db.SaveChangesAsync(cancellationToken);
 
         return new ValidationReportResult(pdfBytes, BuildReportDownloadFileName(buku.MhsNrp, "buku", generatedAt));
@@ -314,6 +317,9 @@ public sealed class ValidationReportService : IValidationReportService
         foreach (var kesalahan in kesalahanList)
         {
             var pages = ParsePages(kesalahan.KesalahanLokasi);
+            if (pages.Count == 0)
+                continue;
+
             var pagesText = FormatPageRanges(pages);
             var (firstPage, firstY) = ParseLocationSortKey(kesalahan.KesalahanLokasi);
             var evidence = ExtractEvidence(kesalahan.KesalahanLokasi);
@@ -388,6 +394,9 @@ public sealed class ValidationReportService : IValidationReportService
                 continue;
 
             var pages = ParsePages(kesalahan.KesalahanLokasi);
+            if (pages.Count == 0)
+                continue;
+
             var pagesText = FormatPageRanges(pages);
             var (firstPage, firstY) = ParseLocationSortKey(kesalahan.KesalahanLokasi);
             var evidence = ExtractEvidence(kesalahan.KesalahanLokasi);

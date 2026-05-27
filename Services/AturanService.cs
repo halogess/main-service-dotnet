@@ -145,13 +145,16 @@ public class AturanService : IAturanService
     {
         var normalizedStatus = NormalizeStatus(status, AturanStatusValues.TidakAktif);
         await EnsureVersiAvailableAsync(versi);
+        var now = AppClock.Now;
 
         var aturan = new Aturan
         {
             AturanVersi = versi.Trim(),
             AturanStatus = normalizedStatus,
             AturanSkorMinimum = skorMinimum,
-            AturanTemplateFilePath = templateFilePath
+            AturanTemplateFilePath = templateFilePath,
+            AturanCreatedAt = now,
+            AturanUpdatedAt = now
         };
 
         _db.Aturans.Add(aturan);
@@ -184,7 +187,7 @@ public class AturanService : IAturanService
         if (templateFilePath != null)
             aturan.AturanTemplateFilePath = templateFilePath;
 
-        aturan.AturanUpdatedAt = DateTime.Now;
+        aturan.AturanUpdatedAt = AppClock.Now;
         await _db.SaveChangesAsync();
 
         _logger.LogInformation("Aturan berhasil diupdate: ID={AturanId}", aturan.AturanId);
@@ -219,8 +222,8 @@ public class AturanService : IAturanService
                     AturanVersi = versi.Trim(),
                     AturanStatus = AturanStatusValues.Diproses,
                     AturanSkorMinimum = skorMinimum,
-                    AturanCreatedAt = DateTime.Now,
-                    AturanUpdatedAt = DateTime.Now
+                    AturanCreatedAt = AppClock.Now,
+                    AturanUpdatedAt = AppClock.Now
                 };
 
                 _db.Aturans.Add(aturan);
@@ -235,8 +238,8 @@ public class AturanService : IAturanService
                     AntrianTipe = "aturan",
                     AturanId = aturan.AturanId,
                     AntrianExtractionStatus = "in_queue",
-                    AntrianCreatedAt = DateTime.Now,
-                    AntrianUpdatedAt = DateTime.Now
+                    AntrianCreatedAt = AppClock.Now,
+                    AntrianUpdatedAt = AppClock.Now
                 });
 
                 await _db.SaveChangesAsync(cancellationToken);
@@ -283,11 +286,11 @@ public class AturanService : IAturanService
         foreach (var item in currentlyActive)
         {
             item.AturanStatus = AturanStatusValues.TidakAktif;
-            item.AturanUpdatedAt = DateTime.Now;
+            item.AturanUpdatedAt = AppClock.Now;
         }
 
         aturan.AturanStatus = AturanStatusValues.Aktif;
-        aturan.AturanUpdatedAt = DateTime.Now;
+        aturan.AturanUpdatedAt = AppClock.Now;
         await _db.SaveChangesAsync(cancellationToken);
 
         return aturan;
@@ -300,7 +303,7 @@ public class AturanService : IAturanService
             return;
 
         aturan.AturanStatus = NormalizeStatus(status, aturan.AturanStatus);
-        aturan.AturanUpdatedAt = DateTime.Now;
+        aturan.AturanUpdatedAt = AppClock.Now;
         await _db.SaveChangesAsync(cancellationToken);
     }
 

@@ -271,7 +271,7 @@ public class NomorHalamanValidationTests
     }
 
     [Fact]
-    public async Task ValidatePageSettingsAsync_ShouldValidatePageNumberLineSpacingRule()
+    public async Task ValidatePageSettingsAsync_ShouldIgnoreLegacyPageNumberLineSpacingRule()
     {
         using var fixture = new SqlitePageNumberFixture();
         fixture.AddDokumen();
@@ -308,7 +308,7 @@ public class NomorHalamanValidationTests
         var service = CreateValidationService(fixture.Db);
         var result = await service.ValidatePageSettingsAsync(10);
 
-        Assert.Contains(result.Errors, error => error.Field == "page_number_line_spacing");
+        Assert.DoesNotContain(result.Errors, error => error.Field == "page_number_line_spacing");
         Assert.Contains(result.Errors, error => error.Field == "page_number_spacing_before");
     }
 

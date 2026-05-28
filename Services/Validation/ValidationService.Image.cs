@@ -259,7 +259,7 @@ public partial class ValidationService
                 continue;
 
             var imageItems = ExtractImageItems(elem.DelemenJsonTree);
-            if (imageItems.Count > 0 && string.IsNullOrWhiteSpace(normalizedText) && normalizedLabel == "gambar")
+            if (IsImageBlockCandidate(elem, normalizedLabel, normalizedText, imageItems))
             {
                 var imageBlock = new ImageBlockInfo
                 {
@@ -297,6 +297,18 @@ public partial class ValidationService
         if (imageBlocks.Count > 0)
         {
             var nonImageBlockIds = new HashSet<ulong>();
+            var tableElementIds = bodyElements
+                .Where(element =>
+                {
+                    var normalizedLabel = labelMap.TryGetValue(element.DelemenId, out var rawLabel)
+                        ? NormalizeLabel(rawLabel)
+                        : string.Empty;
+
+                    return IsTableElement(element, normalizedLabel);
+                })
+                .Select(element => element.DelemenId)
+                .Distinct()
+                .ToList();
 
             foreach (var caption in tableCaptionCandidates)
             {
@@ -350,6 +362,12 @@ public partial class ValidationService
                     nonImageBlockIds.Add(targetElement.DelemenId);
                     break;
                 }
+            }
+
+            foreach (var block in imageBlocks)
+            {
+                if (IsElementInsideAnyTableVisualBounds(block.ElementId, tableElementIds, visualSummaryById))
+                    nonImageBlockIds.Add(block.ElementId);
             }
 
             if (nonImageBlockIds.Count > 0)
@@ -447,7 +465,7 @@ public partial class ValidationService
             contentCache,
             cancellationToken);
 
-        var captionMergeGroups = BuildCaptionMergeGroups(mergedCaptionPairs);
+        var captionMergeGroups = BuildCaptionBlockGroups(mergedCaptionPairs, captionContinuationCandidates);
         var usedCaptionIds = new HashSet<ulong>();
 
         for (var i = 0; i < imageBlocks.Count; i++)
@@ -572,14 +590,17 @@ public partial class ValidationService
 
             if (selectedCaption != null)
             {
-                usedCaptionIds.Add(selectedCaption.ElementId);
+                var selectedCaptionElementIds = captionMergeGroups.TryGetValue(selectedCaption.ElementId, out var selectedMergedIds)
+                    ? selectedMergedIds.Distinct().ToList()
+                    : new List<ulong> { selectedCaption.ElementId };
+
+                foreach (var captionElementId in selectedCaptionElementIds)
+                    usedCaptionIds.Add(captionElementId);
+
                 if (captionRule != null)
                 {
                     paragraphFormats.TryGetValue(selectedCaption.Content.ParagraphFormatId ?? 0, out var captionFormat);
-                    IEnumerable<ulong> captionLocationIds = captionMergeGroups.TryGetValue(selectedCaption.ElementId, out var mergedIds)
-                        ? mergedIds
-                        : new[] { selectedCaption.ElementId };
-                    var captionLocations = await BuildElementLocationsAsync(captionLocationIds, cancellationToken);
+                    var captionLocations = await BuildElementLocationsAsync(selectedCaptionElementIds, cancellationToken);
                     var captionErrorStart = result.Errors.Count;
                     pageLayoutsById.TryGetValue(selectedCaption.ElementId, out var captionPageLayout);
 
@@ -1657,6 +1678,84 @@ public partial class ValidationService
         return items;
     }
 
+    private static bool IsImageBlockCandidate(
+        BodyElementInfo element,
+        string normalizedLabel,
+        string normalizedText,
+        IReadOnlyCollection<ImageItemInfo> imageItems)
+    {
+        if (imageItems.Count == 0 || !string.IsNullOrWhiteSpace(normalizedText))
+            return false;
+
+        if (IsCodeLabel(normalizedLabel))
+            return false;
+
+        if (IsTableElementType(element.DelemenType) || HasTableRows(element.DelemenJsonTree))
+            return false;
+
+        if (normalizedLabel is "caption_gambar" or "caption_tabel" or "judul_kode" or "tabel" or "kode" or "formula" or "footnote")
+            return false;
+
+        if (normalizedLabel is "gambar" or "image")
+            return true;
+
+        if (string.Equals(element.DelemenType, "gambar", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(element.DelemenType, "image", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return IsParagraphElement(element.DelemenType) &&
+               (string.IsNullOrWhiteSpace(normalizedLabel) ||
+                normalizedLabel is "paragraf" or "paragraph" or "text");
+    }
+
+    private static bool IsElementInsideAnyTableVisualBounds(
+        ulong elementId,
+        IReadOnlyCollection<ulong> tableElementIds,
+        IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById)
+    {
+        if (tableElementIds.Count == 0 ||
+            !visualSummaryById.TryGetValue(elementId, out var elementSummary) ||
+            elementSummary.Bounds.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var tableElementId in tableElementIds)
+        {
+            if (tableElementId == elementId ||
+                !visualSummaryById.TryGetValue(tableElementId, out var tableSummary) ||
+                tableSummary.Bounds.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var elementBounds in elementSummary.Bounds)
+            {
+                foreach (var tableBounds in tableSummary.Bounds)
+                {
+                    if (IsBoundsContainedInTable(elementBounds, tableBounds))
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsBoundsContainedInTable(VisualPageBounds elementBounds, VisualPageBounds tableBounds)
+    {
+        if (elementBounds.Page != tableBounds.Page)
+            return false;
+
+        const double tolerance = 1.5d;
+        return elementBounds.X0 >= tableBounds.X0 - tolerance &&
+               elementBounds.X1 <= tableBounds.X1 + tolerance &&
+               elementBounds.Y0 >= tableBounds.Y0 - tolerance &&
+               elementBounds.Y1 <= tableBounds.Y1 + tolerance;
+    }
+
     private static void CollectImageItems(
         JsonElement item,
         List<ImageItemInfo> items,
@@ -1776,6 +1875,20 @@ public partial class ValidationService
 
         await _db.SaveChangesAsync(cancellationToken);
         return mergedPairs;
+    }
+
+    private static Dictionary<ulong, HashSet<ulong>> BuildCaptionBlockGroups(
+        IReadOnlyList<(ulong CaptionId, ulong NextId)> mergedPairs,
+        IReadOnlyList<CaptionContinuationCandidate> continuationCandidates)
+    {
+        var pairs = new List<(ulong CaptionId, ulong NextId)>();
+        if (mergedPairs != null)
+            pairs.AddRange(mergedPairs);
+
+        foreach (var candidate in continuationCandidates)
+            pairs.Add((candidate.Caption.ElementId, candidate.NextElement.DelemenId));
+
+        return BuildCaptionMergeGroups(pairs);
     }
 
     private static Dictionary<ulong, HashSet<ulong>> BuildCaptionMergeGroups(
@@ -2134,26 +2247,10 @@ public partial class ValidationService
 
     private static string BuildImageEvidence(IReadOnlyList<ImageItemInfo> items)
     {
-        if (items.Count == 0)
+        if (items.Count <= 1)
             return "Gambar";
 
-        var parts = new List<string>();
-        foreach (var item in items)
-        {
-            if (!string.IsNullOrWhiteSpace(item.RelationshipId))
-            {
-                parts.Add($"rId:{item.RelationshipId}");
-            }
-            else if (item.DrawingFormatId.HasValue)
-            {
-                parts.Add($"dfdr:{item.DrawingFormatId.Value}");
-            }
-        }
-
-        if (parts.Count == 0)
-            return "Gambar";
-
-        return "Gambar (" + string.Join(", ", parts.Distinct()) + ")";
+        return $"Gambar ({items.Count} objek)";
     }
 
     private static decimal? EmuToCm(ulong? emu)

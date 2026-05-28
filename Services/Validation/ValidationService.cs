@@ -20,9 +20,11 @@ public class RuleValue<T>
     public T? Value { get; set; }
 
     [JsonPropertyName("is_editable")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsEditable { get; set; }
 
     [JsonPropertyName("is_hard_constraint")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsHardConstraint { get; set; }
 }
 
@@ -33,10 +35,61 @@ public class DecimalRuleValue
     public decimal? Value { get; set; }
 
     [JsonPropertyName("is_editable")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsEditable { get; set; }
 
     [JsonPropertyName("is_hard_constraint")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsHardConstraint { get; set; }
+}
+
+public class FlexibleBoolConverter : JsonConverter<bool>
+{
+    public override bool Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        return reader.TokenType switch
+        {
+            JsonTokenType.True => true,
+            JsonTokenType.False => false,
+            JsonTokenType.Number when reader.TryGetInt32(out var intValue) => intValue != 0,
+            JsonTokenType.String => ParseString(reader.GetString()),
+            JsonTokenType.StartObject => ReadObjectValue(ref reader, options),
+            _ => false
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, bool value, JsonSerializerOptions options)
+    {
+        writer.WriteBooleanValue(value);
+    }
+
+    private static bool ParseString(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        if (bool.TryParse(value, out var boolValue))
+            return boolValue;
+
+        return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var intValue) &&
+               intValue != 0;
+    }
+
+    private static bool ReadObjectValue(ref Utf8JsonReader reader, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        if (!document.RootElement.TryGetProperty("value", out var valueElement))
+            return false;
+
+        return valueElement.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Number when valueElement.TryGetInt32(out var intValue) => intValue != 0,
+            JsonValueKind.String => ParseString(valueElement.GetString()),
+            _ => false
+        };
+    }
 }
 
 public class FlexibleDecimalConverter : JsonConverter<decimal?>
@@ -290,9 +343,11 @@ public class TitleParagraphIndentationRule
     public string? Value { get; set; }
 
     [JsonPropertyName("is_editable")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsEditable { get; set; }
 
     [JsonPropertyName("is_hard_constraint")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsHardConstraint { get; set; }
 
     [JsonPropertyName("left_indent")]
@@ -551,9 +606,11 @@ public class FlexibleStringListRuleValue
     public List<string>? Value { get; set; }
 
     [JsonPropertyName("is_editable")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsEditable { get; set; }
 
     [JsonPropertyName("is_hard_constraint")]
+    [JsonConverter(typeof(FlexibleBoolConverter))]
     public bool IsHardConstraint { get; set; }
 }
 

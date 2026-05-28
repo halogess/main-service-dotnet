@@ -8,7 +8,11 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public partial class ValidationService
 {
-    private const decimal PageEndBlankLineHeightPoints = 18m;
+    private const decimal DefaultPageEndBlankLineHeightPoints = 18m;
+    // OpenXML lineRule=auto stores spacing as 240ths of a line, but does not define
+    // the rendered single-line height in points. Use an empirical Word-like fallback
+    // for font metrics/leading when only font size and line-spacing multiplier exist.
+    private const decimal EstimatedAutoLineHeightMultiplier = 1.2m;
 
     private sealed class NomorHalamanSectionRule
     {
@@ -98,6 +102,11 @@ public partial class ValidationService
             ? effectivePageSettings.Column
             : new RuleValue<int> { Value = 1 };
         var effectiveNomorHalamanRule = BuildEffectiveNomorHalamanRule(nomorHalamanRule);
+        var paragraphRule = await LoadParagraphRuleAsync(
+            aturan.AturanId,
+            "page end blank line validation",
+            cancellationToken);
+        var pageEndBlankLineHeightPoints = ResolvePageEndBlankLineHeightPoints(paragraphRule);
 
         var (sectionRefType, sectionRefId) = ResolveSectionRefForValidation(dokumenId);
 
@@ -170,6 +179,7 @@ public partial class ValidationService
             result,
             sections,
             effectivePageSettings.AkhirHalaman,
+            pageEndBlankLineHeightPoints,
             sectionPageMap,
             sectionRefType,
             sectionRefId,
@@ -590,6 +600,7 @@ public partial class ValidationService
         ValidationResult result,
         IReadOnlyList<DokumenSection> sections,
         PageEndRule? rule,
+        decimal blankLineHeightPoints,
         Dictionary<uint, int> sectionPageMap,
         string sectionRefType,
         uint sectionRefId,
@@ -654,7 +665,9 @@ public partial class ValidationService
 
             if (contentRows.Count == 0)
             {
-                detectedBlankLines = EstimatePageEndBlankLines(Math.Max(0m, contentBottomBoundary - textAreaTop));
+                detectedBlankLines = EstimatePageEndBlankLines(
+                    Math.Max(0m, contentBottomBoundary - textAreaTop),
+                    blankLineHeightPoints);
                 bbox = CreateBbox(
                     textAreaLeft,
                     textAreaTop,
@@ -667,7 +680,9 @@ public partial class ValidationService
             {
                 var lastContentRow = contentRows[0];
                 var lastElementBottom = ClampToRange(lastContentRow.Y1!.Value, 0m, pageHeight);
-                detectedBlankLines = EstimatePageEndBlankLines(Math.Max(0m, contentBottomBoundary - lastElementBottom));
+                detectedBlankLines = EstimatePageEndBlankLines(
+                    Math.Max(0m, contentBottomBoundary - lastElementBottom),
+                    blankLineHeightPoints);
                 bbox = CreateBbox(
                     textAreaLeft,
                     lastElementBottom,
@@ -1045,12 +1060,33 @@ public partial class ValidationService
         return right > left && bottom > top;
     }
 
-    private static int EstimatePageEndBlankLines(decimal remainingPoints)
+    private static decimal ResolvePageEndBlankLineHeightPoints(ParagraphRule? paragraphRule)
+    {
+        var fontSizePt = paragraphRule?.Font?.FontSize?.Value;
+        var lineSpacing = paragraphRule?.Paragraph?.Spacing?.LineSpacing?.Value;
+        if (!fontSizePt.HasValue || fontSizePt.Value <= 0m ||
+            !lineSpacing.HasValue || lineSpacing.Value <= 0m)
+        {
+            return DefaultPageEndBlankLineHeightPoints;
+        }
+
+        var beforePt = Math.Max(0m, paragraphRule?.Paragraph?.Spacing?.Before?.Value ?? 0m);
+        var afterPt = Math.Max(0m, paragraphRule?.Paragraph?.Spacing?.After?.Value ?? 0m);
+        var lineHeight = fontSizePt.Value * EstimatedAutoLineHeightMultiplier * lineSpacing.Value + beforePt + afterPt;
+
+        return lineHeight > 0m ? lineHeight : DefaultPageEndBlankLineHeightPoints;
+    }
+
+    private static int EstimatePageEndBlankLines(decimal remainingPoints, decimal blankLineHeightPoints)
     {
         if (remainingPoints <= 0m)
             return 0;
 
-        return (int)Math.Floor((remainingPoints + 0.5m) / PageEndBlankLineHeightPoints);
+        var effectiveLineHeight = blankLineHeightPoints > 0m
+            ? blankLineHeightPoints
+            : DefaultPageEndBlankLineHeightPoints;
+
+        return (int)Math.Floor((remainingPoints + 0.5m) / effectiveLineHeight);
     }
 
     private static string FormatBlankLineCount(decimal value)

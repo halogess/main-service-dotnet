@@ -25,13 +25,14 @@ public partial class GeminiService : IGeminiService
     private readonly double _generationTopP;
     private readonly int _generationTopK;
     private readonly int _generationMaxOutputTokens;
+    private readonly string? _generationResponseMimeType;
     private readonly bool _enableLlm;
     private readonly int _maxParseAttempts;
     private readonly TimeSpan _parseRetryDelay;
 
     // Cache for error guidance responses (key: hash of error signature, value: cached response)
     private static readonly ConcurrentDictionary<string, CachedGuidance> _guidanceCache = new();
-    private static TimeSpan CacheExpiry = TimeSpan.FromHours(24);
+    private static TimeSpan CacheExpiry = TimeSpan.FromHours(GeminiConfigurationDefaults.CacheHours);
     private readonly int _maxRetries;
     private readonly TimeSpan[] _retryDelays;
     private readonly TimeSpan _defaultRateLimitDelay;
@@ -65,31 +66,31 @@ public partial class GeminiService : IGeminiService
 
     public GeminiService(
         HttpClient httpClient,
-        IConfiguration configuration,
         ILogger<GeminiService> logger,
         KorektorBukuDbContext db)
     {
         _httpClient = httpClient;
         _logger = logger;
         _db = db;
-        _analysisModel = configuration["Gemini:Model"] ?? "gemini-2.5-flash";
-        _apiBaseUrl = configuration["Gemini:ApiBaseUrl"] ?? "https://generativelanguage.googleapis.com/v1beta";
-        _generationTemperature = configuration.GetValue("Gemini:Temperature", 0.1);
-        _generationTopP = configuration.GetValue("Gemini:TopP", 0.8);
-        _generationTopK = configuration.GetValue("Gemini:TopK", 20);
-        _generationMaxOutputTokens = configuration.GetValue("Gemini:MaxOutputTokens", 6000);
-        _enableLlm = configuration.GetValue("Gemini:EnableLlm", true);
-        _maxParseAttempts = Math.Max(1, configuration.GetValue("Gemini:MaxParseAttempts", 3));
-        var parseDelaySeconds = Math.Max(0, configuration.GetValue("Gemini:ParseRetryDelaySeconds", 2));
+        _analysisModel = GeminiConfigurationDefaults.Model;
+        _apiBaseUrl = GeminiConfigurationDefaults.ApiBaseUrl;
+        _generationTemperature = GeminiConfigurationDefaults.Temperature;
+        _generationTopP = GeminiConfigurationDefaults.TopP;
+        _generationTopK = GeminiConfigurationDefaults.TopK;
+        _generationMaxOutputTokens = GeminiConfigurationDefaults.MaxOutputTokens;
+        _generationResponseMimeType = GeminiConfigurationDefaults.ResponseMimeType;
+        _enableLlm = GeminiConfigurationDefaults.EnableLlm;
+        _maxParseAttempts = Math.Max(1, GeminiConfigurationDefaults.MaxParseAttempts);
+        var parseDelaySeconds = Math.Max(0, GeminiConfigurationDefaults.ParseRetryDelaySeconds);
         _parseRetryDelay = TimeSpan.FromSeconds(parseDelaySeconds);
-        _maxRetries = Math.Max(1, configuration.GetValue("Gemini:MaxRetries", 3));
-        _retryDelays = BuildRetryDelays(configuration, _maxRetries);
-        var defaultRateLimitDelaySeconds = Math.Max(0, configuration.GetValue("Gemini:DefaultRateLimitDelaySeconds", 10));
+        _maxRetries = Math.Max(1, GeminiConfigurationDefaults.MaxRetries);
+        _retryDelays = BuildRetryDelays(_maxRetries);
+        var defaultRateLimitDelaySeconds = Math.Max(0, GeminiConfigurationDefaults.DefaultRateLimitDelaySeconds);
         _defaultRateLimitDelay = TimeSpan.FromSeconds(defaultRateLimitDelaySeconds);
-        _tokensPerMinutePerKeyLimit = Math.Max(1, configuration.GetValue("Gemini:TokensPerMinutePerKeyLimit", 12000));
-        var tokenWindowSeconds = Math.Max(1, configuration.GetValue("Gemini:TokenWindowSeconds", 60));
+        _tokensPerMinutePerKeyLimit = Math.Max(1, GeminiConfigurationDefaults.TokensPerMinutePerKeyLimit);
+        var tokenWindowSeconds = Math.Max(1, GeminiConfigurationDefaults.TokenWindowSeconds);
         TokenWindowDuration = TimeSpan.FromSeconds(tokenWindowSeconds);
-        var cacheHours = Math.Max(0, configuration.GetValue("Gemini:CacheHours", 24));
+        var cacheHours = Math.Max(0, GeminiConfigurationDefaults.CacheHours);
         CacheExpiry = TimeSpan.FromHours(cacheHours);
 
         _logger.LogInformation(
@@ -97,13 +98,14 @@ public partial class GeminiService : IGeminiService
             _analysisModel);
     }
 
-    private static TimeSpan[] BuildRetryDelays(IConfiguration configuration, int maxRetries)
+    private static TimeSpan[] BuildRetryDelays(int maxRetries)
     {
         if (maxRetries <= 0)
             return Array.Empty<TimeSpan>();
 
         var delays = new List<TimeSpan>();
-        var raw = configuration["Gemini:RetryDelaySeconds"];
+        var raw = GeminiConfigurationDefaults.RetryDelaySeconds;
+
         if (!string.IsNullOrWhiteSpace(raw))
         {
             foreach (var part in raw.Split(',', ';'))
@@ -206,6 +208,8 @@ public partial class GeminiService : IGeminiService
             ["topK"] = _generationTopK,
             ["maxOutputTokens"] = _generationMaxOutputTokens
         };
+        if (!string.IsNullOrWhiteSpace(_generationResponseMimeType))
+            generationConfig["responseMimeType"] = _generationResponseMimeType;
 
         string response = string.Empty;
         List<GeminiErrorDetail> results = new();

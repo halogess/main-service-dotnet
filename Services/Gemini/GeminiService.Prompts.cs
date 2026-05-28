@@ -123,6 +123,7 @@ public partial class GeminiService
             sb.AppendLine("- steps harus berupa aksi yang jelas, satu aksi per langkah, memakai istilah menu Microsoft Word bahasa Inggris.");
             sb.AppendLine("- Istilah teknis/menu Microsoft Word yang sudah umum boleh tetap dalam bahasa Inggris (misalnya justify, center, alignment, line spacing, indent).");
             sb.AppendLine("- Jangan memaksa menerjemahkan istilah teknis jika hasil terjemahannya menjadi janggal atau ambigu.");
+            sb.AppendLine("- Jangan menyebut identifier teknis/internal seperti delemen_id, dft_id, dfp_id, dftx_id, dfdr_id, rId, row id, atau nomor database lain.");
         }
 
         return sb.ToString();
@@ -155,9 +156,7 @@ public partial class GeminiService
 
         return new
         {
-            delemen_id = element.DelemenId,
             delemen_type = element.DelemenType,
-            delemen_sequence = element.DelemenSequence,
             plain_text_hint = ExtractPlainTextHint(element.DelemenJsonTree, PlainTextHintMaxChars),
             paragraph_format = paragraph == null
                 ? null
@@ -173,7 +172,6 @@ public partial class GeminiService
                     ind_first_line_twips = paragraph.DfpIndFirstLineTwips,
                     ind_hanging_twips = paragraph.DfpIndHangingTwips,
                     is_list = paragraph.DfpIsList,
-                    list_num_id = paragraph.DfpListNumId,
                     list_ilvl = paragraph.DfpListIlvl
                 },
             text_format_hints = textHints

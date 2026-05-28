@@ -158,6 +158,106 @@ public class SubchapterBlankParagraphValidationTests
         Assert.DoesNotContain(result.Errors, item => item.Message == "Judul subbab harus Title Case");
     }
 
+    [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldUseNumberedDocxSubchapterWithoutVisualAsSequenceContext()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules(blankLinesBeforeSubchapter: 0);
+
+        fixture.AddSubchapterElement(1501, 1, 104, "1.1 Latar Belakang", page: 1, y0: 100f, y1: 120f);
+        fixture.AddSubchapterElementWithoutVisual(1502, 2, 104, "1.2 Rumusan Masalah");
+        fixture.AddSubchapterElement(1503, 3, 104, "1.3 Tujuan Penelitian", page: 1, y0: 180f, y1: 200f);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        Assert.DoesNotContain(result.Errors, item => item.Message == "Subbab 1.2 tidak ditemukan sebelum 1.3");
+    }
+
+    [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldNotUseVisuallyClassifiedListAsSequenceSubchapterFallback()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules(blankLinesBeforeSubchapter: 0);
+
+        fixture.AddSubchapterElement(1551, 1, 104, "1.1 Latar Belakang", page: 1, y0: 100f, y1: 120f);
+        fixture.AddListElement(1552, 2, 104, "1.2 Item List Biasa", page: 1, y0: 140f, y1: 160f);
+        fixture.AddSubchapterElement(1553, 3, 104, "1.3 Tujuan Penelitian", page: 1, y0: 180f, y1: 200f);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        Assert.Contains(result.Errors, item => item.Message == "Subbab 1.2 tidak ditemukan sebelum 1.3");
+    }
+
+    [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldReportDuplicateForDifferentVisualSubchapterElements()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules(blankLinesBeforeSubchapter: 0);
+
+        fixture.AddSubchapterElement(1601, 1, 104, "1.1 Latar Belakang", page: 1, y0: 100f, y1: 120f);
+        fixture.AddSubchapterElement(1602, 2, 104, "1.1 Rumusan Masalah", page: 1, y0: 160f, y1: 180f);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        Assert.Contains(result.Errors, item => item.Message == "Nomor subbab 1.1 duplikat");
+    }
+
+    [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldNotReportDuplicateForMultipleVisualRowsOfSameElement()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules(blankLinesBeforeSubchapter: 0);
+
+        fixture.AddSubchapterElement(1701, 1, 104, "1.1 Latar Belakang", page: 1, y0: 100f, y1: 120f);
+        fixture.AddSecondVisualRow(1701, 2701, "1.1 Latar Belakang", page: 2, y0: 100f, y1: 120f, label: "judul_subbab");
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        Assert.DoesNotContain(result.Errors, item => item.Message == "Nomor subbab 1.1 duplikat");
+    }
+
+    [Fact]
+    public async Task ValidateSubchapterTitleAsync_ShouldSuppressSameLevelNoiseForBranchWithSequenceError()
+    {
+        using var fixture = new SqliteSubchapterFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddFormats();
+        fixture.AddActiveRules(
+            minimumSameLevelSubchapters: 2,
+            blankLinesBeforeSubchapter: 0);
+
+        fixture.AddSubchapterElement(1801, 1, 104, "1.1 Latar Belakang", page: 1, y0: 100f, y1: 120f);
+        fixture.AddSubchapterElement(1802, 2, 104, "1.3 Tujuan Penelitian", page: 1, y0: 160f, y1: 180f);
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await InvokeSubchapterTitleValidationAsync(service, 10);
+
+        Assert.Contains(result.Errors, item => item.Message == "Subbab 1.2 tidak ditemukan sebelum 1.3");
+        Assert.DoesNotContain(result.Errors, item => item.Message == "Jumlah subbab pada level yang sama tidak sesuai, minimal harus ada 2");
+    }
+
     private static ValidationService CreateValidationService(KorektorBukuDbContext db)
         => new(db, NullLogger<ValidationService>.Instance);
 
@@ -233,7 +333,9 @@ public class SubchapterBlankParagraphValidationTests
             });
         }
 
-        public void AddActiveRules()
+        public void AddActiveRules(
+            int minimumSameLevelSubchapters = 1,
+            int blankLinesBeforeSubchapter = 1)
         {
             Db.Aturans.Add(new Aturan
             {
@@ -251,7 +353,7 @@ public class SubchapterBlankParagraphValidationTests
                     AturanDetailKategori = "Isi Buku",
                     AturanDetailKey = "judul_subbab",
                     AturanDetailJsonValue =
-                        """
+                        $$"""
                         {
                           "font": {
                             "font_name": { "value": "Times New Roman", "is_editable": true },
@@ -283,8 +385,8 @@ public class SubchapterBlankParagraphValidationTests
                           "struktur_konten": {
                             "minimal_paragraf_setelah": { "value": 0, "is_editable": true },
                             "cegah_posisi_paling_bawah": { "value": false, "is_editable": true },
-                            "minimal_subbab_level_sama": { "value": 1, "is_editable": true },
-                            "jumlah_baris_kosong_sebelum": { "value": 1, "is_editable": true },
+                            "minimal_subbab_level_sama": { "value": {{minimumSameLevelSubchapters}}, "is_editable": true },
+                            "jumlah_baris_kosong_sebelum": { "value": {{blankLinesBeforeSubchapter}}, "is_editable": true },
                             "abaikan_jika_di_awal_halaman": { "value": true, "is_editable": true }
                           }
                         }
@@ -444,6 +546,43 @@ public class SubchapterBlankParagraphValidationTests
         public void AddSubchapterElement(ulong elementId, uint sequence, uint paragraphFormatId, string text, uint page, float y0, float y1)
         {
             AddElement(elementId, sequence, paragraphFormatId, 201, text, page, y0, y1, "judul_subbab");
+        }
+
+        public void AddListElement(ulong elementId, uint sequence, uint paragraphFormatId, string text, uint page, float y0, float y1)
+        {
+            AddElement(elementId, sequence, paragraphFormatId, 201, text, page, y0, y1, "list_level_1");
+        }
+
+        public void AddSubchapterElementWithoutVisual(ulong elementId, uint sequence, uint paragraphFormatId, string text)
+        {
+            Db.DokumenElemens.Add(new DokumenElemen
+            {
+                DelemenId = elementId,
+                DpartId = 1,
+                DelemenSequence = sequence,
+                DelemenType = "paragraph",
+                DelemenJsonTree = CreateParagraphJson(paragraphFormatId, 201, text),
+                DelemenXml = string.Empty
+            });
+        }
+
+        public void AddSecondVisualRow(ulong elementId, ulong visualId, string text, uint page, float y0, float y1, string label)
+        {
+            Db.DokumenElemenVisuals.Add(new DokumenElemenVisual
+            {
+                DevId = visualId,
+                DokumenElemenId = elementId,
+                DevRefTipe = "dokumen",
+                DevRefId = 10,
+                DevPage = page,
+                DevBboxX0 = 40,
+                DevBboxY0 = y0,
+                DevBboxX1 = 520,
+                DevBboxY1 = y1,
+                DevLabel = label,
+                DevLabelStruktural = label,
+                DevText = text
+            });
         }
 
         private void AddElement(ulong elementId, uint sequence, uint paragraphFormatId, uint textFormatId, string text, uint page, float y0, float y1, string label)

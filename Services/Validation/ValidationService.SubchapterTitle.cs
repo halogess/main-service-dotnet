@@ -140,7 +140,7 @@ public partial class ValidationService
         if (resolvedSubchapterIds == null || resolvedSubchapterIds.Count == 0)
             return result;
 
-        // Find subchapter titles (label judul_subbab only)
+        // Find subchapter titles for format validations (label judul_subbab only).
         var subchapterElements = new List<(ulong Id, ElementContentInfo Content)>();
         if (resolvedSubchapterIds != null && resolvedSubchapterIds.Count > 0)
         {
@@ -155,7 +155,14 @@ public partial class ValidationService
             }
         }
 
-        if (subchapterElements.Count == 0)
+        var sequenceSubchapterElements = await BuildSequenceSubchapterElementsAsync(
+            bodyElements,
+            elementContentById,
+            labelMap,
+            labelSubchapterIds,
+            cancellationToken);
+
+        if (subchapterElements.Count == 0 && sequenceSubchapterElements.Count == 0)
         {
             // No subchapters found, not an error
             return result;
@@ -167,11 +174,12 @@ public partial class ValidationService
             : (rule?.StrukturKonten?.CegahSubbabTunggal?.Value ?? true ? 2 : 1);
         var expectedChapterNumber = TryExtractExpectedChapterNumber(bodyElements, labelMap);
         var sequenceLocationsByElementId = await BuildElementLocationsMapAsync(
-            subchapterElements.Select(e => e.Id),
+            sequenceSubchapterElements.Select(e => e.Id),
             cancellationToken);
         ValidateSubchapterSequence(
             result,
-            subchapterElements,
+            sequenceSubchapterElements,
+            labelSubchapterIds,
             minimumSameLevelSubchapters,
             neighborContexts,
             expectedChapterNumber,
@@ -304,6 +312,88 @@ public partial class ValidationService
 
         return result;
     }
+
+    private async Task<List<(ulong Id, ElementContentInfo Content)>> BuildSequenceSubchapterElementsAsync(
+        IReadOnlyList<BodyElementInfo> bodyElements,
+        Dictionary<ulong, ElementContentInfo> elementContentById,
+        Dictionary<ulong, string> labelMap,
+        HashSet<ulong> visualSubchapterIds,
+        CancellationToken cancellationToken)
+    {
+        var paragraphFormatIds = elementContentById.Values
+            .Where(content => content.ParagraphFormatId.HasValue)
+            .Select(content => content.ParagraphFormatId!.Value)
+            .Distinct()
+            .ToList();
+
+        var paragraphFormats = paragraphFormatIds.Count > 0
+            ? await _db.DokumenFormatParagrafs
+                .Where(format => paragraphFormatIds.Contains(format.DfpId))
+                .ToDictionaryAsync(format => format.DfpId, cancellationToken)
+            : new Dictionary<uint, DokumenFormatParagraf>();
+
+        var sequenceElements = new List<(ulong Id, ElementContentInfo Content)>();
+        foreach (var element in bodyElements)
+        {
+            if (!elementContentById.TryGetValue(element.DelemenId, out var content))
+                content = ParseElementContent(element.DelemenJsonTree);
+
+            var isFallbackSequenceSubchapter =
+                !HasClearNonSubchapterVisualLabel(element.DelemenId, labelMap) &&
+                IsDocxNumberedSubchapterCandidate(element, content, paragraphFormats);
+
+            if (visualSubchapterIds.Contains(element.DelemenId) || isFallbackSequenceSubchapter)
+            {
+                sequenceElements.Add((element.DelemenId, content));
+            }
+        }
+
+        return sequenceElements;
+    }
+
+    private static bool HasClearNonSubchapterVisualLabel(
+        ulong elementId,
+        IReadOnlyDictionary<ulong, string> labelMap)
+    {
+        if (!labelMap.TryGetValue(elementId, out var label))
+            return false;
+
+        var normalized = NormalizeLabel(label);
+        return normalized == "paragraf" ||
+               normalized == "tabel" ||
+               normalized == "gambar" ||
+               normalized == "list_item" ||
+               normalized.StartsWith("caption_", StringComparison.Ordinal) ||
+               normalized.StartsWith("list_level_", StringComparison.Ordinal);
+    }
+
+    private static bool IsDocxNumberedSubchapterCandidate(
+        BodyElementInfo element,
+        ElementContentInfo content,
+        IReadOnlyDictionary<uint, DokumenFormatParagraf> paragraphFormats)
+    {
+        var plainText = content.PlainText?.Trim();
+        if (string.IsNullOrWhiteSpace(plainText) || !SubchapterNumberPattern.IsMatch(plainText))
+            return false;
+
+        if (IsListElementType(element.DelemenType))
+            return true;
+
+        if (!content.ParagraphFormatId.HasValue ||
+            !paragraphFormats.TryGetValue(content.ParagraphFormatId.Value, out var format))
+        {
+            return false;
+        }
+
+        return format.DfpIsList ||
+               format.DfpListNumId.HasValue ||
+               format.DfpListIlvl.HasValue ||
+               !string.IsNullOrWhiteSpace(format.DfpNumprJson);
+    }
+
+    private static bool IsListElementType(string? elementType)
+        => !string.IsNullOrWhiteSpace(elementType) &&
+           elementType.StartsWith("list-item-", StringComparison.OrdinalIgnoreCase);
 
     private void ValidateSubchapterFont(
         ValidationResult result,
@@ -1478,6 +1568,8 @@ public partial class ValidationService
     private sealed class VisualPageBounds
     {
         public int Page { get; set; }
+        public double X0 { get; set; }
+        public double X1 { get; set; }
         public double Y0 { get; set; }
         public double Y1 { get; set; }
     }
@@ -1508,7 +1600,7 @@ public partial class ValidationService
                 var selectLabel = !string.IsNullOrWhiteSpace(labelColumn)
                     ? $", `{labelColumn}` AS label"
                     : ", NULL AS label";
-                var sql = $"SELECT `{idColumn}` AS delemen_id, `dev_page`, `dev_bbox_y0`, `dev_bbox_y1`{selectLabel} " +
+                var sql = $"SELECT `{idColumn}` AS delemen_id, `dev_page`, `dev_bbox_x0`, `dev_bbox_y0`, `dev_bbox_x1`, `dev_bbox_y1`{selectLabel} " +
                           $"FROM `dokumen_elemen_visual` WHERE `{idColumn}` IN ({idList})";
 
                 using var cmd = connection.CreateCommand();
@@ -1531,14 +1623,18 @@ public partial class ValidationService
                         summary.Labels.Add(NormalizeLabel(label));
 
                     if (reader["dev_page"] == DBNull.Value ||
+                        reader["dev_bbox_x0"] == DBNull.Value ||
                         reader["dev_bbox_y0"] == DBNull.Value ||
+                        reader["dev_bbox_x1"] == DBNull.Value ||
                         reader["dev_bbox_y1"] == DBNull.Value)
                     {
                         continue;
                     }
 
                     var page = Convert.ToInt32(reader["dev_page"]);
+                    var x0 = Convert.ToDouble(reader["dev_bbox_x0"]);
                     var y0 = Convert.ToDouble(reader["dev_bbox_y0"]);
+                    var x1 = Convert.ToDouble(reader["dev_bbox_x1"]);
                     var y1 = Convert.ToDouble(reader["dev_bbox_y1"]);
 
                     var existingBounds = summary.Bounds.FirstOrDefault(bounds => bounds.Page == page);
@@ -1547,12 +1643,16 @@ public partial class ValidationService
                         summary.Bounds.Add(new VisualPageBounds
                         {
                             Page = page,
+                            X0 = x0,
+                            X1 = x1,
                             Y0 = y0,
                             Y1 = y1
                         });
                     }
                     else
                     {
+                        existingBounds.X0 = Math.Min(existingBounds.X0, x0);
+                        existingBounds.X1 = Math.Max(existingBounds.X1, x1);
                         existingBounds.Y0 = Math.Min(existingBounds.Y0, y0);
                         existingBounds.Y1 = Math.Max(existingBounds.Y1, y1);
                     }
@@ -1765,6 +1865,7 @@ public partial class ValidationService
     private void ValidateSubchapterSequence(
         ValidationResult result,
         List<(ulong Id, ElementContentInfo Content)> subchapterElements,
+        IReadOnlySet<ulong> reportableSubchapterIds,
         int minimumSameLevelSubchapters,
         Dictionary<ulong, ElementNeighborContext> contextById,
         int? expectedChapterNumber,
@@ -1806,6 +1907,12 @@ public partial class ValidationService
                 error.Expected ?? string.Empty,
                 error.Actual ?? string.Empty);
 
+            if (!error.DokumenElemenId.HasValue ||
+                !reportableSubchapterIds.Contains(error.DokumenElemenId.Value))
+            {
+                return false;
+            }
+
             if (!emittedErrorKeys.Add(errorKey))
                 return false;
 
@@ -1825,6 +1932,15 @@ public partial class ValidationService
                      .Where(g => g.Count() > 1))
         {
             var first = duplicateGroup.First();
+            foreach (var item in duplicateGroup)
+            {
+                if (reportableSubchapterIds.Contains(item.Id))
+                {
+                    first = item;
+                    break;
+                }
+            }
+
             foreach (var duplicate in duplicateGroup)
                 duplicateIds.Add(duplicate.Id);
 
@@ -1940,9 +2056,6 @@ public partial class ValidationService
                 if (existingNodeNumbers.Contains(prevNumber))
                     continue;
 
-                hasSequenceError = true;
-                sequenceErrorIds.Add(id);
-
                 var context = contextById.TryGetValue(id, out var found) ? found : null;
                 var error = new ValidationError
                 {
@@ -1957,7 +2070,10 @@ public partial class ValidationService
                 };
 
                 if (TryAddError(error, context))
+                {
                     hasSequenceError = true;
+                    sequenceErrorIds.Add(id);
+                }
             }
 
             if (minimumSameLevelSubchapters > 1)
@@ -1969,6 +2085,9 @@ public partial class ValidationService
 
                 foreach (var parentGroup in subchaptersByParent)
                 {
+                    if (ParentHasNumberingIssue(parentGroup.Key, duplicateIds, sequenceErrorIds, numbersWithEvidence))
+                        continue;
+
                     if (parentGroup.Count() >= minimumSameLevelSubchapters)
                         continue;
 
@@ -2004,6 +2123,26 @@ public partial class ValidationService
             if (!hasSequenceError)
                 result.IncrementPassedChecks();
         }
+    }
+
+    private static bool ParentHasNumberingIssue(
+        string parentNumber,
+        IReadOnlySet<ulong> duplicateIds,
+        IReadOnlySet<ulong> sequenceErrorIds,
+        IReadOnlyList<(ulong Id, int[] Parts, string Number, string Evidence)> numbersWithEvidence)
+    {
+        return numbersWithEvidence.Any(item =>
+            (duplicateIds.Contains(item.Id) || sequenceErrorIds.Contains(item.Id)) &&
+            IsSameNumberingBranch(parentNumber, item.Number));
+    }
+
+    private static bool IsSameNumberingBranch(string parentNumber, string number)
+    {
+        if (string.IsNullOrWhiteSpace(parentNumber))
+            return true;
+
+        return string.Equals(parentNumber, number, StringComparison.Ordinal) ||
+               number.StartsWith(parentNumber + ".", StringComparison.Ordinal);
     }
 
     private async Task<Dictionary<ulong, List<ErrorLocation>>> BuildElementLocationsMapAsync(

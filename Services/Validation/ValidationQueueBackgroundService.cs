@@ -80,16 +80,15 @@ public class ValidationQueueBackgroundService : BackgroundService
 
     public ValidationQueueBackgroundService(
         IServiceProvider serviceProvider,
-        ILogger<ValidationQueueBackgroundService> logger,
-        IConfiguration configuration)
+        ILogger<ValidationQueueBackgroundService> logger)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _geminiBatchSize = Math.Max(1, configuration.GetValue("Gemini:BatchSize", 20));
-        _maxBatchRetries = Math.Max(0, configuration.GetValue("Gemini:MaxBatchRetries", 2));
-        var delaySeconds = Math.Max(0, configuration.GetValue("Gemini:BatchDelaySeconds", 3));
+        _geminiBatchSize = Math.Max(1, GeminiConfigurationDefaults.BatchSize);
+        _maxBatchRetries = Math.Max(0, GeminiConfigurationDefaults.MaxBatchRetries);
+        var delaySeconds = Math.Max(0, GeminiConfigurationDefaults.BatchDelaySeconds);
         _batchDelay = TimeSpan.FromSeconds(delaySeconds);
-        _maxParallelBatches = Math.Max(1, configuration.GetValue("Gemini:MaxParallelBatches", 3));
+        _maxParallelBatches = Math.Max(1, GeminiConfigurationDefaults.MaxParallelBatches);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

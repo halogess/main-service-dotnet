@@ -152,12 +152,21 @@ public class PdfConversionService : IPdfConversionService
         request.Content = new ByteArrayContent(fileBytes);
         request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
-        
-        await LogApiCall(adobe_credentials_id, "S3 Upload", "PUT", (int)response.StatusCode, responseTime, null, antrian_id);
-        
-        response.EnsureSuccessStatusCode();
+        try
+        {
+            var response = await _httpClient.SendAsync(request, cancellationToken);
+            var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
+
+            await LogApiCall(adobe_credentials_id, "S3 Upload", "PUT", (int)response.StatusCode, responseTime, null, antrian_id);
+
+            response.EnsureSuccessStatusCode();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
+            await LogApiCall(adobe_credentials_id, "S3 Upload", "PUT", null, responseTime, BuildExceptionLogMessage(ex), antrian_id);
+            throw;
+        }
     }
 
     private async Task<string> CreateConversionJob(string accessToken, string clientId, string assetId, string apiBaseUrl, int? adobe_credentials_id, uint? antrian_id = null, CancellationToken cancellationToken = default)
@@ -271,17 +280,26 @@ public class PdfConversionService : IPdfConversionService
         var startTime = AppClock.Now;
         var request = new HttpRequestMessage(HttpMethod.Get, downloadUri);
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
-        
-        await LogApiCall(adobe_credentials_id, "S3 Download", "GET", (int)response.StatusCode, responseTime, null, antrian_id);
-        
-        response.EnsureSuccessStatusCode();
-        var pdfBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-        return pdfBytes;
+        try
+        {
+            var response = await _httpClient.SendAsync(request, cancellationToken);
+            var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
+
+            await LogApiCall(adobe_credentials_id, "S3 Download", "GET", (int)response.StatusCode, responseTime, null, antrian_id);
+
+            response.EnsureSuccessStatusCode();
+            var pdfBytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
+            return pdfBytes;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var responseTime = (int)(AppClock.Now - startTime).TotalMilliseconds;
+            await LogApiCall(adobe_credentials_id, "S3 Download", "GET", null, responseTime, BuildExceptionLogMessage(ex), antrian_id);
+            throw;
+        }
     }
 
-    private async Task LogApiCall(int? adobe_credentials_id, string endpoint, string method, int status_code, int response_time_ms, string? error_message, uint? antrian_id = null)
+    private async Task LogApiCall(int? adobe_credentials_id, string endpoint, string method, int? status_code, int response_time_ms, string? error_message, uint? antrian_id = null)
     {
         try
         {
@@ -316,6 +334,17 @@ public class PdfConversionService : IPdfConversionService
             return null;
 
         return apiBaseUrl.TrimEnd('/') + "/token";
+    }
+
+    private static string BuildExceptionLogMessage(Exception exception)
+    {
+        var details = new List<string>();
+        for (var current = exception; current != null && details.Count < 4; current = current.InnerException)
+        {
+            AddErrorDetail(details, current.Message);
+        }
+
+        return TruncateErrorText(string.Join(" | ", details), 500);
     }
 
     private static TimeSpan GetConfiguredPollingInterval(IConfiguration configuration)
@@ -459,6 +488,8 @@ public class PdfConversionService : IPdfConversionService
     {
         if (endpoint.Contains("ims-na1.adobelogin.com") && method == "POST") return "get_token";
         if (endpoint.Contains("/assets") && method == "POST") return "create_upload_uri";
+        if (endpoint.Equals("S3 Upload", StringComparison.OrdinalIgnoreCase) && method == "PUT") return "upload_document";
+        if (endpoint.Equals("S3 Download", StringComparison.OrdinalIgnoreCase) && method == "GET") return "download_pdf";
         if (endpoint.Contains("amazonaws.com") && method == "PUT") return "upload_document";
         if (endpoint.Contains("/operation/createpdf") && method == "POST") return "create_job";
         if (endpoint.Contains("operation") && method == "GET") return "get_status";

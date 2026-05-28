@@ -31,9 +31,12 @@ public class CaptionDrivenContentValidationTests
             10,
             CancellationToken.None);
 
-        Assert.Contains(result.Errors, error =>
+        var error = Assert.Single(result.Errors, error =>
             error.Field == "tabel" &&
             error.Message == "Tabel tidak boleh berupa gambar");
+        Assert.Equal("Gambar", error.Evidence);
+        Assert.DoesNotContain("rId", error.Evidence);
+        Assert.DoesNotContain("dfdr", error.Evidence);
     }
 
     [Fact]

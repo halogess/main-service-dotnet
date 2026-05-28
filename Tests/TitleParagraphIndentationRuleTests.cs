@@ -59,4 +59,30 @@ public class TitleParagraphIndentationRuleTests
         Assert.Equal(0m, rule.Paragraph.Indentation.FirstLineIndent!.Value);
         Assert.Null(rule.Paragraph.Indentation.Hanging);
     }
+
+    [Fact]
+    public void TableCaptionRule_ShouldDeserializeWrappedIndentationBooleans()
+    {
+        var rawJson = """
+                      {
+                        "paragraph": {
+                          "indentation": {
+                            "is_editable": { "value": false, "is_editable": false, "is_hard_constraint": false },
+                            "is_hard_constraint": { "value": false, "is_editable": false, "is_hard_constraint": false },
+                            "left_indent": { "value": 0, "is_editable": false, "is_hard_constraint": false },
+                            "right_indent": { "value": 0, "is_editable": false, "is_hard_constraint": false },
+                            "first_line_indent": { "value": 0, "is_editable": false, "is_hard_constraint": false }
+                          }
+                        }
+                      }
+                      """;
+
+        var rule = JsonSerializer.Deserialize<TableCaptionRule>(rawJson);
+
+        Assert.NotNull(rule);
+        Assert.NotNull(rule!.Paragraph);
+        Assert.NotNull(rule.Paragraph!.Indentation);
+        Assert.False(rule.Paragraph.Indentation!.IsEditable);
+        Assert.False(rule.Paragraph.Indentation.IsHardConstraint);
+    }
 }

@@ -813,14 +813,14 @@ public partial class ValidationService
         if (string.IsNullOrWhiteSpace(normalized))
         {
             return footnote.NoteNumber.HasValue
-                ? $"Footnote #{footnote.NoteNumber.Value}"
-                : $"Footnote row {footnote.RowId}";
+                ? $"Footnote nomor {footnote.NoteNumber.Value}"
+                : "Footnote tanpa teks terbaca";
         }
 
         const int maxLength = 140;
         var clipped = normalized.Length <= maxLength ? normalized : normalized[..maxLength] + "...";
         return footnote.NoteNumber.HasValue
-            ? $"Footnote #{footnote.NoteNumber.Value}: {clipped}"
+            ? $"Footnote nomor {footnote.NoteNumber.Value}: {clipped}"
             : clipped;
     }
 

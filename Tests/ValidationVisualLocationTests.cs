@@ -102,8 +102,7 @@ public class ValidationVisualLocationTests
 
         var service = new ValidationQueueBackgroundService(
             Mock.Of<IServiceProvider>(),
-            NullLogger<ValidationQueueBackgroundService>.Instance,
-            new ConfigurationBuilder().AddInMemoryCollection().Build());
+            NullLogger<ValidationQueueBackgroundService>.Instance);
         var pageNumbers = await InvokeQueueBackgroundServiceAsync<Dictionary<ulong, int>>(
             service,
             "LoadPageNumbersByElementIdAsync",

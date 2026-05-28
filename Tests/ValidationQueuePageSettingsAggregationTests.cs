@@ -155,8 +155,7 @@ public class ValidationQueuePageSettingsAggregationTests
     private static ValidationQueueBackgroundService CreateService()
         => new(
             Mock.Of<IServiceProvider>(),
-            NullLogger<ValidationQueueBackgroundService>.Instance,
-            new ConfigurationBuilder().AddInMemoryCollection().Build());
+            NullLogger<ValidationQueueBackgroundService>.Instance);
 
     private static ValidationError CreateMaxBlankLinesError(int page, int detectedBlankLines)
         => new()

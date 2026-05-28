@@ -1,6 +1,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Globalization;
 using ValidasiTugasAkhir.MainService.Models;
 using ValidasiTugasAkhir.MainService.Services;
 using Xunit;
@@ -174,6 +175,58 @@ public class PageEndBlankLinesValidationTests
         Assert.Equal(730m, bbox!.Y1);
     }
 
+    [Fact]
+    public async Task ValidatePageSettingsAsync_ShouldUseParagraphRuleForPageEndBlankLineHeight()
+    {
+        using var fixture = new SqlitePageEndFixture();
+        fixture.AddDokumen();
+        fixture.AddFormats();
+        fixture.AddActiveAturan();
+        fixture.AddNomorHalamanRule(differentFirstPage: false);
+        fixture.AddParagraphRule(fontSize: 12m, lineSpacing: 2m);
+        fixture.AddSection(1, 1, hasTitlePage: false);
+        fixture.AddBodyPart(1, 1);
+        fixture.AddHeaderFooterPart(12, 1, "footer", "default");
+
+        fixture.AddBodyElement(101, 1, 1, 1, "Paragraf halaman pertama", 630f, 670f);
+        fixture.AddPageFieldElement(1001, 12, 2, 1, "1", paragraphFormatId: 11, y0: 730f, y1: 745f);
+        fixture.AddBodyElement(102, 1, 3, 2, "Paragraf halaman kedua", 700f, 730f);
+        fixture.AddPageFieldElement(1002, 12, 4, 2, "2", paragraphFormatId: 11, y0: 730f, y1: 745f);
+
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await service.ValidatePageSettingsAsync(10);
+
+        Assert.DoesNotContain(result.Errors, error => error.Field == "max_baris_kosong_akhir_halaman");
+    }
+
+    [Fact]
+    public async Task ValidatePageSettingsAsync_ShouldAccountForWordLeadingInOnePointFiveSpacing()
+    {
+        using var fixture = new SqlitePageEndFixture();
+        fixture.AddDokumen();
+        fixture.AddFormats();
+        fixture.AddActiveAturan();
+        fixture.AddNomorHalamanRule(differentFirstPage: false);
+        fixture.AddParagraphRule(fontSize: 12m, lineSpacing: 1.5m);
+        fixture.AddSection(1, 1, hasTitlePage: false);
+        fixture.AddBodyPart(1, 1);
+        fixture.AddHeaderFooterPart(12, 1, "footer", "default");
+
+        fixture.AddBodyElement(101, 1, 1, 1, "Paragraf halaman pertama", 642f, 682f);
+        fixture.AddPageFieldElement(1001, 12, 2, 1, "1", paragraphFormatId: 11, y0: 730f, y1: 745f);
+        fixture.AddBodyElement(102, 1, 3, 2, "Paragraf halaman kedua", 700f, 730f);
+        fixture.AddPageFieldElement(1002, 12, 4, 2, "2", paragraphFormatId: 11, y0: 730f, y1: 745f);
+
+        await fixture.Db.SaveChangesAsync();
+
+        var service = CreateValidationService(fixture.Db);
+        var result = await service.ValidatePageSettingsAsync(10);
+
+        Assert.DoesNotContain(result.Errors, error => error.Field == "max_baris_kosong_akhir_halaman");
+    }
+
     private static ValidationService CreateValidationService(KorektorBukuDbContext db)
         => new(db, NullLogger<ValidationService>.Instance);
 
@@ -227,6 +280,36 @@ public class PageEndBlankLinesValidationTests
                 AturanDetailKategori = "Nomor Halaman",
                 AturanDetailKey = "nomor_halaman",
                 AturanDetailJsonValue = $"{{\"variation\":{{\"different_first_page\":{{\"enabled\":{{\"value\":{differentFirstPage.ToString().ToLowerInvariant()}}}}}}}}}",
+            });
+        }
+
+        public void AddParagraphRule(decimal fontSize, decimal lineSpacing, decimal before = 0m, decimal after = 0m)
+        {
+            var fontSizeText = fontSize.ToString(CultureInfo.InvariantCulture);
+            var lineSpacingText = lineSpacing.ToString(CultureInfo.InvariantCulture);
+            var beforeText = before.ToString(CultureInfo.InvariantCulture);
+            var afterText = after.ToString(CultureInfo.InvariantCulture);
+
+            Db.AturanDetails.Add(new AturanDetail
+            {
+                AturanDetailId = 2,
+                AturanId = 1,
+                AturanDetailKategori = "Paragraf",
+                AturanDetailKey = "paragraf",
+                AturanDetailJsonValue = $$"""
+                {
+                  "font": {
+                    "font_size": { "value": {{fontSizeText}} }
+                  },
+                  "paragraph": {
+                    "spacing": {
+                      "line_spacing": { "value": {{lineSpacingText}} },
+                      "before": { "value": {{beforeText}} },
+                      "after": { "value": {{afterText}} }
+                    }
+                  }
+                }
+                """
             });
         }
 

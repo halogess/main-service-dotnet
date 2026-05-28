@@ -7,11 +7,14 @@ namespace ValidasiTugasAkhir.MainService.Services;
 
 public partial class ValidationService
 {
+    private const int TableEvidenceMaxChars = 180;
+
     private sealed class TableContentAggregate
     {
         public List<uint> TextFormatIds { get; } = new();
         public List<TextRunInfo> TextRuns { get; } = new();
         public List<uint> ParagraphFormatIds { get; } = new();
+        public List<string> CellTexts { get; } = new();
         public bool HasImageContent { get; set; }
         public bool HasNonTextContent { get; set; }
     }
@@ -167,10 +170,10 @@ public partial class ValidationService
                 continue;
             }
 
-            if (IsTableElement(normalizedLabel))
+            if (IsTableElement(elem, normalizedLabel))
             {
                 var contentAggregate = ExtractTableContentAggregate(elem.DelemenJsonTree, out var tableFormatId);
-                var evidence = tableFormatId.HasValue ? $"Tabel (dft:{tableFormatId.Value})" : "Tabel";
+                var evidence = BuildTableEvidence(contentAggregate);
                 tableBlocks.Add(new TableBlockInfo
                 {
                     ElementId = elem.DelemenId,
@@ -757,17 +760,69 @@ public partial class ValidationService
         return result;
     }
 
-    private static bool IsTableElement(string normalizedLabel)
+    private static bool IsTableElement(BodyElementInfo element, string normalizedLabel)
     {
         if (IsCodeLabel(normalizedLabel))
             return false;
 
-        return normalizedLabel == "tabel" || normalizedLabel == "table";
+        return IsTableLabel(normalizedLabel) ||
+               IsTableElementType(element.DelemenType) ||
+               HasTableRows(element.DelemenJsonTree);
     }
 
     private static bool IsTableLabel(string normalizedLabel)
     {
         return normalizedLabel == "tabel" || normalizedLabel == "table";
+    }
+
+    private static bool IsTableElementType(string? elementType)
+    {
+        return !string.IsNullOrWhiteSpace(elementType) &&
+               (elementType.Equals("table", StringComparison.OrdinalIgnoreCase) ||
+                elementType.Equals("tabel", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasTableRows(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return HasTableRows(doc.RootElement);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool HasTableRows(JsonElement element)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            return false;
+
+        if (element.TryGetProperty("content", out var content))
+        {
+            if (content.ValueKind == JsonValueKind.Object &&
+                content.TryGetProperty("rows", out var rows) &&
+                rows.ValueKind == JsonValueKind.Array)
+            {
+                return true;
+            }
+
+            if (content.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in content.EnumerateArray())
+                {
+                    if (HasTableRows(item))
+                        return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static bool IsTableImageElementType(string? elementType)
@@ -832,7 +887,11 @@ public partial class ValidationService
                 if (!cell.TryGetProperty("content", out var cellContent) || cellContent.ValueKind != JsonValueKind.Array)
                     continue;
 
+                var startRunCount = aggregate.TextRuns.Count;
                 CollectCellContent(cellContent, aggregate);
+                var cellText = BuildCellText(aggregate.TextRuns.Skip(startRunCount));
+                if (!string.IsNullOrWhiteSpace(cellText))
+                    aggregate.CellTexts.Add(cellText);
             }
         }
     }
@@ -888,6 +947,45 @@ public partial class ValidationService
 
         if (info.HasNonTextContent)
             aggregate.HasNonTextContent = true;
+    }
+
+    private static string BuildTableEvidence(TableContentAggregate aggregate)
+    {
+        var cellTexts = aggregate.CellTexts
+            .Select(NormalizeWhitespace)
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(8)
+            .ToList();
+
+        if (cellTexts.Count > 0)
+            return TruncateTableEvidence("Tabel: " + string.Join(" | ", cellTexts));
+
+        var fullText = NormalizeWhitespace(string.Concat(aggregate.TextRuns.Select(run => run.Text)));
+        if (!string.IsNullOrWhiteSpace(fullText))
+            return TruncateTableEvidence("Tabel: " + fullText);
+
+        if (aggregate.HasImageContent)
+            return "Tabel berisi gambar";
+
+        if (aggregate.HasNonTextContent)
+            return "Tabel berisi konten non-teks";
+
+        return "Tabel tanpa teks terbaca";
+    }
+
+    private static string? BuildCellText(IEnumerable<TextRunInfo> runs)
+    {
+        var text = NormalizeWhitespace(string.Concat(runs.Select(run => run.Text)));
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    private static string TruncateTableEvidence(string evidence)
+    {
+        if (evidence.Length <= TableEvidenceMaxChars)
+            return evidence;
+
+        return evidence[..TableEvidenceMaxChars] + "...";
     }
 
     private static bool ContainsImageItem(JsonElement contentArray)

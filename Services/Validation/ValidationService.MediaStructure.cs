@@ -112,7 +112,7 @@ public partial class ValidationService
         var formatTargets = new List<BlankParagraphFormatValidationTarget>();
 
         if (!(settings.IgnoreBlankParagraphBeforeAtPageTop &&
-              IsElementAtTopOfPage(startIndex, startElementId, bodyElements, visualSummaryById)))
+              IsElementAtTopOfPage(startIndex, startElementId, bodyElements, elementContentById, visualSummaryById)))
         {
             var blankBeforeIds = CollectBlankParagraphsBeforeElement(
                 startIndex,
@@ -158,7 +158,7 @@ public partial class ValidationService
             }
         }
 
-        if (!IsElementAtBottomOfPage(endIndex, endElementId, bodyElements, visualSummaryById))
+        if (!IsElementAtBottomOfPage(endIndex, endElementId, bodyElements, elementContentById, visualSummaryById))
         {
             var blankAfterIds = CollectBlankParagraphsAfterElement(
                 endIndex,
@@ -791,6 +791,7 @@ public partial class ValidationService
         int anchorIndex,
         ulong anchorElementId,
         IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById,
         IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById)
     {
         if (!TryGetFirstVisualPosition(visualSummaryById, anchorElementId, out var anchorPage, out var anchorTop))
@@ -799,8 +800,17 @@ public partial class ValidationService
         const double visualTolerance = 0.5d;
         for (var cursor = anchorIndex - 1; cursor >= 0; cursor--)
         {
-            if (!visualSummaryById.TryGetValue(bodyElements[cursor].DelemenId, out var previousVisual))
+            var previousElementId = bodyElements[cursor].DelemenId;
+            if (!visualSummaryById.TryGetValue(previousElementId, out var previousVisual))
+            {
+                if (elementContentById.TryGetValue(previousElementId, out var previousContent) &&
+                    !IsEmptyElement(previousContent))
+                {
+                    return false;
+                }
+
                 continue;
+            }
 
             if (previousVisual.Bounds.Any(bounds =>
                     bounds.Page == anchorPage &&
@@ -817,6 +827,7 @@ public partial class ValidationService
         int anchorIndex,
         ulong anchorElementId,
         IReadOnlyList<BodyElementInfo> bodyElements,
+        IReadOnlyDictionary<ulong, ElementContentInfo> elementContentById,
         IReadOnlyDictionary<ulong, VisualElementSummary> visualSummaryById)
     {
         if (!TryGetLastVisualPosition(visualSummaryById, anchorElementId, out var anchorPage, out var anchorBottom))
@@ -825,8 +836,24 @@ public partial class ValidationService
         const double visualTolerance = 0.5d;
         for (var cursor = anchorIndex + 1; cursor < bodyElements.Count; cursor++)
         {
-            if (!visualSummaryById.TryGetValue(bodyElements[cursor].DelemenId, out var nextVisual))
+            var nextElementId = bodyElements[cursor].DelemenId;
+            if (!visualSummaryById.TryGetValue(nextElementId, out var nextVisual))
+            {
+                if (elementContentById.TryGetValue(nextElementId, out var nextContent) &&
+                    !IsEmptyElement(nextContent))
+                {
+                    return false;
+                }
+
                 continue;
+            }
+
+            if (nextVisual.Bounds.Count > 0 &&
+                nextVisual.Bounds.All(bounds => bounds.Page != anchorPage) &&
+                nextVisual.Bounds.Any(bounds => bounds.Page > anchorPage))
+            {
+                return true;
+            }
 
             if (nextVisual.Bounds.Any(bounds =>
                     bounds.Page == anchorPage &&
@@ -920,7 +947,16 @@ public partial class ValidationService
             currentBottom = candidateBottom;
         }
 
-        return PreferVisibleBlankParagraphs(blankElementIds, anchorPage, visualSummaryById);
+        var preferredBlankElementIds = PreferVisibleBlankParagraphs(blankElementIds, anchorPage, visualSummaryById);
+        if (preferredBlankElementIds.Count > 1 &&
+            preferredBlankElementIds.All(id => !TryGetVisualBoundsOnPage(visualSummaryById, id, anchorPage, out var _, out var _)) &&
+            TryFindNextVisiblePosition(bodyElements, anchorIndex + 1, visualSummaryById, out var nextPage, out var _) &&
+            nextPage != anchorPage)
+        {
+            return [preferredBlankElementIds[0]];
+        }
+
+        return preferredBlankElementIds;
     }
 
     private static List<ulong> PreferVisibleBlankParagraphs(

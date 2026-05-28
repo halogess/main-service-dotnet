@@ -288,7 +288,7 @@ public class PdfQueueBackgroundService : BackgroundService
                         var failureState = await HandleQueueFailureAsync(
                             db,
                             queue,
-                            BuildQueueErrorMessage("Adobe API error: ", ex.Message),
+                            BuildQueueErrorMessage("Adobe API error: ", BuildExceptionDetail(ex)),
                             stoppingToken);
                         pendingDokumenFailureNotification = failureState.DokumenFailureNotification;
                         pendingBukuFailureNotification = failureState.BukuFailureNotification;
@@ -496,5 +496,20 @@ public class PdfQueueBackgroundService : BackgroundService
         }
 
         return message[..252] + "...";
+    }
+
+    private static string BuildExceptionDetail(Exception exception)
+    {
+        var details = new List<string>();
+        for (var current = exception; current != null && details.Count < 3; current = current.InnerException)
+        {
+            if (!string.IsNullOrWhiteSpace(current.Message) &&
+                !details.Any(existing => string.Equals(existing, current.Message, StringComparison.OrdinalIgnoreCase)))
+            {
+                details.Add(current.Message);
+            }
+        }
+
+        return details.Count == 0 ? exception.Message : string.Join(" | ", details);
     }
 }

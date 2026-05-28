@@ -161,19 +161,9 @@ public class ValidationHardConstraintStatusTests
         await db.SaveChangesAsync();
 
         using var provider = new ServiceCollection().BuildServiceProvider();
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Gemini:MaxBatchRetries"] = "0",
-                ["Gemini:BatchDelaySeconds"] = "0",
-                ["Gemini:MaxParallelBatches"] = "1"
-            })
-            .Build();
-
         var service = new ValidationQueueBackgroundService(
             provider,
-            NullLogger<ValidationQueueBackgroundService>.Instance,
-            configuration);
+            NullLogger<ValidationQueueBackgroundService>.Instance);
 
         var errors = new List<ValidationError>
         {
@@ -275,19 +265,10 @@ public class ValidationHardConstraintStatusTests
     private static ValidationQueueBackgroundService CreateQueueService()
     {
         var provider = new ServiceCollection().BuildServiceProvider();
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Gemini:MaxBatchRetries"] = "0",
-                ["Gemini:BatchDelaySeconds"] = "0",
-                ["Gemini:MaxParallelBatches"] = "1"
-            })
-            .Build();
 
         return new ValidationQueueBackgroundService(
             provider,
-            NullLogger<ValidationQueueBackgroundService>.Instance,
-            configuration);
+            NullLogger<ValidationQueueBackgroundService>.Instance);
     }
 
     private static async Task<int> InvokeEnrichAndStoreErrorsAsync(

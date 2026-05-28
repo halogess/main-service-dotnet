@@ -11,7 +11,10 @@ var dokumenId = args.Length > 0 && int.TryParse(args[0], out var parsedDokumenId
     ? parsedDokumenId
     : 2066;
 var runLiveTableValidation = args.Any(arg => string.Equals(arg, "--validate-table", StringComparison.OrdinalIgnoreCase));
+var runLiveImageValidation = args.Any(arg => string.Equals(arg, "--validate-image", StringComparison.OrdinalIgnoreCase));
 var scanRules = args.Any(arg => string.Equals(arg, "--scan-rules", StringComparison.OrdinalIgnoreCase));
+var debugTableRule = args.Any(arg => string.Equals(arg, "--debug-table-rule", StringComparison.OrdinalIgnoreCase));
+var traceTable34 = args.Any(arg => string.Equals(arg, "--trace-table-34", StringComparison.OrdinalIgnoreCase));
 
 var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__KorektorBukuDbConnection");
 if (string.IsNullOrWhiteSpace(connectionString))
@@ -21,6 +24,7 @@ if (string.IsNullOrWhiteSpace(connectionString))
 }
 
 connectionString = connectionString.Replace("host.docker.internal", "localhost", StringComparison.OrdinalIgnoreCase);
+connectionString = connectionString.Replace("Server=mysql-korektor;Port=3306", "Server=127.0.0.1;Port=3307", StringComparison.OrdinalIgnoreCase);
 if (!connectionString.Contains("SslMode=", StringComparison.OrdinalIgnoreCase))
 {
     connectionString += ";SslMode=None";
@@ -133,9 +137,68 @@ var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
         """)
 };
 
+var imageAnchor = await QuerySingleAsync(
+    connection,
+    """
+    SELECT
+        e.delemen_id,
+        e.dpart_id,
+        e.delemen_sequence
+    FROM dokumen_elemen e
+    JOIN dokumen_part p ON p.dpart_id = e.dpart_id
+    JOIN dokumen_section s ON s.dsec_id = p.dsec_id
+    WHERE s.dsec_ref_tipe = 'dokumen'
+      AND s.dsec_ref_id = @dokumenId
+      AND p.dpart_type = 'body'
+      AND e.delemen_json_tree LIKE '%"dfdr_id":15630%'
+    ORDER BY s.dsec_index, e.delemen_sequence
+    LIMIT 1
+    """,
+    ("@dokumenId", dokumenId));
+
+if (imageAnchor != null)
+{
+    result["image_anchor"] = imageAnchor;
+    result["image_neighbors"] = await QueryAsync(
+        connection,
+        """
+        SELECT
+            s.dsec_index,
+            p.dpart_id,
+            e.delemen_id,
+            e.delemen_sequence,
+            e.delemen_type,
+            e.delemen_json_tree,
+            v.dev_id,
+            v.dev_page,
+            v.dev_label,
+            v.dev_label_struktural,
+            v.dev_text,
+            v.dev_bbox_x0,
+            v.dev_bbox_y0,
+            v.dev_bbox_x1,
+            v.dev_bbox_y1
+        FROM dokumen_elemen e
+        JOIN dokumen_part p ON p.dpart_id = e.dpart_id
+        JOIN dokumen_section s ON s.dsec_id = p.dsec_id
+        LEFT JOIN dokumen_elemen_visual v ON v.dokumen_elemen_id = e.delemen_id
+        WHERE p.dpart_id = @partId
+          AND e.delemen_sequence BETWEEN @sequenceStart AND @sequenceEnd
+        ORDER BY e.delemen_sequence, v.dev_id
+        """,
+        ("@partId", imageAnchor["dpart_id"]),
+        ("@sequenceStart", Convert.ToUInt32(imageAnchor["delemen_sequence"]!) - 3),
+        ("@sequenceEnd", Convert.ToUInt32(imageAnchor["delemen_sequence"]!) + 3));
+}
+
 if (runLiveTableValidation)
 {
     result["live_table_validation"] = await RunLiveTableValidationAsync(connectionString, dokumenId);
+}
+
+if (runLiveImageValidation)
+{
+    result["live_image_validation"] = await RunLiveImageValidationAsync(connectionString, dokumenId);
 }
 
 if (scanRules)
@@ -153,6 +216,16 @@ if (scanRules)
         GROUP BY aturan_id, aturan_detail_kategori, aturan_detail_key
         ORDER BY aturan_id, aturan_detail_kategori, aturan_detail_key
         """);
+}
+
+if (debugTableRule)
+{
+    result["table_rule_debug"] = await DebugTableRuleAsync(connection);
+}
+
+if (traceTable34)
+{
+    result["table_34_trace"] = await TraceTableByCaptionAsync(connection, dokumenId, "Tabel 3.4");
 }
 
 Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions
@@ -273,6 +346,216 @@ static async Task<object> RunLiveTableValidationAsync(string connectionString, i
                 ["message"] = error.Message,
                 ["expected"] = error.Expected,
                 ["actual"] = error.Actual,
+                ["dokumen_elemen_id"] = error.DokumenElemenId,
+                ["locations"] = error.Locations.Select(location => new Dictionary<string, object?>
+                {
+                    ["halaman_ke"] = location.HalamanKe,
+                    ["bbox"] = location.Bbox == null
+                        ? null
+                        : new Dictionary<string, object?>
+                        {
+                            ["x0"] = location.Bbox.X0,
+                            ["y0"] = location.Bbox.Y0,
+                            ["x1"] = location.Bbox.X1,
+                            ["y1"] = location.Bbox.Y1
+                        }
+                }).ToList()
+            })
+            .ToList()
+    };
+}
+
+static async Task<object> DebugTableRuleAsync(MySqlConnection connection)
+{
+    var rows = await QueryAsync(
+        connection,
+        """
+        SELECT ad.aturan_detail_json_value
+        FROM aturan a
+        JOIN aturan_detail ad ON ad.aturan_id = a.aturan_id
+        WHERE a.aturan_status = 'aktif'
+          AND ad.aturan_detail_key = 'tabel'
+        ORDER BY a.aturan_created_at DESC
+        LIMIT 1
+        """);
+
+    var rawJson = rows.FirstOrDefault()?["aturan_detail_json_value"]?.ToString();
+    if (string.IsNullOrWhiteSpace(rawJson))
+        return new Dictionary<string, object?> { ["error"] = "aturan tabel aktif tidak ditemukan" };
+
+    try
+    {
+        using var doc = JsonDocument.Parse(rawJson);
+        var root = doc.RootElement;
+        var tableJson = root.TryGetProperty("tabel", out var tableElement)
+            ? tableElement.GetRawText()
+            : rawJson;
+        var captionJson = root.TryGetProperty("caption_tabel", out var captionElement)
+            ? captionElement.GetRawText()
+            : null;
+
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        object? tableResult;
+        try
+        {
+            JsonSerializer.Deserialize<TableRule>(tableJson, options);
+            tableResult = "ok";
+        }
+        catch (Exception ex)
+        {
+            tableResult = ex.ToString();
+        }
+
+        object? captionResult = null;
+        if (captionJson != null)
+        {
+            try
+            {
+                JsonSerializer.Deserialize<TableCaptionRule>(captionJson, options);
+                captionResult = "ok";
+            }
+            catch (Exception ex)
+            {
+                captionResult = ex.ToString();
+            }
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["table"] = tableResult,
+            ["caption_tabel"] = captionResult
+        };
+    }
+    catch (Exception ex)
+    {
+        return new Dictionary<string, object?> { ["error"] = ex.ToString() };
+    }
+}
+
+static async Task<object> TraceTableByCaptionAsync(MySqlConnection connection, int dokumenId, string captionText)
+{
+    var caption = await QuerySingleAsync(
+        connection,
+        """
+        SELECT
+            e.dpart_id,
+            e.delemen_id,
+            e.delemen_sequence
+        FROM dokumen_elemen e
+        JOIN dokumen_part p ON p.dpart_id = e.dpart_id
+        JOIN dokumen_section s ON s.dsec_id = p.dsec_id
+        WHERE s.dsec_ref_tipe = 'dokumen'
+          AND s.dsec_ref_id = @dokumenId
+          AND p.dpart_type = 'body'
+          AND e.delemen_json_tree LIKE @captionLike
+        ORDER BY s.dsec_index, e.delemen_sequence
+        LIMIT 1
+        """,
+        ("@dokumenId", dokumenId),
+        ("@captionLike", $"%{captionText}%"));
+
+    if (caption == null)
+        return new Dictionary<string, object?> { ["error"] = $"{captionText} tidak ditemukan" };
+
+    var sequence = Convert.ToUInt32(caption["delemen_sequence"]!);
+    return await QueryAsync(
+        connection,
+        """
+        SELECT
+            s.dsec_index,
+            p.dpart_id,
+            e.delemen_id,
+            e.delemen_sequence,
+            e.delemen_type,
+            LEFT(e.delemen_json_tree, 700) AS json_preview,
+            v.dev_id,
+            v.dev_page,
+            v.dev_label,
+            v.dev_label_struktural,
+            v.dev_text,
+            v.dev_bbox_x0,
+            v.dev_bbox_y0,
+            v.dev_bbox_x1,
+            v.dev_bbox_y1
+        FROM dokumen_elemen e
+        JOIN dokumen_part p ON p.dpart_id = e.dpart_id
+        JOIN dokumen_section s ON s.dsec_id = p.dsec_id
+        LEFT JOIN dokumen_elemen_visual v ON v.dokumen_elemen_id = e.delemen_id
+        WHERE p.dpart_id = @partId
+          AND e.delemen_sequence BETWEEN @sequenceStart AND @sequenceEnd
+        ORDER BY e.delemen_sequence, v.dev_id
+        """,
+        ("@partId", caption["dpart_id"]),
+        ("@sequenceStart", sequence > 8 ? sequence - 8 : 0),
+        ("@sequenceEnd", sequence + 8));
+}
+
+static async Task<object> RunLiveImageValidationAsync(string connectionString, int dokumenId)
+{
+    var options = new DbContextOptionsBuilder<KorektorBukuDbContext>()
+        .UseMySql(
+            connectionString,
+            new MySqlServerVersion(new Version(8, 0, 34)),
+            mySqlOptions => mySqlOptions.EnableRetryOnFailure())
+        .Options;
+
+    await using var db = new KorektorBukuDbContext(options);
+    var service = new ValidationService(db, NullLogger<ValidationService>.Instance);
+    var method = typeof(ValidationService).GetMethod(
+        "ValidateImageAsync",
+        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+    if (method == null)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["error"] = "ValidateImageAsync not found."
+        };
+    }
+
+    var task = (Task?)method.Invoke(service, new object?[] { dokumenId, CancellationToken.None });
+    if (task == null)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["error"] = "ValidateImageAsync invocation returned null."
+        };
+    }
+
+    await task.ConfigureAwait(false);
+    var resultProperty = task.GetType().GetProperty("Result");
+    var validationResult = resultProperty?.GetValue(task) as ValidationResult;
+    if (validationResult == null)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["error"] = "Validation result was null."
+        };
+    }
+
+    return new Dictionary<string, object?>
+    {
+        ["error_count"] = validationResult.Errors.Count,
+        ["all_errors"] = validationResult.Errors
+            .Select(error => new Dictionary<string, object?>
+            {
+                ["field"] = error.Field,
+                ["message"] = error.Message,
+                ["expected"] = error.Expected,
+                ["actual"] = error.Actual,
+                ["evidence"] = error.Evidence,
+                ["dokumen_elemen_id"] = error.DokumenElemenId
+            })
+            .ToList(),
+        ["blank_errors"] = validationResult.Errors
+            .Where(error => error.Message.Contains("baris kosong", StringComparison.OrdinalIgnoreCase))
+            .Select(error => new Dictionary<string, object?>
+            {
+                ["field"] = error.Field,
+                ["message"] = error.Message,
+                ["expected"] = error.Expected,
+                ["actual"] = error.Actual,
+                ["evidence"] = error.Evidence,
                 ["dokumen_elemen_id"] = error.DokumenElemenId,
                 ["locations"] = error.Locations.Select(location => new Dictionary<string, object?>
                 {

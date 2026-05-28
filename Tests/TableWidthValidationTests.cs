@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -46,6 +47,25 @@ public class TableWidthValidationTests
         Assert.Equal(
             $"{14m.ToString("F2", CultureInfo.CurrentCulture)} cm (max {12.73m.ToString("F2", CultureInfo.CurrentCulture)} cm)",
             error.Actual);
+    }
+
+    [Fact]
+    public async Task ValidateTableAsync_ShouldUseTableContentAsEvidence()
+    {
+        using var fixture = new SqliteTableWidthFixture();
+        fixture.AddDokumen();
+        fixture.AddBodyStructure();
+        fixture.AddActiveAturan();
+        fixture.AddWidthRule();
+        fixture.AddTableFormat(902, "pct", pct50: 5000, indentTwips: 720);
+        fixture.AddTableElement(1003, 1, 902, page: 1, x0: 10, x1: 180, y0: 100f, y1: 180f, cellText: "Metode Pengujian");
+        await fixture.Db.SaveChangesAsync();
+
+        var result = await InvokeValidationAsync("ValidateTableAsync", fixture.Db);
+
+        var error = Assert.Single(result.Errors, item => item.Message == "Lebar tabel melebihi margin halaman");
+        Assert.Contains("Metode Pengujian", error.Evidence);
+        Assert.DoesNotContain("dft:", error.Evidence);
     }
 
     private static async Task<ValidationResult> InvokeValidationAsync(string methodName, KorektorBukuDbContext db)
@@ -168,15 +188,21 @@ public class TableWidthValidationTests
             });
         }
 
-        public void AddTableElement(ulong elementId, uint sequence, uint tableFormatId, uint page, float x0, float x1, float y0, float y1)
+        public void AddTableElement(ulong elementId, uint sequence, uint tableFormatId, uint page, float x0, float x1, float y0, float y1, string? cellText = null)
         {
+            var contentJson = string.IsNullOrWhiteSpace(cellText)
+                ? "{\"rows\":[]}"
+                : $$"""
+                  {"rows":[{"cells":[{"content":[{"type":"paragraph","content":[{"type":"text","value":{{JsonSerializer.Serialize(cellText)}}}]}]}]}]}
+                  """;
+
             Db.DokumenElemens.Add(new DokumenElemen
             {
                 DelemenId = elementId,
                 DpartId = 1,
                 DelemenSequence = sequence,
                 DelemenType = "table",
-                DelemenJsonTree = $"{{\"dft_id\":{tableFormatId},\"content\":{{\"rows\":[]}}}}",
+                DelemenJsonTree = $"{{\"dft_id\":{tableFormatId},\"content\":{contentJson}}}",
                 DelemenXml = string.Empty
             });
 

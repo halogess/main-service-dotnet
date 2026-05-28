@@ -69,6 +69,7 @@ public static class AturanDetailCanonicalizer
             ApplyLegacyAliases(key, currentRoot);
 
             var canonicalRoot = MergeObject(templateRoot, currentRoot, []);
+            ApplyCanonicalRemovals(key, canonicalRoot);
             AturanDetailEditablePolicy.Apply(key, canonicalRoot);
             canonicalJson = canonicalRoot.ToJsonString(SerializerOptions);
             changed = paragraphChanged || !string.Equals(normalizedJson, canonicalJson, StringComparison.Ordinal);
@@ -149,6 +150,12 @@ public static class AturanDetailCanonicalizer
                     ["judul_kode", "numbering", "enter_after_numbering"]);
                 break;
         }
+    }
+
+    private static void ApplyCanonicalRemovals(string key, JsonObject root)
+    {
+        if (key == "nomor_halaman")
+            RemovePath(root, ["paragraph", "spacing", "line_spacing"]);
     }
 
     private static void MoveLegacyCountValue(
@@ -329,6 +336,17 @@ public static class AturanDetailCanonicalizer
             targetParent[targetPath[^1]] = transform?.Invoke(sourceValue) ?? sourceValue.DeepClone();
 
         sourceParent.Remove(sourcePath[^1]);
+    }
+
+    private static void RemovePath(JsonObject root, IReadOnlyList<string> path)
+    {
+        if (path.Count == 0)
+            return;
+
+        if (!TryGetParentObject(root, path, createIfMissing: false, out var parent))
+            return;
+
+        parent!.Remove(path[^1]);
     }
 
     private static JsonNode? ConvertLegacyCountNode(JsonNode sourceValue, decimal enabledValue, decimal disabledValue)
